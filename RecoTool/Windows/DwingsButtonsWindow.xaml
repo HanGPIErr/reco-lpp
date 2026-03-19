@@ -1,0 +1,88 @@
+﻿<Window x:Class="RecoTool.Windows.DwingsButtonsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DWINGS Buttons" Height="600" Width="900" WindowStartupLocation="CenterOwner">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" Margin="10">
+            <TextBlock Text="Receivable with Action = TRIGGER - Fill Payment Reference if empty" FontWeight="Bold" FontSize="14"/>
+        </DockPanel>
+
+        <DataGrid x:Name="GridReconciliations" Grid.Row="1" Margin="10" AutoGenerateColumns="False"
+                  IsReadOnly="False" SelectionMode="Extended" CanUserAddRows="False" CanUserDeleteRows="False">
+            <DataGrid.RowStyle>
+                <Style TargetType="DataGridRow">
+                    <!-- Couleur par défaut (facultatif) -->
+                    <Setter Property="Background" Value="Transparent"/>
+
+                    <Style.Triggers>
+                        <!-- 1️⃣ Ligne verte quand IsAllowed == true -->
+                        <DataTrigger Binding="{Binding IsAllowed}" Value="True">
+                            <Setter Property="Background" Value="#C8E6C9"/>
+                            <!-- LightGreen -->
+                        </DataTrigger>
+
+                        <!-- 2️⃣ Ligne rouge quand IsAllowed == false -->
+                        <DataTrigger Binding="{Binding IsAllowed}" Value="False">
+                            <Setter Property="Background" Value="#FFCDD2"/>
+                            <!-- LightCoral -->
+                        </DataTrigger>
+
+                        <!-- (Optionnel) aucune couleur quand IsAllowed == null -->
+                        <DataTrigger Binding="{Binding IsAllowed}" Value="{x:Null}">
+                            <Setter Property="Background" Value="Transparent"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </DataGrid.RowStyle>
+
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Result" Binding="{Binding Result}" Width="60" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Lines" Binding="{Binding LineCount}" Width="60" IsReadOnly="True"/>
+                <DataGridTextColumn Header="DWINGS Guarantee" Binding="{Binding DWINGS_GuaranteeID}" Width="150" IsReadOnly="True"/>
+                <DataGridTextColumn Header="DWINGS Invoice ID" Binding="{Binding DWINGS_InvoiceID}" Width="150" IsReadOnly="True"/>
+                <DataGridTextColumn Header="DWINGS BGPMT" Binding="{Binding DWINGS_BGPMT}" Width="120" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Amount (Sum)" Binding="{Binding Amount, StringFormat=N2}" Width="120" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Currency" Binding="{Binding Currency}" Width="80" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Value Date (Pivot)" Binding="{Binding ValueDate, StringFormat={}{0:dd/MM/yyyy}}" Width="130" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Comments" Binding="{Binding Comments}" Width="200" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Payment Reference" Binding="{Binding PaymentReference, UpdateSourceTrigger=PropertyChanged}" Width="150">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding PaymentReference}" Value="">
+                                    <Setter Property="Background" Value="Yellow"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding PaymentReference}" Value="{x:Null}">
+                                    <Setter Property="Background" Value="Yellow"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                    <DataGridTextColumn.EditingElementStyle>
+                        <Style TargetType="TextBox">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding PaymentReference}" Value="">
+                                    <Setter Property="Background" Value="Yellow"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding PaymentReference}" Value="{x:Null}">
+                                    <Setter Property="Background" Value="Yellow"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DataGridTextColumn.EditingElementStyle>
+                </DataGridTextColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10" HorizontalAlignment="Right">
+            <ProgressBar x:Name="Progress" Width="250" Height="18" Margin="0,0,10,0"/>
+            <Button x:Name="BulkButton" Content="Bulk Blue Buttons" Width="160" Height="28" Click="BulkButton_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

@@ -1,0 +1,48 @@
+# Fichiers binaires et build
+bin/
+obj/
+[Bb]in/
+[Oo]bj/
+*.exe
+*.dll
+*.pdb
+*.user
+*.suo
+*.cache
+*.log
+
+# Visual Studio
+.vs/
+*.vspscc
+*.vssscc
+*.scc
+*.user
+*.suo
+*.cache
+*.ilk
+*.meta
+*.pch
+*.pdb
+*.pgc
+*.pgd
+*.rsp
+*.sbr
+*.tlb
+*.tli
+*.tlh
+*.tmp_proj
+*.vspscc
+*.vssscc
+.builds
+*.pidb
+*.svclog
+*.scc
+
+# Fichiers temporaires
+*.tmp
+*.temp
+*~
+
+# Fichiers de configuration locaux
+appsettings.local.json
+*.local.config

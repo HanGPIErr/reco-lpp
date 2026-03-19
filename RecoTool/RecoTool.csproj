@@ -1,0 +1,502 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{3F01CF30-3A41-4316-9C2C-DB0BDC46FF36}</ProjectGuid>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>RecoTool</RootNamespace>
+    <AssemblyName>RecoTool</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <ProjectTypeGuids>{60dc8134-eba5-43b8-bcc9-bb4bc16c2548};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
+    <WarningLevel>4</WarningLevel>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <Deterministic>true</Deterministic>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <LangVersion>8.0</LangVersion>
+    <IsWebBootstrapper>false</IsWebBootstrapper>
+    <PublishUrl>C:\Users\Gianni\OneDrive\Desktop\DataReceiver_Output\publish\</PublishUrl>
+    <Install>true</Install>
+    <InstallFrom>Disk</InstallFrom>
+    <UpdateEnabled>true</UpdateEnabled>
+    <UpdateMode>Foreground</UpdateMode>
+    <UpdateInterval>7</UpdateInterval>
+    <UpdateIntervalUnits>Days</UpdateIntervalUnits>
+    <UpdatePeriodically>false</UpdatePeriodically>
+    <UpdateRequired>false</UpdateRequired>
+    <MapFileExtensions>false</MapFileExtensions>
+    <OpenBrowserOnPublish>false</OpenBrowserOnPublish>
+    <ApplicationRevision>27</ApplicationRevision>
+    <ApplicationVersion>1.0.4.%2a</ApplicationVersion>
+    <UseApplicationTrust>false</UseApplicationTrust>
+    <PublishWizardCompleted>true</PublishWizardCompleted>
+    <BootstrapperEnabled>true</BootstrapperEnabled>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <PlatformTarget>x64</PlatformTarget>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <PlatformTarget>x64</PlatformTarget>
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'UAT|AnyCPU' ">
+    <PlatformTarget>x64</PlatformTarget>
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\UAT\</OutputPath>
+    <DefineConstants>TRACE;UAT_ENV</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>1</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup>
+    <StartupObject>
+    </StartupObject>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ManifestCertificateThumbprint>E23D75078A049C7A7BD056B067E9A69F8E8781EC</ManifestCertificateThumbprint>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ManifestKeyFile>RecoTool_TemporaryKey.pfx</ManifestKeyFile>
+  </PropertyGroup>
+  <PropertyGroup>
+    <GenerateManifests>true</GenerateManifests>
+  </PropertyGroup>
+  <PropertyGroup>
+    <SignManifests>false</SignManifests>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ApplicationIcon>RT.ICO</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Microsoft.Office.Interop.Access, Version=15.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c, processorArchitecture=MSIL">
+      <EmbedInteropTypes>True</EmbedInteropTypes>
+    </Reference>
+    <Reference Include="Microsoft.Office.Interop.Access.Dao, Version=15.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c">
+      <EmbedInteropTypes>False</EmbedInteropTypes>
+    </Reference>
+    <Reference Include="Microsoft.VisualBasic" />
+    <Reference Include="System" />
+    <Reference Include="System.ComponentModel.DataAnnotations" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Deployment" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Web" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Xml" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Data.DataSetExtensions" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Xaml">
+      <RequiredTargetFramework>4.0</RequiredTargetFramework>
+    </Reference>
+    <Reference Include="WindowsBase" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Wpf">
+      <Version>9.0.100</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Configuration">
+      <Version>9.0.6</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder">
+      <Version>9.0.6</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables">
+      <Version>9.0.6</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Configuration.FileExtensions">
+      <Version>9.0.6</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json">
+      <Version>9.0.6</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection">
+      <Version>9.0.6</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Options">
+      <Version>9.0.6</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Web.WebView2">
+      <Version>1.0.3405.78</Version>
+    </PackageReference>
+    <PackageReference Include="Newtonsoft.Json">
+      <Version>13.0.4</Version>
+    </PackageReference>
+    <PackageReference Include="System.Data.OleDb" Version="7.0.0" />
+    <PackageReference Include="LiveCharts.Wpf" Version="0.9.7" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="API\DWINGS.cs" />
+    <Compile Include="API\FREE.cs" />
+    <Compile Include="API\FREEData.cs" />
+    <Compile Include="API\FREE_Auth.cs" />
+    <Compile Include="API\SpiritGene.cs" />
+    <Compile Include="API\SpiritGeneData.cs" />
+    <Compile Include="App.xaml.cs">
+      <DependentUpon>App.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Configuration\FeatureFlags.cs" />
+    <Compile Include="Domain\Filters\FilterBuilder.cs" />
+    <Compile Include="Domain\Filters\FilterPreset.cs" />
+    <Compile Include="Domain\Filters\FilterSqlHelper.cs" />
+    <Compile Include="Domain\Filters\FilterState.cs" />
+    <Compile Include="Domain\Repositories\IReconciliationRepository.cs" />
+    <Compile Include="Helpers\DataConversionHelper.cs" />
+    <Compile Include="Helpers\DwingsLinkingHelper.cs" />
+    <Compile Include="Helpers\MultiUserHelper.cs" />
+    <Compile Include="Helpers\ReconciliationViewFocusTracker.cs" />
+    <Compile Include="Infrastructure\DataAccess\DbConn.cs" />
+    <Compile Include="Infrastructure\DataAccess\OleDbQueryExecutor.cs" />
+    <Compile Include="Infrastructure\DataAccess\OleDbSchemaHelper.cs" />
+    <Compile Include="Infrastructure\DataAccess\OleDbUtils.cs" />
+    <Compile Include="Infrastructure\DI\ServiceLocator.cs" />
+    <Compile Include="Infrastructure\IO\ExcelHelper.cs" />
+    <Compile Include="Infrastructure\Logging\DiagLog.cs" />
+    <Compile Include="Infrastructure\Logging\LogHelper.cs" />
+    <Compile Include="Infrastructure\Repositories\ReconciliationRepository.cs" />
+    <Compile Include="Models\TodoListItem.cs" />
+    <Compile Include="Services\Ambre\AmbreConfigurationLoader.cs" />
+    <Compile Include="Services\Ambre\AmbreDatabaseSynchronizer.cs" />
+    <Compile Include="Services\Ambre\AmbreDataProcessor.cs" />
+    <Compile Include="Services\Ambre\AmbreImportService.cs" />
+    <Compile Include="Services\Ambre\AmbreImportValidator.cs" />
+    <Compile Include="Services\Ambre\AmbreReconciliationUpdater.cs" />
+    <Compile Include="Services\Ambre\DwingsReferenceResolver.cs" />
+    <Compile Include="Services\Analytics\DashboardAnalyticsService.cs" />
+    <Compile Include="Services\BackgroundTaskQueue.cs" />
+    <Compile Include="Services\Cache\CacheService.cs" />
+    <Compile Include="Services\Cache\CountryDataCache.cs" />
+    <Compile Include="Services\DatabaseRecreationService.cs" />
+    <Compile Include="Services\DTOs\DwingsGuaranteeDto.cs" />
+    <Compile Include="Services\DTOs\DwingsInvoiceDto.cs" />
+    <Compile Include="Services\DTOs\KpiDailySnapshotDto.cs" />
+    <Compile Include="Services\ViewDataEnricher.cs" />
+    <Compile Include="Services\DwingsService.cs" />
+    <Compile Include="Services\Enums\IncidentType.cs" />
+    <Compile Include="Services\Enums\RiskReason.cs" />
+    <Compile Include="Services\Enums\TransactionType.cs" />
+    <Compile Include="Services\Enums\TriggerStatus.cs" />
+    <Compile Include="Services\ExportService.cs" />
+    <Compile Include="Models\ImportChanges.cs" />
+    <Compile Include="Models\UserFieldsPreference.cs" />
+    <Compile Include="Services\DTOs\ImportResult.cs" />
+    <Compile Include="Services\External\FreeApiService.cs" />
+    <Compile Include="Services\External\IFreeApiClient.cs" />
+    <Compile Include="Services\Helpers\DwingsDateHelper.cs" />
+    <Compile Include="Services\Helpers\EnumHelper.cs" />
+    <Compile Include="Services\Helpers\ReconciliationKpiCalculator.cs" />
+    <Compile Include="Services\Helpers\ReconciliationViewEnricher.cs" />
+    <Compile Include="Services\Helpers\ValidationHelper.cs" />
+    <Compile Include="Services\KpiSnapshotService.cs" />
+    <Compile Include="Services\LookupService.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.ChangeLog.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.CountryContext.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.Diagnostics.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.Events.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.IO.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.Locks.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.Maintenance.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.Paths.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.Push.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.Schema.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.Snapshots.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.SyncGates.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.SyncOperations.cs" />
+    <Compile Include="Services\OptionsService.cs" />
+    <Compile Include="Services\Policies\ISyncPolicy.cs" />
+    <Compile Include="Services\Policies\SyncPolicy.cs" />
+    <Compile Include="Services\Queries\ReconciliationViewQueryBuilder.cs" />
+    <Compile Include="Services\Helpers\AccountSideCalculator.cs" />
+    <Compile Include="Services\Helpers\ExternalReferenceHelper.cs" />
+    <Compile Include="Services\ReferentialCacheService.cs" />
+    <Compile Include="Services\ReferentialService.cs" />
+    <Compile Include="Services\Rules\MtStatusCondition.cs" />
+    <Compile Include="Services\Rules\ReconciliationRules.cs" />
+    <Compile Include="Services\Rules\RuleApplicationHelper.cs" />
+    <Compile Include="Services\Rules\RuleContextBuilder.cs" />
+    <Compile Include="Services\Rules\RulesEngine.cs" />
+    <Compile Include="Services\Rules\TruthRule.cs" />
+    <Compile Include="Services\Rules\TruthTableRepository.cs" />
+    <Compile Include="Services\SyncMonitorService.cs" />
+    <Compile Include="Services\ThemeManager.cs" />
+    <Compile Include="Services\TodoListSessionTracker.cs" />
+    <Compile Include="Services\UserFieldUpdateService.cs" />
+    <Compile Include="Services\UserTodoListService.cs" />
+    <Compile Include="Services\UserViewPreferenceService.cs" />
+    <Compile Include="UI\Converters\BoolToPendingDoneConverter.cs" />
+    <Compile Include="UI\Helpers\VisualTreeHelpers.cs" />
+    <Compile Include="UI\Interfaces\IRefreshable.cs" />
+    <Compile Include="UI\Models\OptionItem.cs" />
+    <Compile Include="UI\Models\UserOption.cs" />
+    <Compile Include="UI\ViewModels\HomePageViewModel.cs" />
+    <Compile Include="UI\ViewModels\ReconciliationPageViewModel.cs" />
+    <Compile Include="UI\ViewModels\ReconciliationViewViewModel.cs" />
+    <Compile Include="Utils\RequestCache.cs" />
+    <Compile Include="Windows\CommentsDialog.xaml.cs">
+      <DependentUpon>CommentsDialog.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\DwingsButtonsWindow.xaml.cs">
+      <DependentUpon>DwingsButtonsWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\HomePage.Converters.cs" />
+    <Compile Include="Windows\HomePage.Currency.hook.cs" />
+    <Compile Include="Windows\HomePage.Currency.props.cs" />
+    <Compile Include="Windows\HomePage.Todo.cs" />
+    <Compile Include="Windows\InvoiceFinderWindow.xaml.cs">
+      <DependentUpon>InvoiceFinderWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\SpiritGeneSearchWindow.xaml.cs">
+      <DependentUpon>SpiritGeneSearchWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\MainWindow.xaml.cs">
+      <DependentUpon>MainWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Models\BaseEntity.cs" />
+    <Compile Include="Models\DataAmbre.cs" />
+    <Compile Include="Models\DWINGSModels.cs" />
+    <Compile Include="Models\Reconciliation.cs" />
+    <Compile Include="Models\ReferentialModels.cs" />
+    <Compile Include="Services\Enums\ActionType.cs" />
+    <Compile Include="Services\Enums\KPIType.cs" />
+    <Compile Include="Services\LinkingBasket.cs" />
+    <Compile Include="Services\Sync\BackgroundSyncEngine.cs" />
+    <Compile Include="Services\Sync\PresenceFile.cs" />
+    <Compile Include="Services\ReconciliationMatchingService.cs" />
+    <Compile Include="Services\ReconciliationService.cs" />
+    <Compile Include="Services\UserFilterService.cs" />
+    <Compile Include="Services\DTOs\ReconciliationViewData.cs" />
+    <Compile Include="Services\DTOs\StatusCountsDto.cs" />
+    <Compile Include="Services\TransformationService.cs" />
+    <Compile Include="Windows\HomePage.xaml.cs">
+      <DependentUpon>HomePage.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\ImportAmbreWindow.xaml.cs">
+      <DependentUpon>ImportAmbreWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\PreviewTextDialog.xaml.cs">
+      <DependentUpon>PreviewTextDialog.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\ProgressWindow.xaml.cs">
+      <DependentUpon>ProgressWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\ReconciliationDetailWindow.xaml.cs">
+      <DependentUpon>ReconciliationDetailWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\ReconciliationImportWindow.xaml.cs">
+      <DependentUpon>ReconciliationImportWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\ReconciliationPage.xaml.cs">
+      <DependentUpon>ReconciliationPage.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\ReconciliationView.xaml.cs">
+      <DependentUpon>ReconciliationView.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\FilterPickerWindow.xaml.cs">
+      <DependentUpon>FilterPickerWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\ReconciliationView\Converters.cs" />
+    <Compile Include="Windows\ReconciliationView\DataLoading.cs" />
+    <Compile Include="Windows\ReconciliationView\Editing.cs" />
+    <Compile Include="Windows\ReconciliationView\Events.cs" />
+    <Compile Include="Windows\ReconciliationView\Export.cs" />
+    <Compile Include="Windows\ReconciliationView\Filtering.cs" />
+    <Compile Include="Windows\ReconciliationView\Filters.cs" />
+    <Compile Include="Windows\ReconciliationView\FilterSqlBridge.cs" />
+    <Compile Include="Windows\ReconciliationView\KpiStatus.cs" />
+    <Compile Include="Windows\ReconciliationView\Layout.cs" />
+    <Compile Include="Windows\ReconciliationView\Logging.cs" />
+    <Compile Include="Windows\ReconciliationView\MatchedPopup.cs" />
+    <Compile Include="Windows\ReconciliationView\Options.cs" />
+    <Compile Include="Windows\ReconciliationView\Paging.cs" />
+    <Compile Include="Windows\ReconciliationView\RowActions.cs" />
+    <Compile Include="Windows\ReconciliationView\SavedFilters.cs" />
+    <Compile Include="Windows\ReconciliationView\Selection.cs" />
+    <Compile Include="Windows\ReconciliationView\SyncAndTimers.cs" />
+    <Compile Include="Windows\ReconciliationView\Title.cs" />
+    <Compile Include="Windows\ReportsWindow.xaml.cs">
+      <DependentUpon>ReportsWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\RuleDebugWindow.xaml.cs">
+      <DependentUpon>RuleDebugWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\RuleEditorWindow.xaml.cs">
+      <DependentUpon>RuleEditorWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\RulesAdminWindow.xaml.cs">
+      <DependentUpon>RulesAdminWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\TodoListSessionWarning.xaml.cs">
+      <DependentUpon>TodoListSessionWarning.xaml</DependentUpon>
+    </Compile>
+    <Page Include="App.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="Windows\CommentsDialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\DwingsButtonsWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\InvoiceFinderWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\SpiritGeneSearchWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\MainWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\HomePage.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\ImportAmbreWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\PreviewTextDialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\ProgressWindow.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="Windows\ReconciliationDetailWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\ReconciliationImportWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\ReconciliationPage.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\ReconciliationView.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\FilterPickerWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\ReportsWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\RuleDebugWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\RuleEditorWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\RulesAdminWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\TodoListSessionWarning.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Properties\Settings.Designer.cs">
+      <AutoGen>True</AutoGen>
+      <DependentUpon>Settings.settings</DependentUpon>
+      <DesignTimeSharedInput>True</DesignTimeSharedInput>
+    </Compile>
+    <None Include="Properties\Settings.settings">
+      <Generator>SettingsSingleFileGenerator</Generator>
+      <LastGenOutput>Settings.Designer.cs</LastGenOutput>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="App.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OfflineFirstAccess\OfflineFirstAccess.csproj">
+      <Project>{382bccac-6c11-4dcb-bb84-4c09fec15b6a}</Project>
+      <Name>OfflineFirstAccess</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <COMReference Include="Microsoft.Office.Core">
+      <Guid>{2DF8D04C-5BFA-101B-BDE5-00AA0044DE52}</Guid>
+      <VersionMajor>2</VersionMajor>
+      <VersionMinor>8</VersionMinor>
+      <Lcid>0</Lcid>
+      <WrapperTool>primary</WrapperTool>
+      <Isolated>False</Isolated>
+      <EmbedInteropTypes>True</EmbedInteropTypes>
+    </COMReference>
+    <COMReference Include="Microsoft.Office.Interop.Excel">
+      <Guid>{00020813-0000-0000-C000-000000000046}</Guid>
+      <VersionMajor>1</VersionMajor>
+      <VersionMinor>9</VersionMinor>
+      <Lcid>0</Lcid>
+      <WrapperTool>primary</WrapperTool>
+      <Isolated>False</Isolated>
+      <EmbedInteropTypes>True</EmbedInteropTypes>
+    </COMReference>
+    <COMReference Include="stdole">
+      <Guid>{00020430-0000-0000-C000-000000000046}</Guid>
+      <VersionMajor>2</VersionMajor>
+      <VersionMinor>0</VersionMinor>
+      <Lcid>0</Lcid>
+      <WrapperTool>primary</WrapperTool>
+      <Isolated>False</Isolated>
+      <EmbedInteropTypes>True</EmbedInteropTypes>
+    </COMReference>
+    <COMReference Include="VBIDE">
+      <Guid>{0002E157-0000-0000-C000-000000000046}</Guid>
+      <VersionMajor>5</VersionMajor>
+      <VersionMinor>3</VersionMinor>
+      <Lcid>0</Lcid>
+      <WrapperTool>primary</WrapperTool>
+      <Isolated>False</Isolated>
+      <EmbedInteropTypes>True</EmbedInteropTypes>
+    </COMReference>
+  </ItemGroup>
+  <ItemGroup>
+    <BootstrapperPackage Include="Microsoft.Net.Framework.3.5.SP1">
+      <Visible>False</Visible>
+      <ProductName>.NET Framework 3.5 SP1</ProductName>
+      <Install>false</Install>
+    </BootstrapperPackage>
+  </ItemGroup>
+  <ItemGroup>
+    <Resource Include="RT.ICO" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

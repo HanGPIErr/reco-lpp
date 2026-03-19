@@ -1,0 +1,108 @@
+<Window x:Class="RecoTool.Windows.SpiritGeneSearchWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SpiritGene Transaction Search" 
+        Width="1000" Height="650"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResize">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Search Parameters -->
+        <GroupBox Grid.Row="0" Header="Search Parameters" Padding="10,8" Margin="0,0,0,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="20"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Date From:" VerticalAlignment="Center" Margin="0,0,8,6"/>
+                <DatePicker Grid.Row="0" Grid.Column="1" x:Name="DateFromPicker" Margin="0,0,0,6" SelectedDateFormat="Short"/>
+
+                <TextBlock Grid.Row="0" Grid.Column="3" Text="Date To:" VerticalAlignment="Center" Margin="0,0,8,6"/>
+                <DatePicker Grid.Row="0" Grid.Column="4" x:Name="DateToPicker" Margin="0,0,0,6" SelectedDateFormat="Short"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="Amount Min:" VerticalAlignment="Center" Margin="0,0,8,6"/>
+                <TextBox Grid.Row="1" Grid.Column="1" x:Name="AmountMinBox" Margin="0,0,0,6"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="3" Text="Amount Max:" VerticalAlignment="Center" Margin="0,0,8,6"/>
+                <TextBox Grid.Row="1" Grid.Column="4" x:Name="AmountMaxBox" Margin="0,0,0,6"/>
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="BIC:" VerticalAlignment="Center" Margin="0,0,8,6"/>
+                <TextBox Grid.Row="2" Grid.Column="1" x:Name="BicBox" Margin="0,0,0,6"/>
+
+                <TextBlock Grid.Row="2" Grid.Column="3" Text="Direction:" VerticalAlignment="Center" Margin="0,0,8,6"/>
+                <ComboBox Grid.Row="2" Grid.Column="4" x:Name="DirectionCombo" Margin="0,0,0,6" SelectedIndex="0">
+                    <ComboBoxItem Content="Received (R)" Tag="R"/>
+                    <ComboBoxItem Content="Sent (E)" Tag="E"/>
+                </ComboBox>
+
+                <Button Grid.Row="3" Grid.Column="4" x:Name="SearchButton" Content="🔍 Search" 
+                        Click="SearchButton_Click" HorizontalAlignment="Right"
+                        Padding="16,6" Background="#1976D2" Foreground="White" FontWeight="SemiBold"
+                        Cursor="Hand" Margin="0,4,0,0">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </Grid>
+        </GroupBox>
+
+        <!-- Status -->
+        <TextBlock Grid.Row="1" x:Name="StatusText" Text="" Margin="0,0,0,4" FontStyle="Italic" Foreground="#666"/>
+
+        <!-- Results DataGrid -->
+        <DataGrid Grid.Row="2" x:Name="ResultsGrid"
+                  AutoGenerateColumns="False" IsReadOnly="True"
+                  CanUserAddRows="False" CanUserDeleteRows="False"
+                  SelectionMode="Single" SelectionUnit="FullRow"
+                  GridLinesVisibility="Horizontal"
+                  HeadersVisibility="Column"
+                  VirtualizingPanel.IsVirtualizing="True"
+                  VirtualizingPanel.VirtualizationMode="Recycling"
+                  EnableRowVirtualization="True">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Type" Binding="{Binding CTypeOpe}" Width="80"/>
+                <DataGridTextColumn Header="Date" Binding="{Binding DRgltOpe}" Width="100"/>
+                <DataGridTextColumn Header="Amount" Binding="{Binding DisplayAmount}" Width="120">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="HorizontalAlignment" Value="Right"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="Ordering IBAN" Binding="{Binding IIbanDo}" Width="200"/>
+                <DataGridTextColumn Header="Ordering BIC" Binding="{Binding IBicDo}" Width="120"/>
+                <DataGridTextColumn Header="Beneficiary IBAN" Binding="{Binding IIbanBen}" Width="200"/>
+                <DataGridTextColumn Header="Beneficiary BIC" Binding="{Binding IBicBen}" Width="120"/>
+                <DataGridTextColumn Header="Message ID" Binding="{Binding IMsgId}" Width="180"/>
+                <DataGridTextColumn Header="End-to-End ID" Binding="{Binding LEndToEndId}" Width="180"/>
+                <DataGridTextColumn Header="CSM" Binding="{Binding CCsm}" Width="80"/>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- Footer -->
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+            <TextBlock x:Name="CountText" Text="" VerticalAlignment="Center" Margin="0,0,12,0" Foreground="#666"/>
+            <Button Content="Close" Click="CloseButton_Click" Padding="12,6" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</Window>

@@ -1,0 +1,1724 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Controls.Primitives;
+using System.ComponentModel;
+using RecoTool.Models;
+using RecoTool.Services;
+using System.Windows.Media;
+using System.IO;
+using System.Windows.Media.Imaging;
+using Microsoft.Extensions.DependencyInjection;
+using System.Diagnostics;
+using System.Reflection;
+using System.Deployment.Application;
+using RecoTool.Services.External;
+using RecoTool.Services.Helpers;
+
+namespace RecoTool.Windows
+{
+    /// <summary>
+    /// Logique d'interaction pour MainWindow.xaml
+    /// </summary>
+    public partial class MainWindow : Window, INotifyPropertyChanged
+    {
+        private readonly OfflineFirstService _offlineFirstService;
+        private AmbreImportService _ambreImportService;
+        private ReconciliationService _reconciliationService;
+        private List<Country> _countries;
+        private string _currentCountryId;
+        private string _previousCountryId;
+        private UserControl _currentPage;
+        private bool _isChangingCountrySelection;
+        private bool _isCountryInitializing;
+        private bool _closingPushHandled; // guard to avoid re-entrancy on Closing
+        private HomePage _homePage; // cached instance to avoid reloading referentials on each navigation
+        private IFreeApiClient _freeApi;
+        private bool _showFreeAuthButton;
+
+        private DwingsButtonsWindow? _dwingsButtonsWindow;
+
+        // La DI appelle ce constructeur en fournissant les services nécessaires (ici OfflineFirstService)
+        public MainWindow(
+            OfflineFirstService offlineService)
+        {
+            InitializeComponent();
+
+            _offlineFirstService = offlineService;
+
+            // DataContext pour bindings (OFFLINE, etc.)
+            this.DataContext = this;
+
+            // Set UAT title if compiled with UAT configuration
+            if (Configuration.FeatureFlags.IsUAT)
+                this.Title = Configuration.FeatureFlags.AppTitle;
+
+            // Appliquer une icône personnalisée si paramétrée
+            ApplyCustomIconIfAny();
+
+            InitializeServices();
+            SetupEventHandlers();
+            SetupSyncMonitor();
+
+            // Free API auth button initial state
+            try
+            {
+                _freeApi = App.ServiceProvider?.GetService<IFreeApiClient>();
+                _showFreeAuthButton = !(_freeApi?.IsAuthenticated ?? false);
+                OnPropertyChanged(nameof(ShowFreeAuthButton));
+            }
+            catch { }
+
+            // Set app version for header display (prefer ClickOnce deployment version when available)
+            try
+            {
+                if (ApplicationDeployment.IsNetworkDeployed)
+                {
+                    var depVer = ApplicationDeployment.CurrentDeployment?.CurrentVersion;
+                    if (depVer != null)
+                    {
+                        AppVersion = $"v{depVer.Major}.{depVer.Minor}.{depVer.Build}.{depVer.Revision}";
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(AppVersion) || AppVersion == "v")
+                {
+                    var asm = Assembly.GetExecutingAssembly();
+                    var ver = asm?.GetName()?.Version;
+                    if (ver != null)
+                    {
+                        AppVersion = $"v{ver.Major}.{ver.Minor}.{ver.Build}";
+                    }
+                }
+            }
+            catch { /* ignore; AppVersion stays default */ }
+            this.Closing += async (s, e) =>
+            {
+                try
+                {
+                    var cid = _currentCountryId;
+                    if (_closingPushHandled)
+                    {
+                        // Already handled once: allow close to proceed
+                        return;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(cid))
+                    {
+                        // Block first close, attempt to finish pending push (or start one) before exit
+                        e.Cancel = true;
+                        _closingPushHandled = true;
+                        Mouse.OverrideCursor = Cursors.Wait;
+                        ProgressWindow progressWindow = null;
+                        try
+                        {
+                            // Display a progress window to prevent users from forcing closure and to signal ongoing sync
+                            try
+                            {
+                                progressWindow = new ProgressWindow("Synchronization in progress...");
+                                if (this.IsVisible || this.IsLoaded)
+                                {
+                                    progressWindow.Owner = this;
+                                    progressWindow.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+                                }
+                                else
+                                {
+                                    progressWindow.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+                                }
+                                progressWindow.Topmost = true;
+                                progressWindow.ShowActivated = true;
+                                progressWindow.Show();
+                                progressWindow.Activate();
+                                try { progressWindow.UpdateProgress("Synchronisation en cours...", 10); } catch { }
+                            }
+                            catch { /* best effort UI */ }
+
+                            // Temporarily enable background pushes for explicit app-close push
+                            bool prevAllow = false;
+                            try { prevAllow = _offlineFirstService.AllowBackgroundPushes; _offlineFirstService.AllowBackgroundPushes = true; } catch { }
+                            
+                            bool syncSuccess = false;
+                            string syncError = null;
+                            try
+                            {
+                                var result = await _offlineFirstService.SynchronizeAsync(
+                                    cid,
+                                    null,
+                                    (progress, message) =>
+                                    {
+                                        try { progressWindow?.UpdateProgress(message ?? "Synchronisation...", progress); } catch { }
+                                    });
+                                if (result != null && result.Success)
+                                {
+                                    syncSuccess = true;
+                                    try { progressWindow?.UpdateProgress("Synchronisation terminée avec succès", 90); } catch { }
+                                }
+                                else
+                                {
+                                    syncSuccess = false;
+                                    syncError = result?.Message ?? "Unknown synchronization error";
+                                }
+                            }
+                            catch (Exception syncEx)
+                            {
+                                syncError = syncEx.Message;
+                                System.Diagnostics.Debug.WriteLine($"[MainWindow.Closing] Sync error: {syncEx.Message}");
+                                try { progressWindow?.UpdateProgress($"Erreur de synchronisation: {syncEx.Message}", 50); } catch { }
+                            }
+                            
+                            // Restore policy
+                            try { _offlineFirstService.AllowBackgroundPushes = prevAllow; } catch { }
+                            
+                            if (!syncSuccess)
+                            {
+                                try
+                                {
+                                    var result = MessageBox.Show(
+                                        $"⚠️ SYNCHRONIZATION FAILED\n\n" +
+                                        $"Error: {syncError ?? "Unknown error"}\n\n" +
+                                        "Your local changes may not have been saved to the network.\n" +
+                                        "Do you want to close anyway?\n\n" +
+                                        "• YES: Close the application (changes may be lost)\n" +
+                                        "• NO: Cancel and try again",
+                                        "Synchronization Error",
+                                        MessageBoxButton.YesNo,
+                                        MessageBoxImage.Warning);
+                                    
+                                    if (result == MessageBoxResult.No)
+                                    {
+                                        _closingPushHandled = false; // Reset to allow retry
+                                        return; // Don't close
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                        catch { /* ignore on shutdown */ }
+                        finally
+                        {
+                            Mouse.OverrideCursor = null;
+                            try { SyncMonitorService.Instance.Stop(); } catch { }
+                            // Ensure the progress window is closed
+                            try
+                            {
+                                if (progressWindow != null)
+                                {
+                                    progressWindow.Topmost = false;
+                                    progressWindow.Close();
+                                }
+                            }
+                            catch { }
+                        }
+
+                        // Trigger a deferred Close() after leaving the Closing handler to avoid re-entrant Close()
+                        try
+                        {
+                            if (this.IsLoaded && !this.Dispatcher.HasShutdownStarted)
+                            {
+                                this.Dispatcher.BeginInvoke(new Action(() =>
+                                {
+                                    try { if (this.IsLoaded) this.Close(); } catch { }
+                                }), System.Windows.Threading.DispatcherPriority.Background);
+                            }
+                        }
+                        catch { }
+                        return;
+                    }
+                }
+                catch { }
+                finally
+                {
+                    if (!_closingPushHandled)
+                    {
+                        try { SyncMonitorService.Instance.Stop(); } catch { }
+                    }
+                }
+            };
+        }
+
+        /// <summary>
+        /// Attend (au plus timeout) que la page courante signale RefreshCompleted si elle l'expose.
+        /// Supporte HomePage et ReconciliationPage; sinon, no-op.
+        /// </summary>
+        private async Task WaitForCurrentPageRefreshAsync(TimeSpan timeout)
+        {
+            try
+            {
+                var tcs = new TaskCompletionSource<bool>();
+                EventHandler handler = null;
+
+                // Abonnement selon le type connu
+                if (_currentPage is HomePage home)
+                {
+                    // Si déjà non-chargement, sortir tout de suite
+                    if (!home.IsLoading) return;
+                    handler = (_, __) => { try { home.RefreshCompleted -= handler; } catch { } tcs.TrySetResult(true); };
+                    home.RefreshCompleted += handler;
+                }
+                else if (_currentPage is ReconciliationPage rec)
+                {
+                    if (!rec.IsLoading) return;
+                    handler = (_, __) => { try { rec.RefreshCompleted -= handler; } catch { } tcs.TrySetResult(true); };
+                    rec.RefreshCompleted += handler;
+                }
+                else
+                {
+                    // Page ne supporte pas l'événement: petite pause visuelle
+                    await Task.Delay(200);
+                    return;
+                }
+
+                // Fail-safe: attendre soit l'événement, soit que IsLoading devienne false, soit le timeout
+                using var cts = new System.Threading.CancellationTokenSource(timeout);
+                var token = cts.Token;
+
+                var pollTask = Task.Run(async () =>
+                {
+                    try
+                    {
+                        while (!token.IsCancellationRequested)
+                        {
+                            if (_currentPage is HomePage h)
+                            {
+                                if (!h.IsLoading) { tcs.TrySetResult(true); break; }
+                            }
+                            else if (_currentPage is ReconciliationPage r)
+                            {
+                                if (!r.IsLoading) { tcs.TrySetResult(true); break; }
+                            }
+                            await Task.Delay(100, token);
+                        }
+                    }
+                    catch { tcs.TrySetResult(true); }
+                }, token);
+
+                using (token.Register(() => tcs.TrySetResult(true)))
+                {
+                    await tcs.Task.ConfigureAwait(true); // revenir au contexte UI
+                }
+            }
+            catch { }
+        }
+
+        // Allow dragging the window by holding mouse on the header area
+        private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            try
+            {
+                if (e.ButtonState == MouseButtonState.Pressed)
+                {
+                    this.DragMove();
+                }
+            }
+            catch { /* ignore */ }
+        }
+        
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+
+        public bool ShowFreeAuthButton
+        {
+            get => _showFreeAuthButton;
+            set
+            {
+                if (_showFreeAuthButton != value)
+                {
+                    _showFreeAuthButton = value;
+                    OnPropertyChanged(nameof(ShowFreeAuthButton));
+                }
+            }
+        }
+
+        // App Version shown in the header
+        private string _appVersion = "v";
+        public string AppVersion
+        {
+            get => _appVersion;
+            set { _appVersion = value; OnPropertyChanged(nameof(AppVersion)); }
+        }
+
+        private bool _isOffline = true;
+        public bool IsOffline
+        {
+            get => _isOffline;
+            set { _isOffline = value; OnPropertyChanged(nameof(IsOffline)); UpdateUiForConnectivity(); }
+        }
+
+        // Barre de statut (bas à droite)
+        private string _initializationStatus = "Ready";
+        public string InitializationStatus
+        {
+            get => _initializationStatus;
+            set { _initializationStatus = value; OnPropertyChanged(nameof(InitializationStatus)); }
+        }
+
+        private Brush _initializationBrush = Brushes.Gray;
+        public Brush InitializationBrush
+        {
+            get => _initializationBrush;
+            set { _initializationBrush = value; OnPropertyChanged(nameof(InitializationBrush)); }
+        }
+
+        private string _operationalDataStatus = "OFFLINE";
+        public string OperationalDataStatus
+        {
+            get => _operationalDataStatus;
+            set { _operationalDataStatus = value; OnPropertyChanged(nameof(OperationalDataStatus)); }
+        }
+
+        // Header ribbon network badge
+        private string _networkStatusText = "OFFLINE";
+        public string NetworkStatusText
+        {
+            get => _networkStatusText;
+            set { _networkStatusText = value; OnPropertyChanged(nameof(NetworkStatusText)); }
+        }
+
+        private Brush _networkStatusBrush = Brushes.OrangeRed;
+        public Brush NetworkStatusBrush
+        {
+            get => _networkStatusBrush;
+            set { _networkStatusBrush = value; OnPropertyChanged(nameof(NetworkStatusBrush)); }
+        }
+
+        // Sync status indicator (status bar)
+        private string _syncStatusText = "";
+        public string SyncStatusText
+        {
+            get => _syncStatusText;
+            set { _syncStatusText = value; OnPropertyChanged(nameof(SyncStatusText)); }
+        }
+
+        private Brush _syncStatusBrush = Brushes.Gray;
+        public Brush SyncStatusBrush
+        {
+            get => _syncStatusBrush;
+            set { _syncStatusBrush = value; OnPropertyChanged(nameof(SyncStatusBrush)); }
+        }
+
+        private bool _isInitializing;
+        public bool IsInitializing
+        {
+            get => _isInitializing;
+            set { _isInitializing = value; OnPropertyChanged(nameof(IsInitializing)); }
+        }
+
+        private void SetInitializationState(string text, Brush brush)
+        {
+            InitializationStatus = text;
+            InitializationBrush = brush ?? Brushes.Gray;
+        }
+
+        // Référentiel (cache de données de référence)
+        private string _referentialCacheStatus = "Indisponible";
+        public string ReferentialCacheStatus
+        {
+            get => _referentialCacheStatus;
+            set { _referentialCacheStatus = value; OnPropertyChanged(nameof(ReferentialCacheStatus)); }
+        }
+
+        private bool _referentialCacheAvailable;
+        public bool ReferentialCacheAvailable
+        {
+            get => _referentialCacheAvailable;
+            set { _referentialCacheAvailable = value; OnPropertyChanged(nameof(ReferentialCacheAvailable)); }
+        }
+
+        private Brush _referentialBrush = Brushes.Gray;
+        public Brush ReferentialBrush
+        {
+            get => _referentialBrush;
+            set { _referentialBrush = value; OnPropertyChanged(nameof(ReferentialBrush)); }
+        }
+
+        private void SetReferentialState(string text, Brush brush, bool available)
+        {
+            ReferentialCacheStatus = text;
+            ReferentialBrush = brush ?? Brushes.Gray;
+            ReferentialCacheAvailable = available;
+        }
+        #region Initialization
+
+        /// <summary>
+        /// Initialise les services avec les chaînes de connexion
+        /// </summary>
+        private async void InitializeServices()
+        {
+            try
+            {
+                IsInitializing = true;
+                SetInitializationState("Initializing...", Brushes.DarkOrange);
+                SetReferentialState("Initializing...", Brushes.DarkOrange, false);
+
+                // Chargez d'abord la liste des pays via votre service
+                _countries = await _offlineFirstService.GetCountries();
+
+                if (!_countries.Any())
+                {
+                    ShowError("Error", "No country available.");
+                    return;
+                }
+                else if (CountryComboBox.SelectedItem == null)
+                {
+                    _currentCountryId = null;
+                    IsOffline = true;
+                }
+
+                // Ne pas copier DW au démarrage: cela sera géré après sélection de pays via OfflineFirstService.SetCurrentCountryAsync
+
+                // Ne pas créer les services métiers tant que le pays n'est pas déterminé
+                _ambreImportService = null;
+                _reconciliationService = null;
+
+                // Configurez la ComboBox
+                CountryComboBox.ItemsSource = _countries;
+                CountryComboBox.DisplayMemberPath = "CNT_Name";
+                CountryComboBox.SelectedValuePath = "CNT_Id";
+                
+                // Récupérer la dernière country utilisée ou utiliser la première
+                await SetInitialCountrySelection();
+
+                // Fin d'init de la fenêtre, en attente d'une sélection de pays
+                SetInitializationState("Waiting for country selection", Brushes.Gray);
+                SetReferentialState("Indisponible", Brushes.Gray, false);
+                IsInitializing = false;
+            }
+            catch (Exception ex)
+            {
+                ShowError("Initialization error", ex.Message);
+                SetInitializationState("Initialization error", Brushes.Crimson);
+                SetReferentialState("Error", Brushes.Crimson, false);
+                IsInitializing = false;
+            }
+        }
+
+        /// <summary>
+        /// Définit la sélection initiale du pays (détermine quel pays utiliser)
+        /// </summary>
+        private async Task SetInitialCountrySelection()
+        {
+            try
+            {
+                // Ne pas sélectionner de pays par défaut: laisser vide et forcer l'utilisateur à choisir
+                _currentCountryId = null;
+
+                // Appliquer l'absence de sélection dans l'UI
+                if (CountryComboBox != null)
+                {
+                    CountryComboBox.SelectedIndex = -1;
+                    CountryComboBox.SelectedValue = null;
+                }
+
+                // Ne pas initialiser les services ici; ils seront créés après sélection utilisateur
+                IsOffline = true; // pas de pays -> OFFLINE (désactive l'UI dépendante du pays)
+
+                // Naviguer vers la Home (fonctionne sans services pays)
+                NavigateToHomePage();
+            }
+            catch (Exception ex)
+            {
+                ShowError("Warning", $"Unable to set initial country: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Configure les gestionnaires d'événements
+        /// </summary>
+        private void SetupEventHandlers()
+        {
+            if (CountryComboBox != null)
+            {
+                CountryComboBox.SelectionChanged += CountryComboBox_SelectionChanged;
+            }
+        }
+
+        private async void UserGuideButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_offlineFirstService == null) return;
+                var refService = new ReferentialService(_offlineFirstService);
+                string value = await refService.GetParamValueAsync("HelperFile");
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                    value = await refService.GetParamValueAsync("HELPERFILE")
+                         ?? await refService.GetParamValueAsync("HELP_FILE")
+                         ?? await refService.GetParamValueAsync("UserGuide")
+                         ?? await refService.GetParamValueAsync("GuideUtilisateur");
+                }
+                if (string.IsNullOrWhiteSpace(value)) return;
+
+                if (value.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || value.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                {
+                    try { Process.Start(new ProcessStartInfo(value) { UseShellExecute = true }); } catch { }
+                    return;
+                }
+
+                var path = System.Environment.ExpandEnvironmentVariables(value.Trim());
+                if (!System.IO.Path.IsPathRooted(path))
+                {
+                    try
+                    {
+                        var baseDir = System.IO.Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+                        path = System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, path));
+                    }
+                    catch { }
+                }
+                if (!System.IO.File.Exists(path)) return;
+                try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); } catch { }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Configure and start SyncMonitorService to opportunistically push reconciliation changes.
+        /// </summary>
+        private void SetupSyncMonitor()
+        {
+            try
+            {
+                var monitor = SyncMonitorService.Instance;
+                monitor.Initialize(() => _offlineFirstService);
+
+                // Initialize the network indicator immediately so UI matches current availability
+                try
+                {
+                    var online = _offlineFirstService?.IsNetworkSyncAvailable == true;
+                    IsOffline = !online;
+                    NetworkStatusText = online ? "ONLINE" : "OFFLINE";
+                    NetworkStatusBrush = online ? Brushes.MediumSeaGreen : Brushes.OrangeRed;
+                }
+                catch { }
+
+                monitor.NetworkBecameAvailable += () => TryBackgroundPush();
+                monitor.LockReleased += () => TryBackgroundPush();
+                monitor.SyncSuggested += (_) => TryBackgroundPush();
+                monitor.SyncStateChanged += (e) =>
+                {
+                    try
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            switch (e.State)
+                            {
+                                case OfflineFirstService.SyncStateKind.SyncInProgress:
+                                    SyncStatusText = e.PendingCount > 0 ? $"🔄 Syncing... ({e.PendingCount})" : "🔄 Syncing...";
+                                    SyncStatusBrush = Brushes.DarkOrange;
+                                    break;
+                                case OfflineFirstService.SyncStateKind.UpToDate:
+                                    SyncStatusText = "✅ Up to date";
+                                    SyncStatusBrush = Brushes.DarkGreen;
+                                    break;
+                                case OfflineFirstService.SyncStateKind.OfflinePending:
+                                    SyncStatusText = e.PendingCount > 0 ? $"⚠️ Offline ({e.PendingCount} pending)" : "⚠️ Offline";
+                                    SyncStatusBrush = Brushes.Goldenrod;
+                                    break;
+                                case OfflineFirstService.SyncStateKind.Error:
+                                    var msg = e.LastError?.Message;
+                                    SyncStatusText = string.IsNullOrWhiteSpace(msg) ? "⚠️ Error" : $"⚠️ Error: {msg}";
+                                    SyncStatusBrush = Brushes.Crimson;
+                                    break;
+                            }
+                        });
+                    }
+                    catch { }
+                };
+                monitor.NetworkAvailabilityChanged += (online) =>
+                {
+                    Dispatcher.Invoke(() =>
+               {
+                        IsOffline = !online;
+                        if (online)
+                        {
+                            NetworkStatusText = "ONLINE";
+                            NetworkStatusBrush = Brushes.MediumSeaGreen;
+                        }
+                        else
+                        {
+                            NetworkStatusText = "OFFLINE";
+                            NetworkStatusBrush = Brushes.OrangeRed;
+                        }
+                    });
+                };
+                monitor.Start();
+            }
+            catch { }
+        }
+
+        private void TryBackgroundPush()
+        {
+            try
+            {
+                var cid = _currentCountryId;
+                if (string.IsNullOrWhiteSpace(cid)) return;
+                if (_isCountryInitializing) return;
+                // Honor global policy: do not push if background pushes are disabled
+                if (_offlineFirstService != null && _offlineFirstService.AllowBackgroundPushes)
+                {
+                    _ = _offlineFirstService.PushReconciliationIfPendingAsync(cid);
+                }
+            }
+            catch { }
+        }
+
+        private void DwingsButtonsButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(_currentCountryId))
+                {
+                    ShowWarning("Selection required",
+                                "Please select a country before opening DWINGS BUTTONS.");
+                    return;
+                }
+
+                // Si la fenêtre existe déjà, on la ramène simplement au premier plan
+                if (_dwingsButtonsWindow != null && _dwingsButtonsWindow.IsVisible)
+                {
+                    _dwingsButtonsWindow.Activate();   // focus → fenêtre avant‑plan
+                    return;
+                }
+
+                // ---- création d’une nouvelle fenêtre ---------------------------------
+                var country = _countries.FirstOrDefault(x => x.CNT_Id == _currentCountryId);
+                var win = new DwingsButtonsWindow(_offlineFirstService,
+                                                  _reconciliationService,
+                                                  country)
+                {
+                    // **Pas d’Owner** → la fenêtre n’est plus « owned » et ne gardera plus
+                    // le Z‑order au dessus du propriétaire.
+                    Topmost = false,
+                    ShowInTaskbar = false,
+                    Width = 900,
+                    Height = 600,
+                    WindowStartupLocation = WindowStartupLocation.Manual   // on le centre nous‑mêmes
+                };
+
+                // ----- centre manuellement sur la fenêtre principale --------------------
+                var owner = this;   // la fenêtre qui possède le bouton
+                win.Left = owner.Left + (owner.ActualWidth - win.Width) / 2;
+                win.Top = owner.Top + (owner.ActualHeight - win.Height) / 2;
+
+                // ----- on garde la référence pour les appels suivants -----------------
+                _dwingsButtonsWindow = win;
+                win.Closed += (_, __) => _dwingsButtonsWindow = null;   // libération
+
+                win.Show();    // modèle‑less
+            }
+            catch (Exception ex)
+            {
+                ShowError("Error", $"Unable to open DWINGS BUTTONS: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Open the Rules Administration window
+        /// </summary>
+        private void RulesButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var win = new RulesAdminWindow();
+                win.Owner = this;
+                win.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+                win.Show();
+            }
+            catch (Exception ex)
+            {
+                ShowError("Error", $"Unable to open Rules Administration: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Met à jour l'UI selon l'état de connectivité (online/offline)
+        /// </summary>
+        private void UpdateUiForConnectivity()
+        {
+            try
+            {
+                bool enable = !IsOffline;
+                if (HomeButton != null) HomeButton.IsEnabled = true; // Home toujours accessible
+                if (ReconciliationButton != null) ReconciliationButton.IsEnabled = enable;
+                if (ReportsButton != null) ReportsButton.IsEnabled = enable;
+                if (SettingsButton != null) SettingsButton.IsEnabled = true; // paramètres toujours accessibles
+                if (SynchronizeButton != null) SynchronizeButton.IsEnabled = enable;
+            }
+            catch { /* no-op */ }
+        }
+
+        /// <summary>
+        /// Gestion de la sélection de la country (booking) - obligatoire pour activer l'application
+        /// </summary>
+        private async void CountryComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            try
+            {
+                if (_isChangingCountrySelection) return;
+                var selected = CountryComboBox?.SelectedItem as Country;
+                if (selected == null)
+                {
+                    // Pas de sélection -> OFFLINE et services indisponibles
+                    _previousCountryId = _currentCountryId;
+                    _currentCountryId = null;
+                    _ambreImportService = null;
+                    _reconciliationService = null;
+                    IsOffline = true;
+                    OperationalDataStatus = "OFFLINE";
+                    SetInitializationState("No country selected", Brushes.Gray);
+                    SetReferentialState("Indisponible", Brushes.Gray, false);
+                    return;
+                }
+
+                // Initialiser les services pour le pays choisi
+                var newCountryId = selected.CNT_Id;
+                if (newCountryId == _currentCountryId) return;
+
+                _previousCountryId = _currentCountryId;
+                _isChangingCountrySelection = true;
+                Mouse.OverrideCursor = Cursors.Wait;
+                ProgressWindow progressWindow = null;
+                try
+                {
+                    // Afficher une ProgressWindow pendant tout le traitement (copie, synchro, etc.)
+                    progressWindow = new ProgressWindow("Initializing country...");
+                    progressWindow.Owner = this;
+                    progressWindow.Show();
+                    progressWindow.UpdateProgress("Preparing...", 5);
+
+                    // Créer un callback de progression pour relayer les mises à jour vers la ProgressWindow
+                    Action<int, string> onProgress = (progress, message) =>
+                    {
+                        try
+                        {
+                            Dispatcher.Invoke(() =>
+                            {
+                                var pct = Math.Max(0, Math.Min(99, progress)); // réserver 100% pour la fin
+                                progressWindow.UpdateProgress(message ?? "En cours...", pct);
+                            });
+                        }
+                        catch { /* best-effort UI update */ }
+                    };
+
+                    var ok = await UpdateServicesForCountry(newCountryId, onProgress);
+                    if (!ok)
+                    {
+                        // Fermer la fenêtre avant retour à l'état précédent
+                        try { progressWindow?.Close(); } catch { }
+                        // Echec d'initialisation (base manquante/verrouillée). Revenir à la sélection précédente ou vider.
+                        ShowError("Country database unavailable", "The local/network database for this country is missing or locked. Please select another country.");
+                        _isChangingCountrySelection = true;
+                        try
+                        {
+                            if (!string.IsNullOrEmpty(_previousCountryId) && _countries?.Any(c => c.CNT_Id == _previousCountryId) == true)
+                            {
+                                CountryComboBox.SelectedValue = _previousCountryId;
+                            }
+                            else
+                            {
+                                CountryComboBox.SelectedIndex = -1;
+                            }
+                        }
+                        finally
+                        {
+                            _isChangingCountrySelection = false;
+                        }
+                        IsOffline = true;
+                        OperationalDataStatus = "OFFLINE";
+                        SetInitializationState("Country error", Brushes.Crimson);
+                        SetReferentialState("Error", Brushes.Crimson, false);
+                        return;
+                    }
+                    progressWindow.UpdateProgress("Finalisation...", 95);
+                    _currentCountryId = newCountryId;
+                    await NotifyCurrentPageOfCountryChange();
+
+                    // Attendre la fin du premier rafraîchissement de la page courante (si exposé)
+                    progressWindow.UpdateProgress("Loading data...", 98);
+                    await WaitForCurrentPageRefreshAsync(TimeSpan.FromSeconds(15));
+                    SetInitializationState($"Country selected: {selected.CNT_Name}", Brushes.DarkGreen);
+                    OperationalDataStatus = "ONLINE";
+                    SetReferentialState("OK", Brushes.DarkGreen, true);
+
+                    // Update ONLINE/OFFLINE badge based on current network sync availability
+                    try
+                    {
+                        var online = _offlineFirstService?.IsNetworkSyncAvailable == true;
+                        IsOffline = !online;
+                        NetworkStatusText = online ? "ONLINE" : "OFFLINE";
+                        NetworkStatusBrush = online ? Brushes.MediumSeaGreen : Brushes.OrangeRed;
+                    }
+                    catch { }
+
+                    // Force DWINGS data check immediately after country change
+                    try
+                    {
+                        if (MainContent?.Content is HomePage homePage)
+                        {
+                            homePage.ForceCheckDwingsDataStatus();
+                        }
+                    }
+                    catch { }
+                    // If policy allows, perform a one-shot push right after country change (without enabling background pushes)
+                    try
+                    {
+                        var policy = RecoTool.App.ServiceProvider?.GetService(typeof(RecoTool.Services.Policies.ISyncPolicy)) as RecoTool.Services.Policies.ISyncPolicy;
+                        if (policy != null && policy.ShouldSyncOnCountryChange)
+                        {
+                            bool prev = false;
+                            try { prev = _offlineFirstService.AllowBackgroundPushes; _offlineFirstService.AllowBackgroundPushes = true; } catch { }
+                            try { await _offlineFirstService.PushReconciliationIfPendingAsync(_currentCountryId); } catch { }
+                            try { _offlineFirstService.AllowBackgroundPushes = prev; } catch { }
+                        }
+                    }
+                    catch { }
+                }
+                finally
+                {
+                    try { progressWindow?.Close(); } catch { }
+                    Mouse.OverrideCursor = null; // restore default cursor
+                    _isChangingCountrySelection = false;
+                }
+            }
+            catch (Exception ex)
+            {
+                // S'assurer que toute fenêtre de progression résiduelle est fermée
+                try
+                {
+                    foreach (Window w in Application.Current.Windows)
+                    {
+                        if (w is ProgressWindow pw && pw.Owner == this) { pw.Close(); }
+                    }
+                }
+                catch { }
+                ShowError("Error", $"Unable to initialize selected country: {ex.Message}");
+                IsOffline = true;
+                OperationalDataStatus = "OFFLINE";
+                SetInitializationState("Country error", Brushes.Crimson);
+                SetReferentialState("Error", Brushes.Crimson, false);
+            }
+        }
+
+        /// <summary>
+        /// Met à jour les services avec la chaîne de connexion du pays sélectionné
+        /// </summary>
+        private async Task<bool> UpdateServicesForCountry(string countryId, Action<int, string> onProgress = null)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(countryId)) { IsOffline = true; return false; }
+
+                // Guard: we are initializing a new country; prevent page refresh until done
+                _isCountryInitializing = true;
+
+                // Mettre à jour OfflineFirstService avec le nouveau pays
+                var setOk = await _offlineFirstService.SetCurrentCountryAsync(countryId, suppressPush: false, onProgress: onProgress);
+                if (!setOk)
+                {
+                    // Echec de préparation de la base locale/réseau pour ce pays
+                    IsOffline = true;
+                    OperationalDataStatus = "OFFLINE";
+                    return false;
+                }
+
+                // Mandatory write access check on network RECO TOOLS path before proceeding
+                onProgress?.Invoke(81, "Checking permissions...");
+                bool canWrite = false;
+                try { canWrite = _offlineFirstService.HasWriteAccessToNetworkDatabaseDirectory(countryId); } catch { canWrite = false; }
+                if (!canWrite)
+                {
+                    IsOffline = true;
+                    OperationalDataStatus = "OFFLINE";
+                    SetReferentialState("No write access", Brushes.Crimson, false);
+                    ShowError(
+                        "Permission required",
+                        "You do not have write access to the RECO TOOLS network path (country databases directory).\n\nYou cannot use the application without write access in RECO TOOLS path.");
+                    return false;
+                }
+
+                // 0) Vérifier que la version du ZIP AMBRE local correspond à la version réseau
+                bool zipOk = false;
+                onProgress?.Invoke(82, "Checking AMBRE (ZIP)");
+                try { zipOk = await _offlineFirstService.IsLocalAmbreZipInSyncWithNetworkAsync(countryId); } catch { zipOk = false; }
+                if (!zipOk)
+                {
+                    // Tenter une mise à jour automatique depuis le réseau
+                    try
+                    {
+                        onProgress?.Invoke(84, "Updating AMBRE from network...");
+                        await _offlineFirstService.CopyNetworkToLocalAmbreAsync(countryId);
+                        zipOk = await _offlineFirstService.IsLocalAmbreZipInSyncWithNetworkAsync(countryId);
+                    }
+                    catch { zipOk = false; }
+
+                    if (!zipOk)
+                    {
+                        // Tentative d'initialisation AMBRE si le contenu réseau est absent
+                        try
+                        {
+                            onProgress?.Invoke(85, "Initializing AMBRE (network creation)...");
+                            var recreationService = new DatabaseRecreationService();
+                            var report = await recreationService.RecreateAmbreAsync(_offlineFirstService, countryId);
+                            if (!(report?.Success ?? false))
+                            {
+                                var details = string.Join("\n", report?.Errors ?? new List<string>());
+                                if (!string.IsNullOrWhiteSpace(details))
+                            ShowWarning("AMBRE initialization", details);
+                            }
+                            // Re-vérifier l'alignement ZIP après (éventuelle) création/publish
+                            zipOk = await _offlineFirstService.IsLocalAmbreZipInSyncWithNetworkAsync(countryId);
+                        }
+                        catch { zipOk = false; }
+
+                        if (!zipOk)
+                        {
+                            // Bloquer l'initialisation tant que la version locale ne correspond pas
+                            IsOffline = true;
+                            OperationalDataStatus = "OFFLINE";
+                            SetReferentialState("AMBRE out of sync", Brushes.Crimson, false);
+                            var ambreDiag = _offlineFirstService.GetAmbreZipDiagnostics(countryId);
+                            ShowError("AMBRE data not up to date", "The local AMBRE ZIP does not match the network version. Please try again later or check network share access.\n\nDetails:\n" + ambreDiag);
+                            return false;
+                        }
+                    }
+                }
+                onProgress?.Invoke(86, "AMBRE OK");
+
+                // 0.b) Vérifier également la version du ZIP DW local vs réseau
+                bool dwZipOk = false;
+                onProgress?.Invoke(87, "Checking DW (ZIP)");
+                try { dwZipOk = await _offlineFirstService.IsLocalDwZipInSyncWithNetworkAsync(countryId); } catch { dwZipOk = false; }
+                if (!dwZipOk)
+                {
+                    try
+                    {
+                        onProgress?.Invoke(88, "Updating DW from network...");
+                        await _offlineFirstService.CopyNetworkToLocalDwAsync(countryId);
+                        dwZipOk = await _offlineFirstService.IsLocalDwZipInSyncWithNetworkAsync(countryId);
+                    }
+                    catch { dwZipOk = false; }
+
+                    if (!dwZipOk)
+                    {
+                        IsOffline = true;
+                        OperationalDataStatus = "OFFLINE";
+                        SetReferentialState("DW out of sync", Brushes.Crimson, false);
+                        var dwDiag = _offlineFirstService.GetDwZipDiagnostics(countryId);
+                        ShowError("DW data not up to date", "The local DW ZIP does not match the network version. Please try again later or check network share access.\n\nDetails:\n" + dwDiag);
+                        return false;
+                    }
+                }
+                onProgress?.Invoke(90, "DW OK");
+
+                // Optional: Recreate DWINGS databases at startup if the flag is enabled
+                try
+                {
+                    var settings = RecoTool.Properties.Settings.Default;
+                    if (settings != null && settings.RecreateDwingsDatabasesAtStartup)
+                    {
+                    onProgress?.Invoke(91, "Recreating DWINGS databases...");
+                        // Obtain target directory and DW prefix from OfflineFirstService parameters
+                        var dataDirectory = _offlineFirstService.GetParameter("DataDirectory");
+                        var dwPrefix = _offlineFirstService.GetParameter("DWDatabasePrefix");
+                        if (string.IsNullOrWhiteSpace(dwPrefix))
+                            dwPrefix = _offlineFirstService.GetParameter("CountryDatabasePrefix") ?? "DB_";
+
+                        // Execute recreation (non-blocking to the rest of init; we warn on failure but continue)
+                        var recreationService = new DatabaseRecreationService();
+                        var report = await recreationService.RecreateAllAsync(dataDirectory, dwPrefix, countryId);
+                        if (!report.Success)
+                        {
+                            var details = string.Join("\n", report.Errors ?? new List<string>());
+                            ShowWarning("DWINGS recreation", string.IsNullOrWhiteSpace(details)
+                                ? "Recreating DWINGS databases encountered errors. Please check logs."
+                                : ("Recreating DWINGS databases encountered errors:\n" + details));
+                        }
+                        else
+                        {
+                    onProgress?.Invoke(92, "DWINGS recreated");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Best-effort: do not block country initialization on recreation failure
+                    ShowWarning("DWINGS recreation", $"Failed to recreate DWINGS databases: {ex.Message}");
+                }
+
+                // Vérifier/initialiser la base de Réconciliation (RECON)
+                try
+                {
+                onProgress?.Invoke(92, "Checking RECON...");
+                    try
+                    {
+                        // Tenter d'aligner la base locale depuis le réseau si elle existe déjà
+                        await _offlineFirstService.CopyNetworkToLocalReconciliationAsync(countryId);
+                        onProgress?.Invoke(92, "RECON OK");
+                    }
+                    catch (System.IO.FileNotFoundException)
+                    {
+                        // Si la base réseau est absente, créer localement et publier vers le réseau
+                        onProgress?.Invoke(92, "Initializing RECON (network creation)...");
+                        var recreationService = new DatabaseRecreationService();
+                        var report = await recreationService.RecreateReconciliationAsync(_offlineFirstService, countryId);
+                        if (!(report?.Success ?? false))
+                        {
+                            var details = string.Join("\n", report?.Errors ?? new List<string>());
+                            ShowWarning("Reconciliation initialization", string.IsNullOrWhiteSpace(details)
+                                ? "Creating the reconciliation database encountered errors. Please check logs."
+                                : details);
+                        }
+                        else
+                        {
+                            onProgress?.Invoke(92, "RECON created");
+                        }
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Des changements locaux non synchronisés peuvent bloquer le refresh réseau->local.
+                        // Dans ce cas, ne pas bloquer l'initialisation: la base locale existe et sera poussée plus tard.
+                    }
+                    catch (Exception)
+                    {
+                        // Best-effort: ne pas bloquer le flux si indisponibilité passagère du réseau
+                    }
+                }
+                catch { }
+
+                // 1) S'assurer que les instantanés locaux AMBRE et DW sont à jour
+                try { await _offlineFirstService.EnsureLocalSnapshotsUpToDateAsync(countryId, onProgress); } catch { }
+
+                // 2) Déclencher un push granulair en arrière-plan (ne bloque pas l'UI)
+                try { _ = _offlineFirstService.PushReconciliationIfPendingAsync(countryId); } catch { }
+
+                // Récupérer la nouvelle chaîne de connexion
+                onProgress?.Invoke(96, "Initializing services...");
+                var connectionString = _offlineFirstService.GetCountryConnectionString(countryId);
+                var user = Environment.UserName;
+
+                // Recréer les services avec la nouvelle chaîne
+                _ambreImportService = new AmbreImportService(_offlineFirstService);
+                _reconciliationService = new ReconciliationService(connectionString, user, _countries, _offlineFirstService);
+
+                // Pré-charger DWINGS et la vue de réconciliation par défaut pour le pays sélectionné
+                try
+                {
+                    onProgress?.Invoke(97, "Preloading DWINGS data...");
+                    var dwSvc = new RecoTool.Services.DwingsService(_offlineFirstService);
+                    await dwSvc.PrimeCachesAsync().ConfigureAwait(false);
+
+                    onProgress?.Invoke(98, "Preloading reconciliation view...");
+                    // Warm the default view cache (no filter, dashboardOnly=false). Subsequent UI opens are instant.
+                    await _reconciliationService.GetReconciliationViewAsync(countryId, null, false).ConfigureAwait(false);
+                }
+                catch { /* best-effort warm-up */ }
+
+                IsOffline = false; // services prêts -> ONLINE
+                OperationalDataStatus = "ONLINE";
+                SetReferentialState("OK", Brushes.DarkGreen, true);
+                onProgress?.Invoke(99, "Finalisation...");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                ShowError("Error", $"Unable to update services for country {countryId}: {ex.Message}");
+                IsOffline = true;
+                OperationalDataStatus = "OFFLINE";
+                SetReferentialState("Error", Brushes.Crimson, false);
+                return false;
+            }
+            finally
+            {
+                _isCountryInitializing = false;
+            }
+        }
+
+        /// <summary>
+        /// Notifie la page courante du changement de pays
+        /// </summary>
+        private async Task NotifyCurrentPageOfCountryChange()
+        {
+            try
+            {
+                // Si l'initialisation du pays est encore en cours, ne pas rafraîchir maintenant
+                if (_isCountryInitializing)
+                {
+                    System.Diagnostics.Debug.WriteLine("NotifyCurrentPageOfCountryChange: skipped refresh (country initialization in progress)");
+                    return;
+                }
+
+                // Mettre à jour les références de services si la page est HomePage
+                if (_currentPage is HomePage home)
+                {
+                    home.UpdateServices(_offlineFirstService, _reconciliationService);
+                }
+
+                // Si la page courante implémente IRefreshable, la rafraîchir
+                if (_currentPage is IRefreshable refreshablePage)
+                {
+                    refreshablePage.Refresh();
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log mais ne pas afficher d'erreur à l'utilisateur pour éviter les popups intempestifs
+                System.Diagnostics.Debug.WriteLine($"Error notifying country change: {ex.Message}");
+            }
+        }
+
+        #endregion
+
+        #region Navigation
+
+        /// <summary>
+        /// Navigue vers la page d'accueil
+        /// </summary>
+        private void NavigateToHomePage()
+        {
+            try
+            {
+                if (_homePage == null)
+                {
+                    _homePage = new HomePage(_offlineFirstService, _reconciliationService);
+                }
+                else
+                {
+                    // Only refresh dashboard data if the country has changed
+                    var prevCid = _homePage.CurrentCountryId;
+                    _homePage.UpdateServices(_offlineFirstService, _reconciliationService);
+                    var newCid = _offlineFirstService?.CurrentCountryId;
+                    if (!string.IsNullOrEmpty(newCid) && !string.Equals(prevCid, newCid, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _homePage.Refresh();
+                    }
+                }
+
+                NavigateToPage(_homePage);
+                UpdateNavigationButtons("Home");
+
+                // Si un pays est déjà sélectionné, rafraîchir immédiatement le dashboard
+                if (!string.IsNullOrEmpty(_offlineFirstService?.CurrentCountryId))
+                {
+                    if (_homePage != null && _homePage.IsLoaded == false)
+                    {
+                        // First navigation to Home after app start: trigger initial refresh
+                        _homePage.Refresh();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowError("Navigation error", $"Unable to navigate to home page: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Navigue vers une page donnée
+        /// </summary>
+        private void NavigateToPage(UserControl page)
+        {
+            if (MainContent != null)
+            {
+                _currentPage = page;
+                MainContent.Content = page;
+            }
+        }
+
+        /// <summary>
+        /// Met à jour l'état des boutons de navigation
+        /// </summary>
+        private void UpdateNavigationButtons(string activePage)
+        {
+            // Reset all buttons
+            if (HomeButton != null) HomeButton.Tag = "Inactive";
+            if (ReconciliationButton != null) ReconciliationButton.Tag = "Inactive";
+            if (ReportsButton != null) ReportsButton.Tag = "Inactive";
+            if (SettingsButton != null) SettingsButton.Tag = "Inactive";
+
+            // Set active button
+            switch (activePage)
+            {
+                case "Home":
+                    if (HomeButton != null) HomeButton.Tag = "Active";
+                    break;
+                case "Reconciliation":
+                    if (ReconciliationButton != null) ReconciliationButton.Tag = "Active";
+                    break;
+                case "Reports":
+                    if (ReportsButton != null) ReportsButton.Tag = "Active";
+                    break;
+                case "Settings":
+                    if (SettingsButton != null) SettingsButton.Tag = "Active";
+                    break;
+            }
+        }
+
+        #endregion
+
+/// <summary>
+/// Navigation vers la page d'accueil
+/// </summary>
+private async void HomeButton_Click(object sender, RoutedEventArgs e)
+{
+    try
+    {
+        Mouse.OverrideCursor = Cursors.Wait;
+        NavigateToHomePage();
+        // Attendre que la Home termine son rafraîchissement initial si applicable
+        await WaitForCurrentPageRefreshAsync(TimeSpan.FromSeconds(10));
+    }
+    finally
+    {
+        Mouse.OverrideCursor = null;
+    }
+}
+
+/// <summary>
+/// Lance une synchronisation manuelle offline-first
+/// </summary>
+private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
+{
+    try
+    {
+        if (string.IsNullOrEmpty(_currentCountryId))
+        {
+            ShowWarning("Selection required", "Please select a country before synchronizing.");
+            return;
+        }
+
+        var button = sender as Button;
+        if (button != null) button.IsEnabled = false;
+
+        var progressWindow = new ProgressWindow("Synchronization in progress...");
+        progressWindow.Owner = this;
+        progressWindow.Show();
+
+        try
+        {
+            OperationalDataStatus = "Synchronizing...";
+            SetReferentialState("Updating...", Brushes.DarkOrange, true);
+            var result = await _offlineFirstService.SynchronizeAsync(
+                _currentCountryId,
+                null,
+                (progress, message) =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        // ProgressWindow.UpdateProgress attend (message, progress)
+                        progressWindow.UpdateProgress(message ?? "En cours...", progress);
+                    });
+                });
+
+            try { progressWindow.Close(); } catch { }
+
+            if (result != null && result.Success)
+            {
+                ShowInfo("Synchronization", "Synchronization completed successfully.");
+                RefreshCurrentPage();
+                OperationalDataStatus = "Data up to date";
+                SetReferentialState("OK", Brushes.DarkGreen, true);
+            }
+            else
+            {
+                var msg = result?.Message ?? "Synchronization failed.";
+                ShowError("Synchronization error", msg);
+                OperationalDataStatus = "Error";
+                SetReferentialState("Error", Brushes.Crimson, true);
+            }
+        }
+        catch (Exception syncEx)
+        {
+            progressWindow.Close();
+            ShowError("Synchronization error", syncEx.Message);
+            OperationalDataStatus = "Error";
+            SetReferentialState("Error", Brushes.Crimson, true);
+        }
+        finally
+        {
+            if (button != null) button.IsEnabled = true;
+        }
+    }
+    catch (Exception ex)
+    {
+        ShowError("Error", $"Error during synchronization: {ex.Message}");
+        OperationalDataStatus = "Error";
+        SetReferentialState("Error", Brushes.Crimson, false);
+    }
+}
+
+        /// <summary>
+        /// Navigation vers la page de réconciliation
+        /// </summary>
+        private async void ReconciliationButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(_currentCountryId))
+                {
+                    ShowWarning("Selection required", "Please select a country before accessing reconciliation.");
+                    return;
+                }
+
+                Mouse.OverrideCursor = Cursors.Wait;
+                var reconciliationPage = App.ServiceProvider.GetRequiredService<ReconciliationPage>();
+                // Ensure the page's loading indicator is visible immediately while data loads
+                try { reconciliationPage.IsLoading = true; } catch { }
+                NavigateToPage(reconciliationPage);
+                UpdateNavigationButtons("Reconciliation");
+                // Wait a bit for the page to finish its initial refresh if it exposes it
+                await WaitForCurrentPageRefreshAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (Exception ex)
+            {
+                ShowError("Navigation error", $"Unable to open reconciliation page: {ex.Message}");
+            }
+            finally
+            {
+                Mouse.OverrideCursor = null;
+            }
+        }
+
+        /// <summary>
+        /// Navigation vers la page de rapports
+        /// </summary>
+        private void ReportsButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(_currentCountryId))
+                {
+                    ShowWarning("Selection required", "Please select a country before accessing reports.");
+                    return;
+                }
+
+                // Créer la fenêtre de rapports en lui passant les services courants pour réutiliser la country sélectionnée
+                var reportsWindow = new ReportsWindow(_reconciliationService, _offlineFirstService);
+                reportsWindow.Owner = this;
+                reportsWindow.ShowDialog();
+            }
+            catch (Exception ex)
+            {
+                ShowError("Error", $"Unable to open reports window: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Navigation vers la page de configuration des comptes
+        /// </summary>
+        private void AccountConfigButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // TODO: Implémenter la page de configuration des comptes
+            ShowInfo("Information", "The account configuration page will be available soon.");
+            }
+            catch (Exception ex)
+            {
+                ShowError("Error", $"Unable to open account configuration page: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Navigation vers la page des paramètres
+        /// </summary>
+        private void SettingsButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // TODO: Implémenter la page des paramètres
+            ShowInfo("Information", "The settings page will be available soon.");
+            }
+            catch (Exception ex)
+            {
+                ShowError("Error", $"Unable to open settings page: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Opens the Reconciliation page and immediately sets ToDo mode with the provided ToDo item,
+        /// then opens a view for that ToDo.
+        /// </summary>
+        public async Task OpenReconciliationWithTodoAsync(TodoListItem todo)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(_currentCountryId))
+                {
+                    ShowWarning("Selection required", "Please select a country before accessing reconciliation.");
+                    return;
+                }
+
+                Mouse.OverrideCursor = Cursors.Wait;
+                var reconciliationPage = App.ServiceProvider.GetRequiredService<ReconciliationPage>();
+                try { reconciliationPage.IsLoading = true; } catch { }
+                NavigateToPage(reconciliationPage);
+                UpdateNavigationButtons("Reconciliation");
+                // Allow the page to initialize, then apply ToDo and open a view
+                await WaitForCurrentPageRefreshAsync(TimeSpan.FromSeconds(10));
+                await reconciliationPage.OpenViewForTodoAsync(todo);
+            }
+            catch (Exception ex)
+            {
+                ShowError("Navigation error", $"Unable to open reconciliation page for ToDo: {ex.Message}");
+            }
+            finally
+            {
+                Mouse.OverrideCursor = null;
+            }
+        }
+
+        /// <summary>
+        /// Import de fichier Ambre
+        /// </summary>
+        private async void ImportButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(_currentCountryId))
+                {
+                    ShowWarning("Selection required", "Please select a country before importing.");
+                    return;
+                }
+
+                var openFileDialog = new Microsoft.Win32.OpenFileDialog
+                {
+                    Title = "Select Ambre file to import",
+                    Filter = "Fichiers Excel (*.xlsx)|*.xlsx|Tous les fichiers (*.*)|*.*",
+                    RestoreDirectory = true
+                };
+
+                if (openFileDialog.ShowDialog() == true)
+                {
+                    // Afficher une fenêtre de progression
+                    var progressWindow = new ProgressWindow("Import en cours...");
+                    progressWindow.Owner = this;
+                    progressWindow.Show();
+
+                    try
+                    {
+                        var result = await _ambreImportService.ImportAmbreFile(
+                            openFileDialog.FileName,
+                            _currentCountryId,
+                            (message, progress) =>
+                            {
+                                Dispatcher.Invoke(() =>
+                                {
+                                    progressWindow.UpdateProgress(message, progress);
+                                });
+                            });
+
+                        try { progressWindow.Close(); } catch { }
+
+                        if (result.IsSuccess)
+                        {
+                            ShowInfo("Import successful", $"Import completed successfully.\n" +
+                                   $"Rows added: {result.NewRecords}\n" +
+                                   $"Rows updated: {result.ProcessedRecords}\n" +
+                                   $"Rows deleted: {result.DeletedRecords}");
+
+                            RefreshCurrentPage();
+                        }
+                        else
+                        {
+                            ShowError("Import error", $"Import failed:\n{string.Join("\n", result.Errors)}");
+                        }
+                    }
+                    catch (Exception importEx)
+                    {
+                        progressWindow.Close();
+                        ShowError("Import error", $"Error during import: {importEx.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowError("Error", $"Error during import: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Rafraîchit la page courante
+        /// </summary>
+        private void RefreshCurrentPage()
+        {
+            try
+            {
+                if (_currentPage is IRefreshable refreshablePage)
+                {
+                    refreshablePage.Refresh();
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowError("Error", $"Error during refresh: {ex.Message}");
+            }
+        }
+
+        #region Window Controls
+
+        /// <summary>
+        /// Minimiser la fenêtre
+        /// </summary>
+        private void MinimizeButton_Click(object sender, RoutedEventArgs e)
+        {
+            WindowState = WindowState.Minimized;
+        }
+
+        /// <summary>
+        /// Maximiser/Restaurer la fenêtre
+        /// </summary>
+        private void MaximizeButton_Click(object sender, RoutedEventArgs e)
+        {
+            WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+        }
+
+        /// <summary>
+        /// Fermer la fenêtre
+        /// </summary>
+        private void CloseButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (this.IsLoaded && !this.Dispatcher.HasShutdownStarted)
+                {
+                    this.Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        try { if (this.IsLoaded) this.Close(); } catch { }
+                    }), System.Windows.Threading.DispatcherPriority.Background);
+                }
+            }
+            catch { }
+        }
+
+
+        /// <summary>
+        /// Gestion du redimensionnement de la fenêtre via le Thumb
+        /// </summary>
+        private void Thumb_DragDelta(object sender, DragDeltaEventArgs e)
+        {
+            var thumb = sender as Thumb;
+            if (thumb != null)
+            {
+                var newWidth = Width + e.HorizontalChange;
+                var newHeight = Height + e.VerticalChange;
+
+                if (newWidth > MinWidth)
+                    Width = newWidth;
+                if (newHeight > MinHeight)
+                    Height = newHeight;
+            }
+        }
+
+        #endregion
+
+        #region Helper Methods
+
+        /// <summary>
+        /// Applique l'icône personnalisée si la clé AppIcon est renseignée (chemin .ico) et
+        /// remplace le logo texte en en-tête par l'icône si disponible.
+        /// </summary>
+        private void ApplyCustomIconIfAny()
+        {
+            try
+            {
+                string iconPath = null;
+
+                try
+                {
+                    var settings = RecoTool.Properties.Settings.Default;
+                    var prop = settings?.GetType()?.GetProperty("AppIcon");
+                    if (prop != null)
+                    {
+                        iconPath = prop.GetValue(settings) as string;
+                    }
+                }
+                catch { /* ignore */ }
+
+                if (!string.IsNullOrWhiteSpace(iconPath) && File.Exists(iconPath))
+                {
+                    // Set window icon if it's a .ico
+                    try
+                    {
+                        if (string.Equals(Path.GetExtension(iconPath), ".ico", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var uri = new Uri(iconPath, UriKind.Absolute);
+                            this.Icon = BitmapFrame.Create(uri);
+                        }
+                    }
+                    catch { }
+
+                    // Also show the icon in the header bubble
+                    try
+                    {
+                        var uri = new Uri(iconPath, UriKind.Absolute);
+                        var bmp = BitmapFrame.Create(uri);
+                        if (AppLogoImage != null)
+                        {
+                            AppLogoImage.Source = bmp;
+                            AppLogoImage.Visibility = Visibility.Visible;
+                        }
+                        if (RtFallbackText != null)
+                        {
+                            RtFallbackText.Visibility = Visibility.Collapsed;
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { /* ne pas bloquer l'UI si l'icône est invalide */ }
+        }
+
+        /// <summary>
+        /// Affiche un message d'erreur
+        /// </summary>
+        private void ShowError(string title, string message)
+        {
+            try { System.Diagnostics.Debug.WriteLine($"[ERROR] {title}: {message}"); } catch { }
+            MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+
+        /// <summary>
+        /// Affiche un message d'avertissement
+        /// </summary>
+        private void ShowWarning(string title, string message)
+        {
+            MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
+        /// <summary>
+        /// Affiche un message d'information
+        /// </summary>
+        private void ShowInfo(string title, string message)
+        {
+            MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        #endregion
+
+        private async void FreeAuthButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_freeApi == null)
+                {
+                    _freeApi = App.ServiceProvider?.GetService<IFreeApiClient>();
+                    if (_freeApi == null) { ShowFreeAuthButton = true; return; }
+                }
+                var ok = await _freeApi.AuthenticateAsync();
+                ShowFreeAuthButton = !ok;
+                if (!ok)
+                {
+                    try { MessageBox.Show("Free authentication failed. You can retry from the FREE button.", "Free API", MessageBoxButton.OK, MessageBoxImage.Warning); } catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowFreeAuthButton = true;
+                try { MessageBox.Show($"Free authentication error: {ex.Message}", "Free API", MessageBoxButton.OK, MessageBoxImage.Error); } catch { }
+            }
+        }
+    }
+}

@@ -1,0 +1,778 @@
+<UserControl x:Class="RecoTool.Windows.HomePage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:RecoTool.Windows"
+             xmlns:lvc="clr-namespace:LiveCharts.Wpf;assembly=LiveCharts.Wpf"
+             mc:Ignorable="d" 
+             d:DesignHeight="700" d:DesignWidth="1200"
+             Loaded="UserControl_Loaded">
+    <UserControl.Resources>
+        <local:AlertTypeToBorderColorConverter x:Key="AlertTypeToBorderColorConverter"/>
+        <local:AlertTypeToIconConverter x:Key="AlertTypeToIconConverter"/>
+        <local:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter"/>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+        
+        <!-- Transparent Card Button Style -->
+        <Style x:Key="TransparentCardButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid>
+                            <Border x:Name="hoverOverlay" Background="#10005B46" CornerRadius="14" Opacity="0"/>
+                            <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="hoverOverlay" 
+                                                           Storyboard.TargetProperty="Opacity" 
+                                                           To="1" Duration="0:0:0.2"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="hoverOverlay" 
+                                                           Storyboard.TargetProperty="Opacity" 
+                                                           To="0" Duration="0:0:0.2"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+    <ScrollViewer x:Name="MainScrollViewer" VerticalScrollBarVisibility="Auto" Background="{DynamicResource BNPBackground}" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="16">
+            <!-- UAT Environment Banner (only visible when compiled with UAT configuration) -->
+            <Border x:Name="UatBanner" Visibility="Collapsed" Background="#D32F2F" CornerRadius="6" Padding="12,8" Margin="0,0,0,12">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                    <TextBlock Text="⚠️" FontSize="20" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <TextBlock Text="UAT ENVIRONMENT" FontSize="18" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                    <TextBlock Text=" — " FontSize="18" Foreground="#FFCDD2" VerticalAlignment="Center"/>
+                    <TextBlock Text="This is a test environment. Data is not production." FontSize="13" Foreground="#FFCDD2" VerticalAlignment="Center"/>
+                    <TextBlock Text=" ⚠️" FontSize="20" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Header of the home page -->
+            <Grid Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="Dashboard" FontSize="24" FontWeight="SemiBold" Margin="0,0,0,5" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+                    <TextBlock Text="Overview of receivable and pivot accounts" FontSize="14" Foreground="#666666"/>
+                </StackPanel>
+
+                <WrapPanel Grid.Column="1" ItemHeight="38" VerticalAlignment="Center">
+                    <Button Height="38" MinWidth="160" Style="{StaticResource StandardButtonStyle}" VerticalAlignment="Center" Click="ImportAmbre_Click" Margin="0,0,10,10">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE896;" FontFamily="Segoe MDL2 Assets" FontSize="16" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Text="Import Ambre" FontSize="14" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Height="38" MinWidth="160" Style="{StaticResource StandardButtonStyle}" VerticalAlignment="Center" Click="OpenReports_Click" Margin="0,0,10,10">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE9F9;" FontFamily="Segoe MDL2 Assets" FontSize="16" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Text="Reports &amp; Exports" FontSize="14" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Height="38" MinWidth="160" Style="{StaticResource StandardButtonStyle}" VerticalAlignment="Center" Click="ExportDailyKpi_Click" Margin="0,0,10,10">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE74E;" FontFamily="Segoe MDL2 Assets" FontSize="16" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Text="Export Daily KPI" FontSize="14" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                </WrapPanel>
+            </Grid>
+
+            <!-- DWINGS Data Warning -->
+            <Border Background="#FFF3CD" BorderBrush="#FF9800" BorderThickness="2" CornerRadius="8" Padding="12" Margin="0,0,0,12"
+                    Visibility="{Binding IsDwingsDataFromToday, Converter={StaticResource InverseBooleanToVisibilityConverter}}">
+                <StackPanel>
+                    <TextBlock Text="⚠️ WARNING!" FontSize="18" FontWeight="Bold" Foreground="#D32F2F" Margin="0,0,0,8"/>
+                    <TextBlock Text="{Binding DwingsWarningMessage}" FontSize="14" Foreground="#333" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+
+            <!-- KPI Cards -->
+            <TextBlock Text="KPI CARDS" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+            <ItemsControl ItemsSource="{Binding TodoCards}" HorizontalAlignment="Left">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel Orientation="Horizontal"/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Margin="0,8,15,30" CornerRadius="14" Background="White" BorderThickness="0" Width="200" x:Name="cardBorder">
+                            <Border.RenderTransformOrigin>0.5,0.5</Border.RenderTransformOrigin>
+                            <Border.RenderTransform>
+                                <ScaleTransform x:Name="cardScale" ScaleX="1" ScaleY="1"/>
+                            </Border.RenderTransform>
+                            <Border.Effect>
+                                <DropShadowEffect x:Name="cardShadow" BlurRadius="20" ShadowDepth="3" Opacity="0.3" Direction="270" Color="#1A237E"/>
+                            </Border.Effect>
+                            <Border.Triggers>
+                                <EventTrigger RoutedEvent="Border.MouseEnter">
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="cardScale" 
+                                                           Storyboard.TargetProperty="ScaleX" 
+                                                           To="1.05" Duration="0:0:0.2"/>
+                                            <DoubleAnimation Storyboard.TargetName="cardScale" 
+                                                           Storyboard.TargetProperty="ScaleY" 
+                                                           To="1.05" Duration="0:0:0.2"/>
+                                            <DoubleAnimation Storyboard.TargetName="cardShadow" 
+                                                           Storyboard.TargetProperty="BlurRadius" 
+                                                           To="30" Duration="0:0:0.2"/>
+                                            <DoubleAnimation Storyboard.TargetName="cardShadow" 
+                                                           Storyboard.TargetProperty="Opacity" 
+                                                           To="0.7" Duration="0:0:0.2"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </EventTrigger>
+                                <EventTrigger RoutedEvent="Border.MouseLeave">
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="cardScale" 
+                                                           Storyboard.TargetProperty="ScaleX" 
+                                                           To="1" Duration="0:0:0.2"/>
+                                            <DoubleAnimation Storyboard.TargetName="cardScale" 
+                                                           Storyboard.TargetProperty="ScaleY" 
+                                                           To="1" Duration="0:0:0.2"/>
+                                            <DoubleAnimation Storyboard.TargetName="cardShadow" 
+                                                           Storyboard.TargetProperty="BlurRadius" 
+                                                           To="20" Duration="0:0:0.2"/>
+                                            <DoubleAnimation Storyboard.TargetName="cardShadow" 
+                                                           Storyboard.TargetProperty="Opacity" 
+                                                           To="0.3" Duration="0:0:0.2"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </EventTrigger>
+                            </Border.Triggers>
+                            <Button Style="{StaticResource TransparentCardButtonStyle}" Click="OpenTodoCard_Click" Padding="0" Height="220" Background="LightGreen">
+                                <Grid Width="200">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Header -->
+                                    <Border Grid.Row="0" CornerRadius="14,14,0,0" Padding="14,10">
+                                        <Border.Background>
+                                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                <GradientStop Color="{Binding Source={StaticResource BNPMainGreenBrush}, Path=Color}" Offset="0"/>
+                                                <GradientStop Color="#00897B" Offset="1"/>
+                                            </LinearGradientBrush>
+                                        </Border.Background>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Border Grid.Column="0" Background="LightBlue" CornerRadius="8" Padding="7" Margin="0,0,10,0" HorizontalAlignment="Center">
+                                                <TextBlock Text="&#xE73A;" FontFamily="Segoe MDL2 Assets" Foreground="#333" FontSize="14"  HorizontalAlignment="Center"/>
+                                            </Border>
+                                            <TextBlock HorizontalAlignment="Center" Grid.Column="1" Text="{Binding Item.TDL_Name}" Foreground="White" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </Border>
+
+                                    <!-- Body: Key Metrics -->
+                                    <Grid Grid.Row="1" Margin="14,12,14,10">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="*"/>
+                                            <RowDefinition Height="*"/>
+                                        </Grid.RowDefinitions>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        
+                                        <!-- New -->
+                                        <Border Grid.Row="0" Grid.Column="0" CornerRadius="10" Padding="8,6" Margin="0,0,5,5">
+                                            <Border.Background>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                                    <GradientStop Color="#FFF9E6" Offset="0"/>
+                                                    <GradientStop Color="#FFECB3" Offset="1"/>
+                                                </LinearGradientBrush>
+                                            </Border.Background>
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="*"/>
+                                                </Grid.RowDefinitions>
+                                                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,3">
+                                                    <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" Foreground="#333333" FontSize="11" Margin="0,0,4,0" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="New" FontSize="9" Foreground="#333333" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                                <TextBlock  HorizontalAlignment="Center" Grid.Row="1" Text="{Binding NewCount}" FontSize="20" FontWeight="Bold" Foreground="#BF360C" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Border>
+                                        
+                                        <!-- To Link -->
+                                        <Border Grid.Row="0" Grid.Column="1" CornerRadius="10" Padding="8,6" Margin="5,0,0,5">
+                                            <Border.Background>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                                    <GradientStop Color="#FFEBEE" Offset="0"/>
+                                                    <GradientStop Color="#FFCDD2" Offset="1"/>
+                                                </LinearGradientBrush>
+                                            </Border.Background>
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="*"/>
+                                                </Grid.RowDefinitions>
+                                                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,3">
+                                                    <TextBlock Text="&#xE71B;" FontFamily="Segoe MDL2 Assets" Foreground="#C62828" FontSize="11" Margin="0,0,4,0" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="To Link" FontSize="9" Foreground="#C62828" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                                <TextBlock  HorizontalAlignment="Center" Grid.Row="1" Text="{Binding NotLinkedCount}" FontSize="20" FontWeight="Bold" Foreground="#C62828" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Border>
+                                        
+                                        <!-- To Review -->
+                                        <Border Grid.Row="1" Grid.Column="0" CornerRadius="10" Padding="8,6" Margin="0,5,5,0">
+                                            <Border.Background>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                                    <GradientStop Color="#FFF3E0" Offset="0"/>
+                                                    <GradientStop Color="#FFE0B2" Offset="1"/>
+                                                </LinearGradientBrush>
+                                            </Border.Background>
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="*"/>
+                                                </Grid.RowDefinitions>
+                                                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,3">
+                                                    <TextBlock Text="&#xE8A1;" FontFamily="Segoe MDL2 Assets" Foreground="#E65100" FontSize="11" Margin="0,0,4,0" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="To Review" FontSize="9" Foreground="#E65100" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                                <TextBlock  HorizontalAlignment="Center" Grid.Row="1" Text="{Binding Count, StringFormat='{}{0:N0}'}" FontSize="20" FontWeight="Bold" Foreground="#E65100" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Border>
+                                        
+                                        <!-- Reviewed -->
+                                        <Border Grid.Row="1" Grid.Column="1" CornerRadius="10" Padding="8,6" Margin="5,5,0,0">
+                                            <Border.Background>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                                    <GradientStop Color="#E8F5E9" Offset="0"/>
+                                                    <GradientStop Color="#C8E6C9" Offset="1"/>
+                                                </LinearGradientBrush>
+                                            </Border.Background>
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="*"/>
+                                                </Grid.RowDefinitions>
+                                                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,3">
+                                                    <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" Foreground="#2E7D32" FontSize="11" Margin="0,0,4,0" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="Done" FontSize="9" Foreground="#2E7D32" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                                <TextBlock  HorizontalAlignment="Center" Grid.Row="1" Text="{Binding ReviewedCount, StringFormat='{}{0:N0}'}" FontSize="20" FontWeight="Bold" Foreground="#2E7D32" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Border>
+                                    </Grid>
+
+                                    <!-- Footer: Total Lines & Amount -->
+                                    <Border Grid.Row="2" Background="AliceBlue" CornerRadius="0,0,14,14" Padding="14,9" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="20,0,40,0">
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                                                    <TextBlock Text="&#xE8EF;" FontFamily="Segoe MDL2 Assets" FontSize="9" Foreground="#666" Margin="0,0,4,0" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="Total" FontSize="8" Foreground="#666" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding ActualTotal, StringFormat='{}{0:N0}'}" FontSize="14" FontWeight="Bold" Foreground="#333"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1">
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                                                    <TextBlock Text="&#xE7BF;" FontFamily="Segoe MDL2 Assets" FontSize="9" Foreground="{DynamicResource BNPMainGreenBrush}" Margin="0,0,4,0" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="Amount" FontSize="8" Foreground="#666" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding AmountsText}" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource BNPMainGreenBrush}" TextTrimming="CharacterEllipsis"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </Grid>
+                            </Button>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <!-- Quick Stats Summary -->
+            <TextBlock Text="QUICK STATS" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,12" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+            <Grid Margin="0,0,0,30">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Total Live Items -->
+                <Border Grid.Column="0" Style="{StaticResource KPICardStyle}" Margin="0,0,8,0" Padding="16,12">
+                    <StackPanel>
+                        <TextBlock Text="&#xE8FD;" FontFamily="Segoe MDL2 Assets" Foreground="#2196F3" FontSize="20" Margin="0,0,0,8"/>
+                        <TextBlock Text="{Binding TotalLiveCount, StringFormat='{}{0:N0}'}" FontSize="28" FontWeight="Bold" Foreground="#222222"/>
+                        <TextBlock Text="Total Live Items" FontSize="12" Foreground="#666666" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Matched Rate -->
+                <Border Grid.Column="1" Style="{StaticResource KPICardStyle}" Margin="0,0,8,0" Padding="16,12">
+                    <StackPanel>
+                        <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" Foreground="#4CAF50" FontSize="20" Margin="0,0,0,8"/>
+                        <TextBlock Text="{Binding MatchedPercentage, StringFormat='{}{0:N1}%'}" FontSize="28" FontWeight="Bold" Foreground="#222222"/>
+                        <TextBlock Text="Matched to DWINGS" FontSize="12" Foreground="#666666" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- To Review -->
+                <Border Grid.Column="2" Style="{StaticResource KPICardStyle}" Margin="0,0,8,0" Padding="16,12">
+                    <StackPanel>
+                        <TextBlock Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" Foreground="#FF9800" FontSize="20" Margin="0,0,0,8"/>
+                        <TextBlock Text="{Binding TotalToReviewCount, StringFormat='{}{0:N0}'}" FontSize="28" FontWeight="Bold" Foreground="#222222"/>
+                        <TextBlock Text="To Review" FontSize="12" Foreground="#666666" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Reviewed Today -->
+                <Border Grid.Column="3" Style="{StaticResource KPICardStyle}" Padding="16,12">
+                    <StackPanel>
+                        <TextBlock Text="&#xE73A;" FontFamily="Segoe MDL2 Assets" Foreground="#9C27B0" FontSize="20" Margin="0,0,0,8"/>
+                        <TextBlock Text="{Binding ReviewedTodayCount, StringFormat='{}{0:N0}'}" FontSize="28" FontWeight="Bold" Foreground="#222222"/>
+                        <TextBlock Text="Reviewed Today" FontSize="12" Foreground="#666666" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <!-- Historical Trends -->
+            <TextBlock Text="HISTORICAL TRENDS" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,12" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+            <Grid Margin="0,0,0,30">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- New vs Archived Daily -->
+                <Border Grid.Column="0" Style="{StaticResource KPICardStyle}" Margin="0,0,8,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="New vs Archived (Daily)" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,12" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+                        <lvc:CartesianChart Grid.Row="1" Height="200" DisableAnimations="True" Series="{Binding NewDeletedDailySeries}">
+                            <lvc:CartesianChart.AxisX>
+                                <lvc:Axis Labels="{Binding NewDeletedDailyLabels}" FontSize="10">
+                                    <lvc:Axis.Separator>
+                                        <lvc:Separator IsEnabled="False"/>
+                                    </lvc:Axis.Separator>
+                                </lvc:Axis>
+                            </lvc:CartesianChart.AxisX>
+                            <lvc:CartesianChart.AxisY>
+                                <lvc:Axis FontSize="10">
+                                    <lvc:Axis.Separator>
+                                        <lvc:Separator IsEnabled="False"/>
+                                    </lvc:Axis.Separator>
+                                </lvc:Axis>
+                            </lvc:CartesianChart.AxisY>
+                        </lvc:CartesianChart>
+                    </Grid>
+                </Border>
+
+                <!-- Time to Archive -->
+                <Border Grid.Column="1" Style="{StaticResource KPICardStyle}" Margin="8,0,0,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="Avg. Time to Archive (Days)" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,12" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+                        <lvc:CartesianChart Grid.Row="1" Height="200" DisableAnimations="True" Series="{Binding DeletionDelaySeries}">
+                            <lvc:CartesianChart.AxisX>
+                                <lvc:Axis Labels="{Binding DeletionDelayLabels}" FontSize="10">
+                                    <lvc:Axis.Separator>
+                                        <lvc:Separator IsEnabled="False"/>
+                                    </lvc:Axis.Separator>
+                                </lvc:Axis>
+                            </lvc:CartesianChart.AxisX>
+                            <lvc:CartesianChart.AxisY>
+                                <lvc:Axis Title="Days" FontSize="10">
+                                    <lvc:Axis.Separator>
+                                        <lvc:Separator IsEnabled="False"/>
+                                    </lvc:Axis.Separator>
+                                </lvc:Axis>
+                            </lvc:CartesianChart.AxisY>
+                        </lvc:CartesianChart>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <!-- Account Overview: Receivable vs Pivot -->
+            <TextBlock Text="ACCOUNT OVERVIEW" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,12" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+            <Border Style="{StaticResource KPICardStyle}" Margin="0,0,0,30">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Summary Cards -->
+                    <Grid Grid.Row="0" Margin="0,0,0,20">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Receivable Summary -->
+                        <Border Grid.Column="0" Background="#F0F9FF" CornerRadius="8" Padding="16,12" Margin="0,0,8,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="&#xE8C7;" FontFamily="Segoe MDL2 Assets" Foreground="{DynamicResource BNPMainGreenBrush}" FontSize="32" VerticalAlignment="Center" Margin="0,0,16,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="Receivable Accounts" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource BNPMainGreenBrush}" Margin="0,0,0,8"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="Count" FontSize="10" Foreground="#666666"/>
+                                            <TextBlock Text="{Binding ReceivableAccountsCount, StringFormat='{}{0:N0}'}" FontSize="18" FontWeight="Bold" Foreground="#222222"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="Amount (Solde Net)" FontSize="10" Foreground="#666666"/>
+                                            <TextBlock Text="{Binding TotalReceivableAmount}" FontSize="18" FontWeight="Bold" Foreground="#222222"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <!-- Pivot Summary -->
+                        <Border Grid.Column="1" Background="#F3F0FF" CornerRadius="8" Padding="16,12" Margin="8,0,0,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" Foreground="#2196F3" FontSize="32" VerticalAlignment="Center" Margin="0,0,16,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="Pivot Accounts" FontSize="14" FontWeight="SemiBold" Foreground="#2196F3" Margin="0,0,0,8"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="Count" FontSize="10" Foreground="#666666"/>
+                                            <TextBlock Text="{Binding PivotAccountsCount, StringFormat='{}{0:N0}'}" FontSize="18" FontWeight="Bold" Foreground="#222222"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="Amount (Solde Net)" FontSize="10" Foreground="#666666"/>
+                                            <TextBlock Text="{Binding TotalPivotAmount}" FontSize="18" FontWeight="Bold" Foreground="#222222"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </Grid>
+
+                    <!-- Comparison Chart by Currency (most useful breakdown) -->
+                    <StackPanel Grid.Row="1">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <TextBlock Text="By Currency" FontSize="13" FontWeight="SemiBold" Foreground="#333"/>
+                            <TextBlock Text="(Volume Total)" FontSize="10" Foreground="#666" Margin="8,2,0,0" VerticalAlignment="Bottom"/>
+                        </StackPanel>
+                        <lvc:CartesianChart Height="200" DisableAnimations="True" Series="{Binding ReceivablePivotByCurrencySeries}">
+                        <lvc:CartesianChart.AxisX>
+                            <lvc:Axis Labels="{Binding ReceivablePivotByCurrencyLabels}" FontSize="11">
+                                <lvc:Axis.Separator>
+                                    <lvc:Separator IsEnabled="False"/>
+                                </lvc:Axis.Separator>
+                            </lvc:Axis>
+                        </lvc:CartesianChart.AxisX>
+                        <lvc:CartesianChart.AxisY>
+                            <lvc:Axis FontSize="11">
+                                <lvc:Axis.Separator>
+                                    <lvc:Separator IsEnabled="False"/>
+                                </lvc:Axis.Separator>
+                            </lvc:Axis>
+                        </lvc:CartesianChart.AxisY>
+                    </lvc:CartesianChart>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- Work Distribution -->
+            <TextBlock Text="WORK DISTRIBUTION" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,12" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+            <Grid Margin="0,0,0,30">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- KPI Distribution -->
+                <Border Grid.Column="0" Style="{StaticResource KPICardStyle}" Margin="0,0,8,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Margin="0,0,0,12">
+                            <TextBlock Text="By KPI" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+                            <TextBlock Text="(Volume Total)" FontSize="10" Foreground="#666" Margin="0,2,0,0"/>
+                        </StackPanel>
+                        <lvc:PieChart x:Name="KPIChart" Grid.Row="1" Height="180" DisableAnimations="True" LegendLocation="Bottom"/>
+                    </Grid>
+                </Border>
+
+                <!-- Currency Distribution -->
+                <Border Grid.Column="1" Style="{StaticResource KPICardStyle}" Margin="0,0,8,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Margin="0,0,0,12">
+                            <TextBlock Text="By Currency" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+                            <TextBlock Text="(Abs Solde Net)" FontSize="10" Foreground="#666" Margin="0,2,0,0"/>
+                        </StackPanel>
+                        <lvc:PieChart Grid.Row="1" Height="180" DisableAnimations="True" 
+                                     Series="{Binding CurrencyDistributionSeries}"
+                                     LegendLocation="Bottom"/>
+                    </Grid>
+                </Border>
+
+                <!-- Action Distribution -->
+                <Border Grid.Column="2" Style="{StaticResource KPICardStyle}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Margin="0,0,0,12">
+                            <TextBlock Text="By Action" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+                            <TextBlock Text="(Volume Total)" FontSize="10" Foreground="#666" Margin="0,2,0,0"/>
+                        </StackPanel>
+                        <lvc:CartesianChart Grid.Row="1" Height="180" DisableAnimations="True"
+                                           Series="{Binding ActionDistributionSeries}">
+                            <lvc:CartesianChart.AxisX>
+                                <lvc:Axis Labels="{Binding ActionLabels}">
+                                    <lvc:Axis.Separator>
+                                        <lvc:Separator IsEnabled="False"/>
+                                    </lvc:Axis.Separator>
+                                </lvc:Axis>
+                            </lvc:CartesianChart.AxisX>
+                            <lvc:CartesianChart.AxisY>
+                                <lvc:Axis>
+                                    <lvc:Axis.Separator>
+                                        <lvc:Separator IsEnabled="False"/>
+                                    </lvc:Axis.Separator>
+                                </lvc:Axis>
+                            </lvc:CartesianChart.AxisY>
+                        </lvc:CartesianChart>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <!-- ALERTS PANEL -->
+            <TextBlock Text="ALERTS" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,12" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+            <ItemsControl ItemsSource="{Binding AlertItems}" Margin="0,0,0,30">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Background="White" CornerRadius="8" Padding="16,12" Margin="0,0,0,8" BorderThickness="1" Effect="{StaticResource LightShadow}"
+                                BorderBrush="{Binding Type, Converter={StaticResource AlertTypeToBorderColorConverter}}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="{Binding Type, Converter={StaticResource AlertTypeToIconConverter}}" FontFamily="Segoe MDL2 Assets" FontSize="20" VerticalAlignment="Center" Margin="0,0,12,0"
+                                           Foreground="{Binding Type, Converter={StaticResource AlertTypeToBorderColorConverter}}"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" Foreground="#222222"/>
+                                    <TextBlock Text="{Binding Message}" FontSize="12" Foreground="#666666" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <TextBlock Grid.Column="2" Text="{Binding Count}" FontSize="24" FontWeight="Bold" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Foreground="{Binding Type, Converter={StaticResource AlertTypeToBorderColorConverter}}"/>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <!-- REVIEW TRENDS -->
+            <TextBlock Text="REVIEW TRENDS (LAST 7 DAYS)" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,12" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+            <Grid Margin="0,0,0,30">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Reviews per Day -->
+                <Border Grid.Column="0" Style="{StaticResource KPICardStyle}" Margin="0,0,8,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="Reviews per Day" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,12" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+                        <lvc:CartesianChart Grid.Row="1" Height="200" DisableAnimations="True" Series="{Binding ReviewTrendSeries}">
+                            <lvc:CartesianChart.AxisX>
+                                <lvc:Axis Labels="{Binding ReviewTrendLabels}" FontSize="10">
+                                    <lvc:Axis.Separator>
+                                        <lvc:Separator IsEnabled="False"/>
+                                    </lvc:Axis.Separator>
+                                </lvc:Axis>
+                            </lvc:CartesianChart.AxisX>
+                            <lvc:CartesianChart.AxisY>
+                                <lvc:Axis FontSize="10">
+                                    <lvc:Axis.Separator>
+                                        <lvc:Separator IsEnabled="False"/>
+                                    </lvc:Axis.Separator>
+                                </lvc:Axis>
+                            </lvc:CartesianChart.AxisY>
+                        </lvc:CartesianChart>
+                    </Grid>
+                </Border>
+
+                <!-- Matched Rate Trend -->
+                <Border Grid.Column="1" Style="{StaticResource KPICardStyle}" Margin="8,0,0,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="Matched Rate (%)" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,12" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+                        <lvc:CartesianChart Grid.Row="1" Height="200" DisableAnimations="True" Series="{Binding MatchedRateTrendSeries}">
+                            <lvc:CartesianChart.AxisX>
+                                <lvc:Axis Labels="{Binding MatchedRateTrendLabels}" FontSize="10">
+                                    <lvc:Axis.Separator>
+                                        <lvc:Separator IsEnabled="False"/>
+                                    </lvc:Axis.Separator>
+                                </lvc:Axis>
+                            </lvc:CartesianChart.AxisX>
+                            <lvc:CartesianChart.AxisY>
+                                <lvc:Axis FontSize="10" MinValue="0" MaxValue="100">
+                                    <lvc:Axis.Separator>
+                                        <lvc:Separator IsEnabled="False"/>
+                                    </lvc:Axis.Separator>
+                                </lvc:Axis>
+                            </lvc:CartesianChart.AxisY>
+                        </lvc:CartesianChart>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <!-- ASSIGNEE LEADERBOARD -->
+            <TextBlock Text="ASSIGNEE LEADERBOARD (THIS WEEK)" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,12" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+            <Border Style="{StaticResource KPICardStyle}" Margin="0,0,0,30">
+                <ItemsControl ItemsSource="{Binding AssigneeLeaderboard}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="#F9F9F9" CornerRadius="6" Padding="12,8" Margin="0,0,0,8">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="&#xE77B;" FontFamily="Segoe MDL2 Assets" FontSize="16" Foreground="{DynamicResource BNPMainGreenBrush}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Assignee}" FontSize="13" FontWeight="SemiBold" Foreground="#222222" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="0,0,16,0">
+                                        <TextBlock Text="{Binding ReviewedThisWeek}" FontSize="20" FontWeight="Bold" Foreground="{DynamicResource BNPMainGreenBrush}" VerticalAlignment="Center"/>
+                                        <TextBlock Text=" reviewed" FontSize="11" Foreground="#666666" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="3" Text="{Binding CompletionRate, StringFormat='{}{0:N1}%'}" FontSize="13" FontWeight="SemiBold" Foreground="#4CAF50" VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Border>
+
+            <!-- COMPLETION ESTIMATE -->
+            <TextBlock Text="COMPLETION ESTIMATE" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,12" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+            <Border Style="{StaticResource KPICardStyle}" Margin="0,0,0,30">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="&#xE9D5;" FontFamily="Segoe MDL2 Assets" Foreground="#FF9800" FontSize="20" Margin="0,0,0,8"/>
+                        <TextBlock Text="{Binding CompletionEstimate.UnreviewedCount, StringFormat='{}{0:N0}'}" FontSize="28" FontWeight="Bold" Foreground="#222222"/>
+                        <TextBlock Text="To Review" FontSize="12" Foreground="#666666" Margin="0,4,0,0"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="&#xE916;" FontFamily="Segoe MDL2 Assets" Foreground="#2196F3" FontSize="20" Margin="0,0,0,8"/>
+                        <TextBlock Text="{Binding CompletionEstimate.DailyReviewRate, StringFormat='{}{0:N1}'}" FontSize="28" FontWeight="Bold" Foreground="#222222"/>
+                        <TextBlock Text="Per Day" FontSize="12" Foreground="#666666" Margin="0,4,0,0"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Text="&#xE787;" FontFamily="Segoe MDL2 Assets" Foreground="#9C27B0" FontSize="20" Margin="0,0,0,8"/>
+                        <TextBlock Text="{Binding CompletionEstimate.EstimatedDaysToComplete, StringFormat='{}{0}'}" FontSize="28" FontWeight="Bold" Foreground="#222222"/>
+                        <TextBlock Text="Days Left" FontSize="12" Foreground="#666666" Margin="0,4,0,0"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="3">
+                        <TextBlock Text="&#xE930;" FontFamily="Segoe MDL2 Assets" Foreground="#4CAF50" FontSize="20" Margin="0,0,0,8"/>
+                        <TextBlock Text="{Binding CompletionEstimate.CompletionPercentage, StringFormat='{}{0:N1}%'}" FontSize="28" FontWeight="Bold" Foreground="#222222"/>
+                        <TextBlock Text="Complete" FontSize="12" Foreground="#666666" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- Status and recent activity -->
+            <Border Style="{StaticResource KPICardStyle}" Margin="0,0,0,30">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Text="Recent Activity" FontSize="16" FontWeight="Bold" Margin="0,0,0,15" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+
+                    <StackPanel Grid.Row="1">
+                        <TextBlock Text="{Binding StatusMessage}" FontSize="14" Foreground="#666666" Margin="0,0,0,10"/>
+                        <TextBlock Text="{Binding LastUpdateTime, StringFormat='Last updated: {0:dd/MM/yyyy HH:mm}'}" FontSize="12" Foreground="#999999"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
