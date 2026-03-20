@@ -30,6 +30,7 @@ namespace RecoTool.Services
         private readonly object _lock = new object();
         private bool _disposed = false;
         private int _heartbeatTickCounter = 0; // Counter to track ticks
+        private int _heartbeatRunning = 0; // Re-entrancy guard: 0=idle, 1=executing
 
         // Cache for session data to avoid constant DB access
         private readonly Dictionary<int, List<TodoSessionInfo>> _sessionCache = new Dictionary<int, List<TodoSessionInfo>>();
@@ -258,58 +259,64 @@ namespace RecoTool.Services
                 }
             }
 
-            // Cache miss - fetch from DB
+            // Cache miss - fetch from DB (with one retry if connection was broken e.g. after import)
             var sessions = new List<TodoSessionInfo>();
-            try
+            for (int attempt = 0; attempt < 2; attempt++)
             {
-                var conn = await GetOrCreateConnectionAsync().ConfigureAwait(false);
-                if (conn == null)
+                try
                 {
-                    // Connection failed, return empty list
-                    return sessions;
-                }
-
-                // Clean up stale sessions first
-                await CleanupStaleSessionsAsync(conn).ConfigureAwait(false);
-
-                // Get active sessions for this country (excluding current user)
-                var sql = @"SELECT UserId, UserName, SessionStart, LastHeartbeat, IsEditing 
-                           FROM T_TodoList_Sessions 
-                           WHERE TodoId = ? AND UserId <> ?
-                           ORDER BY SessionStart";
-                using (var cmd = new OleDbCommand(sql, conn))
-                {
-                    cmd.Parameters.AddWithValue("@TodoId", todoId);
-                    cmd.Parameters.AddWithValue("@UserId", _currentUserId);
-                    using (var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false))
+                    var conn = await GetOrCreateConnectionAsync().ConfigureAwait(false);
+                    if (conn == null)
                     {
-                        while (await reader.ReadAsync().ConfigureAwait(false))
+                        // Connection failed, return empty list
+                        return sessions;
+                    }
+
+                    // Clean up stale sessions first
+                    await CleanupStaleSessionsAsync(conn).ConfigureAwait(false);
+
+                    // Get active sessions for this country (excluding current user)
+                    var sql = @"SELECT UserId, UserName, SessionStart, LastHeartbeat, IsEditing 
+                               FROM T_TodoList_Sessions 
+                               WHERE TodoId = ? AND UserId <> ?
+                               ORDER BY SessionStart";
+                    using (var cmd = new OleDbCommand(sql, conn))
+                    {
+                        cmd.Parameters.AddWithValue("@TodoId", todoId);
+                        cmd.Parameters.AddWithValue("@UserId", _currentUserId);
+                        using (var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false))
                         {
-                            sessions.Add(new TodoSessionInfo
+                            while (await reader.ReadAsync().ConfigureAwait(false))
                             {
-                                UserId = reader["UserId"]?.ToString(),
-                                UserName = reader["UserName"]?.ToString(),
-                                SessionStart = reader["SessionStart"] as DateTime? ?? DateTime.MinValue,
-                                LastHeartbeat = reader["LastHeartbeat"] as DateTime? ?? DateTime.MinValue,
-                                IsEditing = reader["IsEditing"] as bool? ?? false
-                            });
+                                sessions.Add(new TodoSessionInfo
+                                {
+                                    UserId = reader["UserId"]?.ToString(),
+                                    UserName = reader["UserName"]?.ToString(),
+                                    SessionStart = reader["SessionStart"] as DateTime? ?? DateTime.MinValue,
+                                    LastHeartbeat = reader["LastHeartbeat"] as DateTime? ?? DateTime.MinValue,
+                                    IsEditing = reader["IsEditing"] as bool? ?? false
+                                });
+                            }
                         }
                     }
-                }
 
-                // Update cache
-                lock (_lock)
-                {
-                    _sessionCache[todoId] = new List<TodoSessionInfo>(sessions);
-                    _cacheExpiry[todoId] = DateTime.Now.AddSeconds(CACHE_LIFETIME_SECONDS);
+                    // Update cache
+                    lock (_lock)
+                    {
+                        _sessionCache[todoId] = new List<TodoSessionInfo>(sessions);
+                        _cacheExpiry[todoId] = DateTime.Now.AddSeconds(CACHE_LIFETIME_SECONDS);
+                    }
+                    break; // success — exit retry loop
                 }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[TodoSessionTracker.GetActiveSessions] ERROR: {ex.Message}");
-                // Mark connection as unhealthy
-                _connectionHealthy = false;
-                CloseConnection();
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[TodoSessionTracker.GetActiveSessions] ERROR (attempt {attempt}): {ex.Message}");
+                    // Close broken connection and retry once with a fresh one
+                    _connectionHealthy = false;
+                    CloseConnection();
+                    sessions.Clear(); // discard partial results before retry
+                    if (attempt > 0) break; // already retried — give up silently
+                }
             }
             return sessions;
         }
@@ -397,6 +404,9 @@ namespace RecoTool.Services
         {
             if (_disposed) return;
 
+            // Prevent overlapping heartbeat ticks (timer can fire again while previous tick is still running)
+            if (Interlocked.Exchange(ref _heartbeatRunning, 1) == 1) return;
+
             try
             {
                 // Skip heartbeat writes if an Ambre import is in progress to avoid DB lock contention
@@ -419,7 +429,7 @@ namespace RecoTool.Services
 
                 if (todoIds.Length == 0) return;
 
-                // Use persistent connection
+                // Get or create connection — fully synchronous to avoid sync-over-async deadlock
                 OleDbConnection conn;
                 lock (_lock)
                 {
@@ -428,18 +438,24 @@ namespace RecoTool.Services
 
                 if (conn == null || conn.State != ConnectionState.Open)
                 {
-                    // Try to reconnect
+                    // Synchronous reconnect — no .Wait() / .Result on async tasks
                     try
                     {
-                        var task = GetOrCreateConnectionAsync();
-                        task.Wait(5000); // Wait max 5 seconds
-                        conn = task.Result;
+                        CloseConnection(); // dispose broken connection first
+                        var newConn = new OleDbConnection(_lockDbConnectionString);
+                        newConn.Open(); // synchronous open — will throw quickly if DB is locked
+                        lock (_lock)
+                        {
+                            _persistentConnection = newConn;
+                            _connectionHealthy = true;
+                            _lastConnectionCheck = DateTime.Now;
+                        }
+                        conn = newConn;
                     }
                     catch
                     {
-                        // Connection failed - mark as unhealthy and return
-                        _connectionHealthy = false;
-                        CloseConnection();
+                        // Connection failed — mark as unhealthy, skip this tick entirely
+                        lock (_lock) { _connectionHealthy = false; }
                         return;
                     }
                 }
@@ -548,6 +564,10 @@ namespace RecoTool.Services
                 System.Diagnostics.Debug.WriteLine($"[TodoSessionTracker.Heartbeat] ERROR: {ex.Message}");
                 // Connection failed, close and invalidate
                 CloseConnection();
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _heartbeatRunning, 0);
             }
         }
 

@@ -10,6 +10,8 @@ namespace RecoTool.Services
 {
     /// <summary>
     /// Manages shared/global ToDo list items stored in the referential DB (T_Ref_TodoList).
+    /// Uses <see cref="Infrastructure.DataAccess.ReferentialConnectionPool"/> when available
+    /// to avoid repeated open/close of DB_Referentiels.
     /// </summary>
     public sealed class UserTodoListService
     {
@@ -20,12 +22,35 @@ namespace RecoTool.Services
             _connString = Infrastructure.DataAccess.DbConn.ResolveConnectionString(referentialConnectionStringOrPath);
         }
 
+        /// <summary>
+        /// Returns a pooled connection if available, otherwise opens a new one.
+        /// If the returned tuple has OwnsConnection=true, the caller must dispose it.
+        /// </summary>
+        private async Task<(OleDbConnection Connection, bool OwnsConnection)> GetConnectionAsync()
+        {
+            var pool = Infrastructure.DataAccess.ReferentialConnectionPool.Instance;
+            if (pool != null)
+            {
+                try
+                {
+                    var conn = await pool.GetConnectionAsync().ConfigureAwait(false);
+                    return (conn, false); // pool owns it
+                }
+                catch { /* fall through to ad-hoc */ }
+            }
+
+            // Fallback: ad-hoc connection
+            var adhoc = new OleDbConnection(_connString);
+            await adhoc.OpenAsync().ConfigureAwait(false);
+            return (adhoc, true);
+        }
+
         public async Task<bool> EnsureTableAsync()
         {
             const string table = "T_Ref_TodoList";
-            using (var conn = new OleDbConnection(_connString))
+            var (conn, ownsConnection) = await GetConnectionAsync().ConfigureAwait(false);
+            try
             {
-                await conn.OpenAsync().ConfigureAwait(false);
                 try
                 {
                     var schema = conn.GetOleDbSchemaTable(OleDbSchemaGuid.Tables, new object[] { null, null, table, "TABLE" });
@@ -67,6 +92,10 @@ TDL_CountryId TEXT(20)
                     return false;
                 }
             }
+            finally
+            {
+                if (ownsConnection) conn?.Dispose();
+            }
         }
 
         private static async Task EnsureMissingColumnsAsync(OleDbConnection conn, string table)
@@ -97,10 +126,10 @@ TDL_CountryId TEXT(20)
 
         public async Task<List<TodoListItem>> ListAsync(string countryId)
         {
-            var list = new List<TodoListItem>();    
-            using (var conn = new OleDbConnection(_connString))
+            var list = new List<TodoListItem>();
+            var (conn, ownsConnection) = await GetConnectionAsync().ConfigureAwait(false);
+            try
             {
-                await conn.OpenAsync().ConfigureAwait(false);
                 // No filter on TDL_CountryId: all todos are shared across countries
                 var cmd = new OleDbCommand($"SELECT TDL_id, TDL_Name, TDL_FilterName, TDL_ViewName, TDL_Account, TDL_Order, TDL_Active, TDL_CountryId FROM T_Ref_TodoList WHERE (TDL_Active <> 0 OR TDL_Active IS NULL) ORDER BY TDL_Order, TDL_Name", conn);
                 using (var rdr = await cmd.ExecuteReaderAsync().ConfigureAwait(false))
@@ -121,16 +150,19 @@ TDL_CountryId TEXT(20)
                     }
                 }
             }
+            finally
+            {
+                if (ownsConnection) conn?.Dispose();
+            }
             return list;
         }
 
         public async Task<int> UpsertAsync(TodoListItem item)
         {
             if (item == null || string.IsNullOrWhiteSpace(item.TDL_Name)) return 0;
-            using (var conn = new OleDbConnection(_connString))
+            var (conn, ownsConnection) = await GetConnectionAsync().ConfigureAwait(false);
+            try
             {
-                await conn.OpenAsync().ConfigureAwait(false);
-
                 // Check by name only (no country filter)
                 int? existingId = null;
                 using (var check = new OleDbCommand("SELECT TOP 1 TDL_id FROM T_Ref_TodoList WHERE TDL_Name = ?", conn))
@@ -181,19 +213,27 @@ WHERE TDL_id = ?", conn))
                     }
                 }
             }
+            finally
+            {
+                if (ownsConnection) conn?.Dispose();
+            }
         }
 
         public async Task<bool> DeleteAsync(int id)
         {
-            using (var conn = new OleDbConnection(_connString))
+            var (conn, ownsConnection) = await GetConnectionAsync().ConfigureAwait(false);
+            try
             {
-                await conn.OpenAsync().ConfigureAwait(false);
                 using (var cmd = new OleDbCommand("DELETE FROM T_Ref_TodoList WHERE TDL_id = ?", conn))
                 {
                     cmd.Parameters.AddWithValue("@p1", id);
                     var n = await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
                     return n > 0;
                 }
+            }
+            finally
+            {
+                if (ownsConnection) conn?.Dispose();
             }
         }
     }

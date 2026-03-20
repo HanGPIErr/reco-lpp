@@ -8,7 +8,8 @@ namespace RecoTool.Services
 {
     /// <summary>
     /// Service dedicated to referential data access (e.g., T_User, T_param) in the referential database.
-    /// Keeps responsibilities out of ReconciliationService.
+    /// Uses <see cref="Infrastructure.DataAccess.ReferentialConnectionPool"/> when available
+    /// to avoid repeated open/close of DB_Referentiels.
     /// </summary>
     public class ReferentialService
     {
@@ -30,15 +31,35 @@ namespace RecoTool.Services
         }
 
         /// <summary>
+        /// Returns a pooled connection if available, otherwise opens a new one.
+        /// If OwnsConnection is true, the caller must dispose it.
+        /// </summary>
+        private async Task<(OleDbConnection Connection, bool OwnsConnection)> GetConnectionAsync(CancellationToken token = default)
+        {
+            var pool = Infrastructure.DataAccess.ReferentialConnectionPool.Instance;
+            if (pool != null)
+            {
+                try
+                {
+                    var conn = await pool.GetConnectionAsync(token).ConfigureAwait(false);
+                    return (conn, false);
+                }
+                catch { /* fall through to ad-hoc */ }
+            }
+            var adhoc = new OleDbConnection(GetReferentialConnectionString());
+            await adhoc.OpenAsync(token).ConfigureAwait(false);
+            return (adhoc, true);
+        }
+
+        /// <summary>
         /// Get user list from T_User and ensure the current user exists.
         /// </summary>
         public async Task<List<(string Id, string Name)>> GetUsersAsync(CancellationToken cancellationToken = default)
         {
             var list = new List<(string, string)>();
-            using (var connection = new OleDbConnection(GetReferentialConnectionString()))
+            var (connection, ownsConnection) = await GetConnectionAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-
                 // Ensure current user exists in T_User (USR_ID, USR_Name)
                 try
                 {
@@ -71,6 +92,10 @@ namespace RecoTool.Services
                     }
                 }
             }
+            finally
+            {
+                if (ownsConnection) connection?.Dispose();
+            }
             return list;
         }
 
@@ -82,11 +107,9 @@ namespace RecoTool.Services
         {
             if (string.IsNullOrWhiteSpace(paramKey)) return null;
 
-            using (var connection = new OleDbConnection(GetReferentialConnectionString()))
+            var (connection, ownsConnection) = await GetConnectionAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-
                 // Try common key column names to avoid coupling to a specific schema naming
                 string[] keyColumns = { "Par_Key", "Par_Code", "Par_Name", "PAR_Key", "PAR_Code", "PAR_Name" };
                 foreach (var col in keyColumns)
@@ -105,6 +128,10 @@ namespace RecoTool.Services
                         // Ignore and try next column variant
                     }
                 }
+            }
+            finally
+            {
+                if (ownsConnection) connection?.Dispose();
             }
             return null;
         }

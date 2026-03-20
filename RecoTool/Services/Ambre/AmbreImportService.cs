@@ -235,27 +235,58 @@ namespace RecoTool.Services
 
             LogManager.Info($"Attempting to acquire global lock for {countryId} (wait={waitSec}s, lease={leaseSec}s)...");
 
-            using (var cts = new System.Threading.CancellationTokenSource(waitBudget))
+            // --- Attempt loop: normal attempt, then optional force-break + retry ---
+            for (int attempt = 0; attempt < 2; attempt++)
             {
-                try
+                using (var cts = new System.Threading.CancellationTokenSource(waitBudget))
                 {
-                    // Note: the OfflineFirstService method uses the timeout both as wait budget and lease.
-                    // We pass the desired lease here and bound wait via CancellationToken to ensure in-process gate is released on timeout.
-                    var handle = await _offlineFirstService.AcquireGlobalLockAsync(countryId, "AmbreImport", lease, cts.Token);
-                    if (handle == null)
+                    try
                     {
-                        result.Errors.Add($"Unable to acquire global lock for {countryId}");
-                        return null;
+                        var handle = await _offlineFirstService.AcquireGlobalLockAsync(countryId, "AmbreImport", lease, cts.Token);
+                        if (handle == null)
+                        {
+                            result.Errors.Add($"Unable to acquire global lock for {countryId}");
+                            return null;
+                        }
+                        LogManager.Info($"Global lock acquired for {countryId}");
+                        return handle;
                     }
-                    LogManager.Info($"Global lock acquired for {countryId}");
-                    return handle;
-                }
-                catch (OperationCanceledException)
-                {
-                    result.Errors.Add($"Unable to obtain global lock within {waitSec} seconds.");
-                    return null;
+                    catch (Exception ex) when (ex is OperationCanceledException || ex is TimeoutException || ex is InvalidOperationException)
+                    {
+                        if (attempt > 0)
+                        {
+                            // Already retried after force-break — give up
+                            result.Errors.Add($"Unable to obtain global lock after force-break: {ex.Message}");
+                            return null;
+                        }
+
+                        // First failure: ask user if they want to force-break
+                        LogManager.Warning($"[LOCK] Lock acquisition failed: {ex.Message}. Prompting user for force-break.");
+
+                        var mbResult = System.Windows.MessageBox.Show(
+                            $"Impossible d'acquérir le verrou d'import après {waitSec}s.\n\n" +
+                            "Un autre import ou une synchronisation semble toujours en cours " +
+                            "(ou le précédent import a été interrompu de force).\n\n" +
+                            "Voulez-vous forcer la libération du verrou et réessayer ?",
+                            "Import bloqué",
+                            System.Windows.MessageBoxButton.YesNo,
+                            System.Windows.MessageBoxImage.Warning);
+
+                        if (mbResult != System.Windows.MessageBoxResult.Yes)
+                        {
+                            result.Errors.Add("Import annulé par l'utilisateur (verrou non libéré).");
+                            return null;
+                        }
+
+                        // Force-break and loop for one more attempt
+                        LogManager.Warning("[LOCK] User chose to force-break the global lock.");
+                        await _offlineFirstService.ForceBreakGlobalLockAsync();
+                    }
                 }
             }
+
+            result.Errors.Add("Unable to acquire global lock (unexpected state).");
+            return null;
         }
 
         private async Task<List<DataAmbre>> ProcessDataAsync(

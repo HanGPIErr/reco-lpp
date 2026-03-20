@@ -9,7 +9,8 @@ namespace RecoTool.Services
 {
     /// <summary>
     /// Manages Saved Views (T_Ref_User_Fields_Preference): list, get, upsert, delete.
-    /// Extracted from ReconciliationService to reduce responsibilities.
+    /// Uses <see cref="Infrastructure.DataAccess.ReferentialConnectionPool"/> when available
+    /// to avoid repeated open/close of DB_Referentiels.
     /// </summary>
     public sealed class UserViewPreferenceService
     {
@@ -22,12 +23,25 @@ namespace RecoTool.Services
             _currentUser = string.IsNullOrWhiteSpace(currentUser) ? Environment.UserName : currentUser;
         }
 
+        private async Task<(OleDbConnection Connection, bool OwnsConnection)> GetConnectionAsync()
+        {
+            var pool = Infrastructure.DataAccess.ReferentialConnectionPool.Instance;
+            if (pool != null)
+            {
+                try { return (await pool.GetConnectionAsync().ConfigureAwait(false), false); }
+                catch { /* fall through */ }
+            }
+            var adhoc = new OleDbConnection(_connString);
+            await adhoc.OpenAsync().ConfigureAwait(false);
+            return (adhoc, true);
+        }
+
         public async Task<List<UserFieldsPreference>> GetAllAsync()
         {
             var list = new List<UserFieldsPreference>();
-            using (var connection = new OleDbConnection(_connString))
+            var (connection, ownsConnection) = await GetConnectionAsync().ConfigureAwait(false);
+            try
             {
-                await connection.OpenAsync();
                 var cmd = new OleDbCommand(@"SELECT UPF_id, UPF_Name, UPF_user, UPF_SQL, UPF_ColumnWidths FROM T_Ref_User_Fields_Preference ORDER BY UPF_Name", connection);
                 using (var reader = await cmd.ExecuteReaderAsync())
                 {
@@ -44,14 +58,18 @@ namespace RecoTool.Services
                     }
                 }
             }
+            finally
+            {
+                if (ownsConnection) connection?.Dispose();
+            }
             return list;
         }
 
         public async Task<int> InsertAsync(string name, string sql, string columnsJson)
         {
-            using (var connection = new OleDbConnection(_connString))
+            var (connection, ownsConnection) = await GetConnectionAsync().ConfigureAwait(false);
+            try
             {
-                await connection.OpenAsync();
                 var cmd = new OleDbCommand(@"INSERT INTO T_Ref_User_Fields_Preference (UPF_Name, UPF_user, UPF_SQL, UPF_ColumnWidths) VALUES (?, ?, ?, ?)", connection);
                 cmd.Parameters.AddWithValue("@p1", name ?? (object)DBNull.Value);
                 cmd.Parameters.AddWithValue("@p2", _currentUser ?? (object)DBNull.Value);
@@ -66,13 +84,17 @@ namespace RecoTool.Services
                 }
                 return 0;
             }
+            finally
+            {
+                if (ownsConnection) connection?.Dispose();
+            }
         }
 
         public async Task<bool> UpdateAsync(int id, string name, string sql, string columnsJson)
         {
-            using (var connection = new OleDbConnection(_connString))
+            var (connection, ownsConnection) = await GetConnectionAsync().ConfigureAwait(false);
+            try
             {
-                await connection.OpenAsync();
                 var cmd = new OleDbCommand(@"UPDATE T_Ref_User_Fields_Preference SET UPF_Name = ?, UPF_user = ?, UPF_SQL = ?, UPF_ColumnWidths = ? WHERE UPF_id = ?", connection);
                 cmd.Parameters.AddWithValue("@p1", name ?? (object)DBNull.Value);
                 cmd.Parameters.AddWithValue("@p2", _currentUser ?? (object)DBNull.Value);
@@ -81,13 +103,17 @@ namespace RecoTool.Services
                 cmd.Parameters.AddWithValue("@p5", id);
                 return await cmd.ExecuteNonQueryAsync() > 0;
             }
+            finally
+            {
+                if (ownsConnection) connection?.Dispose();
+            }
         }
 
         public async Task<int> UpsertAsync(string name, string sql, string columnsJson)
         {
-            using (var connection = new OleDbConnection(_connString))
+            var (connection, ownsConnection) = await GetConnectionAsync().ConfigureAwait(false);
+            try
             {
-                await connection.OpenAsync();
                 int? existingId = null;
                 var check = new OleDbCommand(@"SELECT TOP 1 UPF_id FROM T_Ref_User_Fields_Preference WHERE UPF_Name = ? AND UPF_user = ?", connection);
                 check.Parameters.AddWithValue("@p1", name ?? (object)DBNull.Value);
@@ -106,13 +132,17 @@ namespace RecoTool.Services
                     return await InsertAsync(name, sql, columnsJson);
                 }
             }
+            finally
+            {
+                if (ownsConnection) connection?.Dispose();
+            }
         }
 
         public async Task<UserFieldsPreference> GetByNameAsync(string name)
         {
-            using (var connection = new OleDbConnection(_connString))
+            var (connection, ownsConnection) = await GetConnectionAsync().ConfigureAwait(false);
+            try
             {
-                await connection.OpenAsync();
                 var cmd = new OleDbCommand(@"SELECT TOP 1 UPF_id, UPF_Name, UPF_user, UPF_SQL, UPF_ColumnWidths FROM T_Ref_User_Fields_Preference WHERE UPF_Name = ?", connection);
                 cmd.Parameters.AddWithValue("@p1", name ?? (object)DBNull.Value);
                 using (var reader = await cmd.ExecuteReaderAsync())
@@ -130,15 +160,19 @@ namespace RecoTool.Services
                     }
                 }
             }
+            finally
+            {
+                if (ownsConnection) connection?.Dispose();
+            }
             return null;
         }
 
         public async Task<List<string>> ListNamesAsync(string contains = null)
         {
             var result = new List<string>();
-            using (var connection = new OleDbConnection(_connString))
+            var (connection, ownsConnection) = await GetConnectionAsync().ConfigureAwait(false);
+            try
             {
-                await connection.OpenAsync();
                 OleDbCommand cmd;
                 if (string.IsNullOrWhiteSpace(contains))
                 {
@@ -159,15 +193,19 @@ namespace RecoTool.Services
                     }
                 }
             }
+            finally
+            {
+                if (ownsConnection) connection?.Dispose();
+            }
             return result;
         }
 
         public async Task<List<(string Name, string Creator)>> ListDetailedAsync(string contains = null)
         {
             var list = new List<(string, string)>();
-            using (var connection = new OleDbConnection(_connString))
+            var (connection, ownsConnection) = await GetConnectionAsync().ConfigureAwait(false);
+            try
             {
-                await connection.OpenAsync();
                 OleDbCommand cmd;
                 if (string.IsNullOrWhiteSpace(contains))
                 {
@@ -190,18 +228,26 @@ namespace RecoTool.Services
                     }
                 }
             }
+            finally
+            {
+                if (ownsConnection) connection?.Dispose();
+            }
             return list;
         }
 
         public async Task<bool> DeleteByNameAsync(string name)
         {
-            using (var connection = new OleDbConnection(_connString))
+            var (connection, ownsConnection) = await GetConnectionAsync().ConfigureAwait(false);
+            try
             {
-                await connection.OpenAsync();
                 var cmd = new OleDbCommand(@"DELETE FROM T_Ref_User_Fields_Preference WHERE UPF_Name = ? AND UPF_user = ?", connection);
                 cmd.Parameters.AddWithValue("@p1", name ?? (object)DBNull.Value);
                 cmd.Parameters.AddWithValue("@p2", _currentUser ?? (object)DBNull.Value);
                 return await cmd.ExecuteNonQueryAsync() > 0;
+            }
+            finally
+            {
+                if (ownsConnection) connection?.Dispose();
             }
         }
     }

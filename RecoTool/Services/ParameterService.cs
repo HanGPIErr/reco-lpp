@@ -136,10 +136,24 @@ namespace RecoTool.Services
                 
             try
             {
-                using (var connection = new OleDbConnection(_referentialConnectionString))
+                OleDbConnection connection;
+                bool ownsConnection;
+
+                var pool = Infrastructure.DataAccess.ReferentialConnectionPool.Instance;
+                if (pool != null)
                 {
+                    try { connection = pool.GetConnection(); ownsConnection = false; }
+                    catch { connection = new OleDbConnection(_referentialConnectionString); connection.Open(); ownsConnection = true; }
+                }
+                else
+                {
+                    connection = new OleDbConnection(_referentialConnectionString);
                     connection.Open();
-                    
+                    ownsConnection = true;
+                }
+
+                try
+                {
                     // Vérifier si le paramètre existe
                     string checkQuery = "SELECT COUNT(*) FROM T_Param WHERE PAR_Key = ?";
                     using (var checkCommand = new OleDbCommand(checkQuery, connection))
@@ -171,6 +185,10 @@ namespace RecoTool.Services
                         }
                     }
                 }
+                finally
+                {
+                    if (ownsConnection) connection?.Dispose();
+                }
                 
                 // Mettre à jour le cache local
                 SetParameter(key, value);
@@ -185,15 +203,40 @@ namespace RecoTool.Services
         }
 
         /// <summary>
-        /// Charge les paramètres depuis la base de données
+        /// Charge les paramètres depuis la base de données.
+        /// Uses ReferentialConnectionPool when available.
         /// </summary>
         private void LoadParametersFromDatabase()
         {
             try
             {
-                using (var connection = new OleDbConnection(_referentialConnectionString))
+                OleDbConnection connection;
+                bool ownsConnection;
+
+                var pool = Infrastructure.DataAccess.ReferentialConnectionPool.Instance;
+                if (pool != null)
                 {
+                    try
+                    {
+                        connection = pool.GetConnection();
+                        ownsConnection = false;
+                    }
+                    catch
+                    {
+                        connection = new OleDbConnection(_referentialConnectionString);
+                        connection.Open();
+                        ownsConnection = true;
+                    }
+                }
+                else
+                {
+                    connection = new OleDbConnection(_referentialConnectionString);
                     connection.Open();
+                    ownsConnection = true;
+                }
+
+                try
+                {
                     string query = "SELECT PAR_Key, PAR_Value FROM T_Param";
                     
                     using (var command = new OleDbCommand(query, connection))
@@ -209,6 +252,10 @@ namespace RecoTool.Services
                             _parameters.Add(param);
                         }
                     }
+                }
+                finally
+                {
+                    if (ownsConnection) connection?.Dispose();
                 }
                 
                 System.Diagnostics.Debug.WriteLine($"Chargement de {_parameters.Count} paramètres depuis T_Param");

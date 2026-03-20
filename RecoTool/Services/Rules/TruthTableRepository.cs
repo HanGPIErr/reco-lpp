@@ -37,6 +37,20 @@ namespace RecoTool.Services.Rules
             return "T_Reco_Rules";
         }
 
+        private async Task<(OleDbConnection Connection, bool OwnsConnection)> GetConnectionAsync(CancellationToken token = default)
+        {
+            var pool = Infrastructure.DataAccess.ReferentialConnectionPool.Instance;
+            if (pool != null)
+            {
+                try { return (await pool.GetConnectionAsync(token).ConfigureAwait(false), false); }
+                catch { /* fall through */ }
+            }
+            var cs = _offlineFirstService.ReferentialConnectionString;
+            var adhoc = new OleDbConnection(cs);
+            await adhoc.OpenAsync(token).ConfigureAwait(false);
+            return (adhoc, true);
+        }
+
         private static bool HasColumn(DataTable schema, string columnName)
             => schema != null && schema.Rows.Cast<DataRow>().Any(r => string.Equals(Convert.ToString(r["COLUMN_NAME"]), columnName, StringComparison.OrdinalIgnoreCase));
 
@@ -50,10 +64,9 @@ namespace RecoTool.Services.Rules
             try
             {
                 var tableName = await GetRulesTableNameAsync(token).ConfigureAwait(false);
-                var cs = _offlineFirstService.ReferentialConnectionString;
-                using (var conn = new OleDbConnection(cs))
+                var (conn, ownsConnection) = await GetConnectionAsync(token).ConfigureAwait(false);
+                try
                 {
-                    await conn.OpenAsync(token).ConfigureAwait(false);
                     // Introspect columns to be robust to schema variants
                     var schema = conn.GetOleDbSchemaTable(OleDbSchemaGuid.Columns, new object[] { null, null, tableName, null });
                     if (schema == null || schema.Rows.Count == 0)
@@ -126,6 +139,10 @@ namespace RecoTool.Services.Rules
                         }
                     }
                 }
+                finally
+                {
+                    if (ownsConnection) conn?.Dispose();
+                }
 
                 // Order by priority, then RuleId stable
                 list = list.OrderBy(r => r.Priority).ThenBy(r => r.RuleId, StringComparer.OrdinalIgnoreCase).ToList();
@@ -145,10 +162,9 @@ namespace RecoTool.Services.Rules
         public async Task<bool> EnsureRulesTableAsync(CancellationToken token = default)
         {
             var tableName = await GetRulesTableNameAsync(token).ConfigureAwait(false);
-            var cs = _offlineFirstService.ReferentialConnectionString;
-            using (var conn = new OleDbConnection(cs))
+            var (conn, ownsConnection) = await GetConnectionAsync(token).ConfigureAwait(false);
+            try
             {
-                await conn.OpenAsync(token).ConfigureAwait(false);
                 // Check existence
                 try
                 {
@@ -229,6 +245,10 @@ namespace RecoTool.Services.Rules
                 {
                     return false;
                 }
+            }
+            finally
+            {
+                if (ownsConnection) conn?.Dispose();
             }
         }
 
@@ -311,11 +331,9 @@ namespace RecoTool.Services.Rules
         {
             if (rule == null || string.IsNullOrWhiteSpace(rule.RuleId)) return false;
             var tableName = await GetRulesTableNameAsync(token).ConfigureAwait(false);
-            var cs = _offlineFirstService.ReferentialConnectionString;
-            using (var conn = new OleDbConnection(cs))
+            var (conn, ownsConnection) = await GetConnectionAsync(token).ConfigureAwait(false);
+            try
             {
-                await conn.OpenAsync(token).ConfigureAwait(false);
-
                 // Exists?
                 int count = 0;
                 using (var check = new OleDbCommand($"SELECT COUNT(*) FROM [{tableName}] WHERE RuleId = ?", conn))
@@ -328,7 +346,6 @@ namespace RecoTool.Services.Rules
                 if (count > 0)
                 {
                     // UPDATE
-                    // Ensure columns exist before update
                     await EnsureMissingColumnsAsync(conn, tableName).ConfigureAwait(false);
                     var sql = $@"UPDATE [{tableName}] SET
                         Enabled=?, Priority=?, Scope=?, AccountSide=?, GuaranteeType=?, TransactionType=?, Booking=?,
@@ -369,6 +386,10 @@ namespace RecoTool.Services.Rules
                     }
                 }
             }
+            finally
+            {
+                if (ownsConnection) conn?.Dispose();
+            }
         }
 
         /// <summary>
@@ -378,16 +399,19 @@ namespace RecoTool.Services.Rules
         {
             if (string.IsNullOrWhiteSpace(ruleId)) return 0;
             var tableName = await GetRulesTableNameAsync(token).ConfigureAwait(false);
-            var cs = _offlineFirstService.ReferentialConnectionString;
-            using (var conn = new OleDbConnection(cs))
+            var (conn, ownsConnection) = await GetConnectionAsync(token).ConfigureAwait(false);
+            try
             {
-                await conn.OpenAsync(token).ConfigureAwait(false);
                 using (var cmd = new OleDbCommand($"DELETE FROM [{tableName}] WHERE RuleId = ?", conn))
                 {
                     cmd.Parameters.AddWithValue("@p1", ruleId);
                     var n = await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false);
                     return n;
                 }
+            }
+            finally
+            {
+                if (ownsConnection) conn?.Dispose();
             }
         }
 

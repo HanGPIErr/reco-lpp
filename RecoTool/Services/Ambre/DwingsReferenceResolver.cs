@@ -19,49 +19,53 @@ namespace RecoTool.Services.Ambre
     {
         // 0 = pas encore initialisé, 1 = initialisé
         private static int _state;                     // utilisé avec Interlocked pour être lock‑free
-        private static Dictionary<string, string>? _lookup; // OfficialRef (MAJ) → GuaranteeId
+        private static volatile Dictionary<string, string>? _lookup; // OfficialRef (MAJ) → GuaranteeId
 
         /// <summary>
-        /// Initialise le cache à partir d’une collection de garanties.
-        /// L’appel est idempotent : la première invocation charge le dictionnaire,
+        /// Initialise le cache à partir d'une collection de garanties.
+        /// L'appel est idempotent : la première invocation charge le dictionnaire,
         /// les appels suivants sont ignorés.
+        /// Thread-safe : peut être appelé après Clear() pour rafraîchir le cache.
         /// </summary>
         public static void Initialise(IReadOnlyList<DwingsGuaranteeDto> guarantees)
         {
-            // Si l’état était déjà 1, on sort immédiatement (déjà initialisé)
+            // Si l'état était déjà 1, on sort immédiatement (déjà initialisé)
             if (Interlocked.CompareExchange(ref _state, 1, 0) == 1)
                 return;
 
             var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var g in guarantees)
+            if (guarantees != null)
             {
-                var official = g.OFFICIALREF?.Trim();
-                var gid = g.GUARANTEE_ID?.Trim();
+                foreach (var g in guarantees)
+                {
+                    var official = g.OFFICIALREF?.Trim();
+                    var gid = g.GUARANTEE_ID?.Trim();
 
-                if (string.IsNullOrEmpty(official) || string.IsNullOrEmpty(gid))
-                    continue;                 // on ignore les lignes vides ou sans ID
+                    if (string.IsNullOrEmpty(official) || string.IsNullOrEmpty(gid))
+                        continue;
 
-                var cleanOfficial = Regex.Replace(official, "[^a-zA-Z0-9]", string.Empty,
-                                              RegexOptions.CultureInvariant);
+                    var cleanOfficial = Regex.Replace(official, "[^a-zA-Z0-9]", string.Empty,
+                                                  RegexOptions.CultureInvariant);
 
-                // On stocke la clé en majuscules pour une comparaison case‑insensitive ultra‑rapide
-                map[cleanOfficial.ToUpperInvariant()] = gid;
+                    map[cleanOfficial.ToUpperInvariant()] = gid;
+                }
             }
 
-            // Publication atomique du dictionnaire (lecture‑seule après‑cette ligne)
+            // Publication atomique du dictionnaire (volatile field → visible immédiatement par les autres threads)
             _lookup = map;
         }
 
         /// <summary>
         /// Retourne le <c>GuaranteeId</c> dont la <c>OfficialRef</c> apparaît dans le payload.
+        /// Retourne <c>null</c> si le cache n'est pas encore initialisé (pas d'exception).
         /// </summary>
-        /// <exception cref="InvalidOperationException">Si le cache n’a pas été initialisé.</exception>
         public static string? FindGuaranteeId(string payload)
         {
-            if (_lookup == null)
-                throw new InvalidOperationException(
-                    "GuaranteeCache n'est pas initialisé. Appelez GuaranteeCache.Initialise(...) avant d'utiliser le cache.");
+            // Capture locale pour éviter une NullReferenceException si Clear() est appelé en parallèle
+            var snapshot = _lookup;
+            if (snapshot == null)
+                return null;  // pas encore initialisé → pas d'exception, retour silencieux
 
             // Strip pacs message-type identifiers (e.g. pacs.009.001.08, pacs.008.001.08)
             // before alphanumeric cleaning to avoid false-positive matches on their numeric fragments.
@@ -76,29 +80,31 @@ namespace RecoTool.Services.Ambre
 
             var upperPayload = cleaned.ToUpperInvariant();
 
-            // Le dictionnaire contient une entrée unique par OfficialRef → recherche O(k)
-            foreach (var kvp in _lookup)
+            foreach (var kvp in snapshot)
             {
-                if (upperPayload.Contains(kvp.Key))   // OfficialRef détectée
-                    return kvp.Value;                  // GuaranteeId trouvé
+                if (upperPayload.Contains(kvp.Key))
+                    return kvp.Value;
             }
 
-            return null; // aucune correspondance
+            return null;
         }
 
         /// <summary>
-        /// Méthode d’assistance pour les tests ou les diagnostics.
         /// Indique si le cache a déjà été initialisé.
         /// </summary>
         public static bool IsInitialised => Volatile.Read(ref _state) == 1;
 
-        // -----------------------------------------------------------------
-        // Méthode de réinitialisation – uniquement à des fins de test.
-        // -----------------------------------------------------------------
-        internal static void Clear()
+        /// <summary>
+        /// Réinitialise le cache. Thread-safe : les lecteurs en cours verront
+        /// soit l'ancienne map, soit null (et retourneront null sans crash).
+        /// Un appel ultérieur à Initialise() rechargera les données.
+        /// </summary>
+        public static void Clear()
         {
-            _lookup = null;
+            // Ordre important : d'abord remettre _state à 0 pour permettre un futur Initialise(),
+            // puis nullifier _lookup. Les lecteurs font un snapshot local donc pas de crash.
             Volatile.Write(ref _state, 0);
+            _lookup = null;
         }
     }
 

@@ -1064,17 +1064,20 @@ namespace RecoTool.Services
         {
             private readonly IDisposable _inner;
             private readonly SemaphoreSlim _gate;
+            private readonly Action _onRelease;
             private int _released;
 
-            public ProcessGateLockHandle(IDisposable inner, SemaphoreSlim gate)
+            public ProcessGateLockHandle(IDisposable inner, SemaphoreSlim gate, Action onRelease = null)
             {
                 _inner = inner;
                 _gate = gate;
+                _onRelease = onRelease;
             }
 
             public void Dispose()
             {
                 if (Interlocked.Exchange(ref _released, 1) == 1) return;
+                try { _onRelease?.Invoke(); } catch { }
                 try { _inner?.Dispose(); } catch { }
                 try { _gate?.Release(); } catch { }
             }
@@ -1256,6 +1259,51 @@ namespace RecoTool.Services
             }
         }
 
+        /// <summary>
+        /// Force-breaks ALL global locks in the SyncLocks table for the current country.
+        /// Also resets the in-process gate if it was stuck.
+        /// Should only be called after user confirmation (e.g. import blocked > 30 min).
+        /// </summary>
+        public async Task ForceBreakGlobalLockAsync(CancellationToken token = default)
+        {
+            if (string.IsNullOrEmpty(_currentCountryId))
+                return;
+
+            LogManager.Warning("[LOCK] ForceBreakGlobalLockAsync invoked by user.");
+
+            // 1. Delete ALL rows in SyncLocks for this country (DB-level)
+            try
+            {
+                string connStr = GetRemoteLockConnectionString(_currentCountryId);
+                using (var conn = new OleDbConnection(connStr))
+                {
+                    await conn.OpenAsync(token);
+                    using (var cmd = new OleDbCommand("DELETE FROM SyncLocks", conn))
+                    {
+                        int deleted = await cmd.ExecuteNonQueryAsync();
+                        LogManager.Warning($"[LOCK] Force-deleted {deleted} SyncLocks row(s).");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogManager.Warning($"[LOCK] Error clearing SyncLocks table: {ex.Message}");
+            }
+
+            // 2. Reset the in-process gate if it's stuck (count == 0 means it's held)
+            Volatile.Write(ref _processLockHeld, 0);
+            try
+            {
+                // If the gate is currently at 0 (held), release it so new acquisitions can proceed.
+                // If already at 1 (free), Release() would throw or go to 2 — catch silently.
+                if (_acquireGlobalProcessGate.CurrentCount == 0)
+                    _acquireGlobalProcessGate.Release();
+            }
+            catch { /* already free */ }
+
+            LogManager.Warning("[LOCK] Force-break completed. Import can be retried.");
+        }
+
         #endregion
 
         /// <summary>
@@ -1390,6 +1438,9 @@ namespace RecoTool.Services
         private readonly object _lockObject = new object();
         // In-process gate: ensure only one AcquireGlobalLockAsync is executing per process at any time.
         private static readonly SemaphoreSlim _acquireGlobalProcessGate = new SemaphoreSlim(1, 1);
+        // Re-entrancy flag: 1 = a lock is currently held in-process, 0 = free.
+        // Checked BEFORE the gate to allow nested calls to succeed immediately.
+        private static int _processLockHeld;
 
         /// <summary>
         /// Returns true if a synchronization is currently in progress for the specified country.
@@ -1465,10 +1516,12 @@ namespace RecoTool.Services
 
             try
             {
-                using (var connection = new OleDbConnection(ReferentialConnectionString))
-                {
-                    await connection.OpenAsync();
+                // Initialize the referential connection pool (singleton, idempotent)
+                Infrastructure.DataAccess.ReferentialConnectionPool.Initialize(ReferentialConnectionString);
+                var connection = await Infrastructure.DataAccess.ReferentialConnectionPool.Instance
+                    .GetConnectionAsync().ConfigureAwait(false);
 
+                {
                     // Helpers locaux
                     async Task LoadListAsync<T>(string sql, Func<IDataReader, T> map, List<T> target)
                     {
@@ -1834,12 +1887,29 @@ namespace RecoTool.Services
         public async Task<IDisposable> AcquireGlobalLockAsync(string identifier, string reason, TimeSpan timeout, CancellationToken token = default)
         {
             int timeoutSeconds = (int)Math.Max(0, timeout.TotalSeconds);
-            // Serialize acquisition attempts within this process and keep the gate held for the lock lifetime
-            await _acquireGlobalProcessGate.WaitAsync(token);
+
+            // ── Re-entrancy: if this process already holds the lock, return a no-op ──
+            if (Volatile.Read(ref _processLockHeld) == 1)
+            {
+                LogManager.Info($"[LOCK] Re-entrant acquisition detected for '{reason}' – returning NoopLockHandle.");
+                return NoopLockHandle.Instance;
+            }
+
+            // ── Acquire the in-process gate WITH a timeout to avoid infinite blocking ──
+            int gateTimeoutMs = Math.Max(5_000, timeoutSeconds * 1000);
+            if (!await _acquireGlobalProcessGate.WaitAsync(gateTimeoutMs, token).ConfigureAwait(false))
+            {
+                throw new TimeoutException(
+                    $"Impossible d'acquérir le verrou interne (gate) après {gateTimeoutMs / 1000}s. " +
+                    "Un import ou une synchronisation est probablement toujours en cours.");
+            }
+
             try
             {
                 var inner = await AcquireGlobalLockInternalAsync(identifier, reason, timeoutSeconds, token);
-                return new ProcessGateLockHandle(inner, _acquireGlobalProcessGate);
+                Volatile.Write(ref _processLockHeld, 1);
+                return new ProcessGateLockHandle(inner, _acquireGlobalProcessGate,
+                    onRelease: () => Volatile.Write(ref _processLockHeld, 0));
             }
             catch
             {

@@ -6,6 +6,10 @@ using RecoTool.Services.Cache;
 
 namespace RecoTool.Services
 {
+    /// <summary>
+    /// Uses <see cref="Infrastructure.DataAccess.ReferentialConnectionPool"/> when available
+    /// to avoid repeated open/close of DB_Referentiels.
+    /// </summary>
     public class UserFilterService
     {
         private readonly string _connString;
@@ -17,6 +21,19 @@ namespace RecoTool.Services
             _currentUser = string.IsNullOrWhiteSpace(currentUser) ? Environment.UserName : currentUser;
         }
 
+        private (OleDbConnection Connection, bool OwnsConnection) GetConnection()
+        {
+            var pool = Infrastructure.DataAccess.ReferentialConnectionPool.Instance;
+            if (pool != null)
+            {
+                try { return (pool.GetConnection(), false); }
+                catch { /* fall through */ }
+            }
+            var adhoc = new OleDbConnection(_connString);
+            adhoc.Open();
+            return (adhoc, true);
+        }
+
         public void SaveUserFilter(string name, string whereClause)
         {
             if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("Filter name is required", nameof(name));
@@ -26,9 +43,9 @@ namespace RecoTool.Services
             // which excludes AccountId. SanitizeWhereClause is only for loading legacy filters.
             // whereClause = SanitizeWhereClause(whereClause);
 
-            using (var conn = new OleDbConnection(_connString))
+            var (conn, ownsConnection) = GetConnection();
+            try
             {
-                conn.Open();
                 int? existingId = null;
                 using (var cmd = new OleDbCommand("SELECT UFI_id FROM T_Ref_User_Filter WHERE UFI_Name = ?", conn))
                 {
@@ -58,6 +75,10 @@ namespace RecoTool.Services
                         cmd.ExecuteNonQuery();
                     }
                 }
+            }
+            finally
+            {
+                if (ownsConnection) conn?.Dispose();
             }
             
             // OPTIMIZATION: Invalidate cache when filter is saved
@@ -121,13 +142,19 @@ namespace RecoTool.Services
             var cacheKey = $"UserFilter_Where_{name}";
             return CacheService.Instance.GetOrLoad(cacheKey, () =>
             {
-                using (var conn = new OleDbConnection(_connString))
-                using (var cmd = new OleDbCommand("SELECT UFI_SQL FROM T_Ref_User_Filter WHERE UFI_Name = ?", conn))
+                var (conn, ownsConnection) = GetConnection();
+                try
                 {
-                    conn.Open();
-                    cmd.Parameters.AddWithValue("@p1", name);
-                    var obj = cmd.ExecuteScalar();
-                    return obj == null || obj == DBNull.Value ? null : obj.ToString();
+                    using (var cmd = new OleDbCommand("SELECT UFI_SQL FROM T_Ref_User_Filter WHERE UFI_Name = ?", conn))
+                    {
+                        cmd.Parameters.AddWithValue("@p1", name);
+                        var obj = cmd.ExecuteScalar();
+                        return obj == null || obj == DBNull.Value ? null : obj.ToString();
+                    }
+                }
+                finally
+                {
+                    if (ownsConnection) conn?.Dispose();
                 }
             }, TimeSpan.FromHours(1)); // Cache for 1 hour (filters rarely change)
         }
@@ -144,23 +171,29 @@ namespace RecoTool.Services
             return CacheService.Instance.GetOrLoad(cacheKey, () =>
             {
                 var names = new List<string>();
-                using (var conn = new OleDbConnection(_connString))
-                using (var cmd = string.IsNullOrWhiteSpace(contains)
-                    ? new OleDbCommand("SELECT UFI_Name FROM T_Ref_User_Filter ORDER BY UFI_Name", conn)
-                    : new OleDbCommand("SELECT UFI_Name FROM T_Ref_User_Filter WHERE UFI_Name LIKE ? ORDER BY UFI_Name", conn))
+                var (conn, ownsConnection) = GetConnection();
+                try
                 {
-                    conn.Open();
-                    if (!string.IsNullOrWhiteSpace(contains))
+                    using (var cmd = string.IsNullOrWhiteSpace(contains)
+                        ? new OleDbCommand("SELECT UFI_Name FROM T_Ref_User_Filter ORDER BY UFI_Name", conn)
+                        : new OleDbCommand("SELECT UFI_Name FROM T_Ref_User_Filter WHERE UFI_Name LIKE ? ORDER BY UFI_Name", conn))
                     {
-                        cmd.Parameters.AddWithValue("@p1", "%" + contains + "%");
-                    }
-                    using (var rdr = cmd.ExecuteReader())
-                    {
-                        while (rdr.Read())
+                        if (!string.IsNullOrWhiteSpace(contains))
                         {
-                            names.Add(rdr.GetString(0));
+                            cmd.Parameters.AddWithValue("@p1", "%" + contains + "%");
+                        }
+                        using (var rdr = cmd.ExecuteReader())
+                        {
+                            while (rdr.Read())
+                            {
+                                names.Add(rdr.GetString(0));
+                            }
                         }
                     }
+                }
+                finally
+                {
+                    if (ownsConnection) conn?.Dispose();
                 }
                 return (IList<string>)names;
             }, TimeSpan.FromHours(1)); // Cache for 1 hour
@@ -172,25 +205,31 @@ namespace RecoTool.Services
         public IList<(string Name, string CreatedBy)> ListUserFiltersDetailed(string contains = null)
         {
             var list = new List<(string, string)>();
-            using (var conn = new OleDbConnection(_connString))
-            using (var cmd = string.IsNullOrWhiteSpace(contains)
-                ? new OleDbCommand("SELECT UFI_Name, UFI_CreatedBy FROM T_Ref_User_Filter ORDER BY UFI_Name", conn)
-                : new OleDbCommand("SELECT UFI_Name, UFI_CreatedBy FROM T_Ref_User_Filter WHERE UFI_Name LIKE ? ORDER BY UFI_Name", conn))
+            var (conn, ownsConnection) = GetConnection();
+            try
             {
-                conn.Open();
-                if (!string.IsNullOrWhiteSpace(contains))
+                using (var cmd = string.IsNullOrWhiteSpace(contains)
+                    ? new OleDbCommand("SELECT UFI_Name, UFI_CreatedBy FROM T_Ref_User_Filter ORDER BY UFI_Name", conn)
+                    : new OleDbCommand("SELECT UFI_Name, UFI_CreatedBy FROM T_Ref_User_Filter WHERE UFI_Name LIKE ? ORDER BY UFI_Name", conn))
                 {
-                    cmd.Parameters.AddWithValue("@p1", "%" + contains + "%");
-                }
-                using (var rdr = cmd.ExecuteReader())
-                {
-                    while (rdr.Read())
+                    if (!string.IsNullOrWhiteSpace(contains))
                     {
-                        var name = rdr.IsDBNull(0) ? string.Empty : rdr.GetString(0);
-                        var creator = rdr.IsDBNull(1) ? string.Empty : rdr.GetString(1);
-                        list.Add((name, creator));
+                        cmd.Parameters.AddWithValue("@p1", "%" + contains + "%");
+                    }
+                    using (var rdr = cmd.ExecuteReader())
+                    {
+                        while (rdr.Read())
+                        {
+                            var name = rdr.IsDBNull(0) ? string.Empty : rdr.GetString(0);
+                            var creator = rdr.IsDBNull(1) ? string.Empty : rdr.GetString(1);
+                            list.Add((name, creator));
+                        }
                     }
                 }
+            }
+            finally
+            {
+                if (ownsConnection) conn?.Dispose();
             }
             return list;
         }
@@ -198,21 +237,27 @@ namespace RecoTool.Services
         public bool DeleteUserFilter(string name)
         {
             if (string.IsNullOrWhiteSpace(name)) return false;
-            using (var conn = new OleDbConnection(_connString))
-            using (var cmd = new OleDbCommand("DELETE FROM T_Ref_User_Filter WHERE UFI_Name = ?", conn))
+            var (conn, ownsConnection) = GetConnection();
+            try
             {
-                conn.Open();
-                cmd.Parameters.AddWithValue("@p1", name);
-                var deleted = cmd.ExecuteNonQuery() > 0;
-                
-                // OPTIMIZATION: Invalidate cache when filter is deleted
-                if (deleted)
+                using (var cmd = new OleDbCommand("DELETE FROM T_Ref_User_Filter WHERE UFI_Name = ?", conn))
                 {
-                    CacheService.Instance.Invalidate($"UserFilter_Where_{name}");
-                    CacheService.Instance.InvalidateByPrefix("UserFilter_Names_");
+                    cmd.Parameters.AddWithValue("@p1", name);
+                    var deleted = cmd.ExecuteNonQuery() > 0;
+                    
+                    // OPTIMIZATION: Invalidate cache when filter is deleted
+                    if (deleted)
+                    {
+                        CacheService.Instance.Invalidate($"UserFilter_Where_{name}");
+                        CacheService.Instance.InvalidateByPrefix("UserFilter_Names_");
+                    }
+                    
+                    return deleted;
                 }
-                
-                return deleted;
+            }
+            finally
+            {
+                if (ownsConnection) conn?.Dispose();
             }
         }
     }
