@@ -397,7 +397,9 @@ namespace RecoTool.Services
         
         /// <summary>
         /// Re-applies critical enrichments to cached data (internal implementation)
-        /// OPTIMIZATION: Skip if data is already fully enriched (has pre-calculated DWINGS properties)
+        /// Full DWINGS property enrichment is skipped if already done (sampling first row).
+        /// Unlinked Receivable BGI retry and MissingAmount recalculation ALWAYS run,
+        /// because DWINGS data may have become available since last enrichment.
         /// </summary>
         private async Task ReapplyEnrichmentsAsync(List<ReconciliationViewData> list, string countryId)
         {
@@ -405,18 +407,24 @@ namespace RecoTool.Services
 
             await EnsureDwingsCachesInitializedAsync().ConfigureAwait(false);
 
-            // Skip if data is already enriched (sampling first row)
-            if (list.Count > 0 && !string.IsNullOrWhiteSpace(list[0].I_RECEIVER_NAME))
-                return;
+            bool alreadyEnriched = list.Count > 0 && !string.IsNullOrWhiteSpace(list[0].I_RECEIVER_NAME);
 
             try
             {
                 var invoices = await GetDwingsInvoicesAsync().ConfigureAwait(false);
-                var guarantees = await GetDwingsGuaranteesAsync().ConfigureAwait(false);
 
-                ReconciliationViewEnricher.EnrichWithDwingsInvoices(list, invoices);
-                EnrichRowsWithDwingsProperties(list, invoices, guarantees);
+                if (!alreadyEnriched)
+                {
+                    var guarantees = await GetDwingsGuaranteesAsync().ConfigureAwait(false);
+                    ReconciliationViewEnricher.EnrichWithDwingsInvoices(list, invoices);
+                    EnrichRowsWithDwingsProperties(list, invoices, guarantees);
+                }
 
+                // ALWAYS retry linking for Receivable rows whose BGI was not found previously
+                // (DWINGS file may have been updated since last enrichment)
+                ReconciliationViewEnricher.RetryUnlinkedReceivableBgi(list, invoices);
+
+                // ALWAYS recalculate MissingAmounts (grouping may have changed due to new links or basket linking)
                 var country = _countries?.TryGetValue(countryId, out var c) == true ? c : null;
                 if (country != null)
                     ReconciliationViewEnricher.CalculateMissingAmounts(list, country.CNT_AmbreReceivable, country.CNT_AmbrePivot);

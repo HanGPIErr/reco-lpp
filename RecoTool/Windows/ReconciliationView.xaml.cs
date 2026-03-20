@@ -706,6 +706,7 @@ namespace RecoTool.Windows
                               || (m.Tag as string) == "__SetLastClaimToday__"
                               || (m.Tag as string) == "__CheckWithFree__"
                               || (m.Tag as string) == "__OpenGrouped__"
+                              || (m.Tag as string) == "__ProcessDwings__"
                               || (m.Tag as string) == "__SpiritGene__").ToList())
                     {
                         cm.Items.Remove(mi);
@@ -746,6 +747,23 @@ namespace RecoTool.Windows
                     actionStatusMenu.Items.Add(doneItem);
                     actionStatusMenu.Items.Add(pendingItem);
                     cm.Items.Add(actionStatusMenu);
+
+                    // Process DWINGS Blue Button – visible when the row is grouped (both P+R sides exist)
+                    if (rowData.IsMatchedAcrossAccounts
+                        && (!string.IsNullOrWhiteSpace(rowData.DWINGS_BGPMT) || !string.IsNullOrWhiteSpace(rowData.InternalInvoiceReference)))
+                    {
+                        var dwingsItem = new MenuItem
+                        {
+                            Header = "⚡ Process DWINGS Blue Button",
+                            Tag = "__ProcessDwings__",
+                            DataContext = rowData,
+                            FontWeight = FontWeights.SemiBold,
+                            Foreground = System.Windows.Media.Brushes.RoyalBlue
+                        };
+                        dwingsItem.Click += SingleProcessDwings_Click;
+                        cm.Items.Add(dwingsItem);
+                    }
+
                     var firstClaimDate = new MenuItem { Header = "Set First Claim Date = ?", Tag = "__SetFirstClaimToday__", DataContext = rowData };
                     firstClaimDate.Click += QuickSetFirstClaimTodayMenuItem_Click;
                     cm.Items.Add(firstClaimDate);
@@ -942,6 +960,7 @@ namespace RecoTool.Windows
             Loaded += ReconciliationView_Loaded;
             Unloaded += ReconciliationView_Unloaded;
             InitializeFilterDebounce();
+            InitializeQuickSearchCommand();
             SubscribeToSyncEvents();
             RefreshCompleted += (s, e) => _hasLoadedOnce = true;
             try { VM.PropertyChanged += VM_PropertyChanged; } catch { }

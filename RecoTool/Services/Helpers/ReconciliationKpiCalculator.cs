@@ -35,16 +35,17 @@ namespace RecoTool.Services.Helpers
         {
             if (items == null || items.Count == 0) return;
             
-            // Group by invoice reference (DWINGS_InvoiceID or InternalInvoiceReference)
+            // Group by invoice reference: InternalInvoiceReference (explicit user link) takes priority
+            // over DWINGS_InvoiceID (automatic link) so basket-linked items group correctly.
             var groups = items
                 .Where(r => !string.IsNullOrWhiteSpace(r.Reconciliation?.DWINGS_InvoiceID) 
                          || !string.IsNullOrWhiteSpace(r.Reconciliation?.InternalInvoiceReference))
                 .GroupBy(r => 
                 {
                     var rec = r.Reconciliation;
-                    var key = !string.IsNullOrWhiteSpace(rec.DWINGS_InvoiceID) 
-                        ? rec.DWINGS_InvoiceID.Trim().ToUpperInvariant()
-                        : rec.InternalInvoiceReference?.Trim().ToUpperInvariant();
+                    var key = !string.IsNullOrWhiteSpace(rec.InternalInvoiceReference) 
+                        ? rec.InternalInvoiceReference.Trim().ToUpperInvariant()
+                        : rec.DWINGS_InvoiceID?.Trim().ToUpperInvariant();
                     return key;
                 })
                 .Where(g => !string.IsNullOrWhiteSpace(g.Key))

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using RecoTool.API;
 using RecoTool.Services;
 using RecoTool.Services.DTOs;
 using RecoTool.Models;
@@ -997,6 +998,231 @@ Do you want to apply these automatic rules?
             catch (Exception ex)
             {
                 ShowError($"Failed to open SpiritGene search: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Single-row (or selection) DWINGS Blue Button processing.
+        /// Mirrors the logic of DwingsButtonsWindow.BulkButton_Click but for the
+        /// row(s) selected in the ReconciliationView context menu.
+        /// </summary>
+        private async void SingleProcessDwings_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (!await CheckMultiUserBeforeEditAsync()) return;
+
+                var country = CurrentCountryObject;
+                if (country == null) { ShowError("No country loaded."); return; }
+                var receivableId = country.CNT_AmbreReceivable;
+
+                // ---- target rows (single or multi-select) ----
+                var dg = this.FindName("ResultsDataGrid") as DataGrid;
+                var rowCtx = (sender as FrameworkElement)?.DataContext as ReconciliationViewData;
+                var targetRows = dg?.SelectedItems?.Count > 1
+                                 && rowCtx != null
+                                 && dg.SelectedItems.OfType<ReconciliationViewData>().Contains(rowCtx)
+                    ? dg.SelectedItems.OfType<ReconciliationViewData>().ToList()
+                    : (rowCtx != null ? new List<ReconciliationViewData> { rowCtx } : new List<ReconciliationViewData>());
+
+                if (targetRows.Count == 0) return;
+
+                // ---- build trigger items (same logic as DwingsButtonsWindow.LoadDataAsync) ----
+                // We need the full dataset to find matching pivots
+                var allData = _allViewData ?? _filteredData ?? ViewData?.ToList() ?? new List<ReconciliationViewData>();
+                var triggerItems = new List<(string AllIds, string PaymentRef, DateTime? ValueDate,
+                                             string RequestedAmount, string Currency, string Bgpmt,
+                                             bool IsGrouped, ReconciliationViewData SourceRow)>();
+
+                foreach (var row in targetRows)
+                {
+                    // Only process rows that are not deleted and are grouped
+                    if (row.IsDeleted || !row.IsMatchedAcrossAccounts)
+                        continue;
+
+                    // Determine grouping key
+                    bool hasInvRef = !string.IsNullOrWhiteSpace(row.InternalInvoiceReference);
+                    bool hasBgpmt = !string.IsNullOrWhiteSpace(row.DWINGS_BGPMT);
+                    if (!hasInvRef && !hasBgpmt) continue;
+
+                    string keyType = hasInvRef ? "INV" : "BGPMT";
+                    string keyValue = hasInvRef ? row.InternalInvoiceReference.Trim() : row.DWINGS_BGPMT.Trim();
+
+                    // Determine if clicked row is receivable
+                    bool isReceivable = string.Equals(row.Account_ID, receivableId, StringComparison.OrdinalIgnoreCase);
+
+                    // Find the receivable(s) and pivot(s) for this group
+                    var groupRows = allData.Where(r =>
+                        !r.IsDeleted
+                        && (keyType == "INV"
+                            ? string.Equals(r.InternalInvoiceReference, keyValue, StringComparison.OrdinalIgnoreCase)
+                            : string.Equals(r.DWINGS_BGPMT, keyValue, StringComparison.OrdinalIgnoreCase))
+                    ).ToList();
+
+                    var recvLines = groupRows.Where(r => string.Equals(r.Account_ID, receivableId, StringComparison.OrdinalIgnoreCase)).ToList();
+                    var pivotLines = groupRows.Where(r => !string.Equals(r.Account_ID, receivableId, StringComparison.OrdinalIgnoreCase)).ToList();
+
+                    if (recvLines.Count == 0 || pivotLines.Count == 0) continue;
+
+                    // Build combined IDs list (receivable + pivots)
+                    var allIds = recvLines.Select(r => r.ID).Concat(pivotLines.Select(r => r.ID)).ToList();
+
+                    // PaymentReference: prefer pivot's Reconciliation_Num > PaymentReference > Pivot_TRNFromLabel
+                    string payRef = pivotLines
+                        .Where(p => p.Reconciliation_Num?.Length > 3)
+                        .Select(p => p.Reconciliation_Num)
+                        .FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
+                        ?? pivotLines.Select(p => p.PaymentReference).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
+                        ?? pivotLines.Select(p => p.Pivot_TRNFromLabel).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
+                        ?? string.Empty;
+
+                    var recvFirst = recvLines.First();
+                    triggerItems.Add((
+                        AllIds: string.Join(",", allIds),
+                        PaymentRef: payRef,
+                        ValueDate: pivotLines.Select(p => p.Value_Date).FirstOrDefault(),
+                        RequestedAmount: recvFirst.I_REQUESTED_INVOICE_AMOUNT,
+                        Currency: recvFirst.I_BILLING_CURRENCY,
+                        Bgpmt: recvFirst.DWINGS_BGPMT ?? string.Empty,
+                        IsGrouped: groupRows.Any(r => r.IsMatchedAcrossAccounts),
+                        SourceRow: recvFirst
+                    ));
+                }
+
+                if (triggerItems.Count == 0)
+                {
+                    ShowToast("No eligible DWINGS trigger rows in selection.");
+                    return;
+                }
+
+                // ---- validate / prompt for missing PaymentReference ----
+                for (int i = 0; i < triggerItems.Count; i++)
+                {
+                    var item = triggerItems[i];
+                    if (string.IsNullOrWhiteSpace(item.PaymentRef))
+                    {
+                        var prompt = new Window
+                        {
+                            Title = $"Payment Reference for {item.SourceRow.DWINGS_BGPMT ?? item.SourceRow.InternalInvoiceReference}",
+                            Width = 400, Height = 150,
+                            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                            Owner = Window.GetWindow(this),
+                            ResizeMode = ResizeMode.NoResize
+                        };
+                        var grid = new Grid { Margin = new Thickness(10) };
+                        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                        var tb = new TextBox { Margin = new Thickness(0, 0, 0, 8) };
+                        Grid.SetRow(tb, 0);
+                        var panel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+                        var btnOk = new Button { Content = "OK", Width = 80, Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
+                        var btnCancel = new Button { Content = "Cancel", Width = 80, IsCancel = true };
+                        btnOk.Click += (_, __) => { prompt.DialogResult = true; prompt.Close(); };
+                        btnCancel.Click += (_, __) => { prompt.DialogResult = false; prompt.Close(); };
+                        panel.Children.Add(btnOk);
+                        panel.Children.Add(btnCancel);
+                        Grid.SetRow(panel, 1);
+                        grid.Children.Add(tb);
+                        grid.Children.Add(panel);
+                        prompt.Content = grid;
+
+                        if (prompt.ShowDialog() != true || string.IsNullOrWhiteSpace(tb.Text))
+                        {
+                            ShowToast("Cancelled — Payment Reference required.");
+                            return;
+                        }
+                        triggerItems[i] = (item.AllIds, tb.Text.Trim(), item.ValueDate,
+                                           item.RequestedAmount, item.Currency, item.Bgpmt,
+                                           item.IsGrouped, item.SourceRow);
+                    }
+                }
+
+                // ---- confirmation ----
+                if (MessageBox.Show(
+                    $"Process DWINGS Blue Button for {triggerItems.Count} group(s)?\n\n" +
+                    string.Join("\n", triggerItems.Select(t => $"  • {t.Bgpmt} | Ref: {t.PaymentRef}")),
+                    "Confirm DWINGS Process",
+                    MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                    return;
+
+                // ---- process ----
+                Mouse.OverrideCursor = Cursors.Wait;
+                var dw = new Dwings();
+                dw.GetUserInfo();
+
+                int successCount = 0;
+                var allUpdates = new List<Reconciliation>();
+                var messages = new List<string>();
+
+                foreach (var item in triggerItems)
+                {
+                    try
+                    {
+                        var (ok, msg) = dw.Dwings_PressBlueButton(
+                            item.PaymentRef,
+                            item.ValueDate ?? DateTime.UtcNow,
+                            item.RequestedAmount,
+                            country.CNT_DWID,
+                            item.Currency,
+                            item.Bgpmt);
+
+                        if (ok)
+                        {
+                            var ids = item.AllIds.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+                            foreach (var id in ids)
+                            {
+                                var reco = await _reconciliationService.GetReconciliationByIdAsync(_currentCountryId, id.Trim());
+                                if (reco != null)
+                                {
+                                    reco.ActionStatus = true;
+                                    reco.TriggerDate = DateTime.UtcNow;
+                                    if (!item.IsGrouped && !string.IsNullOrWhiteSpace(item.PaymentRef))
+                                        reco.PaymentReference = item.PaymentRef;
+                                    allUpdates.Add(reco);
+                                }
+                            }
+                            successCount++;
+                            messages.Add($"OK: {item.Bgpmt}");
+                        }
+                        else
+                        {
+                            messages.Add($"FAIL ({item.Bgpmt}): {msg}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        messages.Add($"ERROR ({item.Bgpmt}): {ex.Message}");
+                    }
+                }
+
+                Mouse.OverrideCursor = null;
+
+                // ---- persist ----
+                if (allUpdates.Count > 0)
+                {
+                    await _reconciliationService.SaveReconciliationsAsync(allUpdates, applyRulesOnEdit: false);
+                    try { ScheduleBulkPushDebounced(); } catch { }
+                }
+
+                // ---- refresh UI ----
+                // Update in-memory rows to reflect ActionStatus change
+                foreach (var item in triggerItems)
+                {
+                    var ids = item.AllIds.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var viewRow in allData.Where(r => ids.Contains(r.ID)))
+                    {
+                        viewRow.ActionStatus = true;
+                    }
+                }
+                UpdateKpis(_filteredData);
+                DataChanged?.Invoke();
+
+                ShowToast($"DWINGS: {successCount}/{triggerItems.Count} processed.\n" + string.Join("\n", messages));
+            }
+            catch (Exception ex)
+            {
+                Mouse.OverrideCursor = null;
+                ShowError($"DWINGS process failed: {ex.Message}");
             }
         }
 

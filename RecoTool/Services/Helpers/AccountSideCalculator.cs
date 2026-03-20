@@ -102,9 +102,11 @@ namespace RecoTool.Services.Helpers
                 .Where(r => !string.IsNullOrWhiteSpace(getDwingsInvoiceId(r)) || !string.IsNullOrWhiteSpace(getInternalInvoiceRef(r)))
                 .GroupBy(r =>
                 {
-                    var key = getDwingsInvoiceId(r);
+                    // InternalInvoiceReference (explicit user link) takes priority over
+                    // DWINGS_InvoiceID (automatic link) so basket-linked items group correctly.
+                    var key = getInternalInvoiceRef(r);
                     if (!string.IsNullOrWhiteSpace(key)) return key.Trim().ToUpperInvariant();
-                    return getInternalInvoiceRef(r)?.Trim().ToUpperInvariant();
+                    return getDwingsInvoiceId(r)?.Trim().ToUpperInvariant();
                 })
                 .Where(g => !string.IsNullOrWhiteSpace(g.Key));
 

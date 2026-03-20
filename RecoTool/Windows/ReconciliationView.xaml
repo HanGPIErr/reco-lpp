@@ -6,7 +6,11 @@
              xmlns:local="clr-namespace:RecoTool.Windows"
              x:Name="Root"
              mc:Ignorable="d" 
-             d:DesignHeight="600" d:DesignWidth="900">
+             d:DesignHeight="600" d:DesignWidth="900"
+             Focusable="True">
+    <UserControl.InputBindings>
+        <KeyBinding Key="F" Modifiers="Ctrl" Command="{x:Static local:ReconciliationView.FocusQuickSearchCommand}"/>
+    </UserControl.InputBindings>
     <UserControl.Resources>
         <!-- Item template that renders null items as an empty option so users can clear selection -->
         <DataTemplate x:Key="UserFieldItemTemplate">
@@ -928,6 +932,92 @@
                     </Grid>
                 </Border>
             </Expander>
+
+            <!-- Quick Search Bar (Ctrl+F) -->
+            <Border x:Name="QuickSearchBar" Grid.Row="1" Background="#F8FAFC" BorderBrush="#CBD5E1" BorderThickness="1" CornerRadius="6" Padding="8,5" Margin="0,0,0,6">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Search icon -->
+                    <TextBlock Grid.Column="0" Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="14" 
+                               Foreground="#64748B" VerticalAlignment="Center" Margin="4,0,8,0"
+                               UseLayoutRounding="True" TextOptions.TextFormattingMode="Display"/>
+
+                    <!-- Search TextBox -->
+                    <TextBox x:Name="QuickSearchTextBox" Grid.Column="1" 
+                             FontSize="13" Padding="6,4" BorderThickness="1" BorderBrush="#E2E8F0"
+                             Background="White" VerticalContentAlignment="Center"
+                             KeyDown="QuickSearchBox_KeyDown">
+                        <TextBox.Style>
+                            <Style TargetType="TextBox">
+                                <Setter Property="Tag" Value="Search all fields... (Enter to search, Esc to clear)"/>
+                                <Style.Triggers>
+                                    <Trigger Property="Text" Value="">
+                                        <Setter Property="Background">
+                                            <Setter.Value>
+                                                <VisualBrush AlignmentX="Left" AlignmentY="Center" Stretch="None">
+                                                    <VisualBrush.Visual>
+                                                        <TextBlock Text="Search all fields... (Enter to search, Esc to clear)" 
+                                                                   Foreground="#94A3B8" FontSize="12" Margin="8,0,0,0"/>
+                                                    </VisualBrush.Visual>
+                                                </VisualBrush>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Trigger>
+                                    <Trigger Property="IsFocused" Value="True">
+                                        <Setter Property="BorderBrush" Value="{DynamicResource BNPMainGreenBrush}"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBox.Style>
+                    </TextBox>
+
+                    <!-- Result count badge -->
+                    <TextBlock x:Name="QuickSearchResultBadge" Grid.Column="2" 
+                               Visibility="Collapsed" FontSize="11" FontWeight="SemiBold"
+                               Foreground="#3B82F6" VerticalAlignment="Center" Margin="8,0,0,0"/>
+
+                    <!-- Search button -->
+                    <Button Grid.Column="3" Click="QuickSearchButton_Click" 
+                            ToolTip="Search (Enter)" Cursor="Hand" Margin="6,0,0,0"
+                            Background="{DynamicResource BNPMainGreenBrush}" Foreground="White"
+                            BorderThickness="0" Padding="10,4">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="12" 
+                                                   Foreground="White" VerticalAlignment="Center" Margin="0,0,5,0"
+                                                   UseLayoutRounding="True" TextOptions.TextFormattingMode="Display"/>
+                                        <TextBlock Text="Search" FontSize="12" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Border>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+
+                    <!-- Clear button -->
+                    <Button x:Name="QuickSearchClearButton" Grid.Column="4" Click="QuickSearchClear_Click"
+                            Visibility="Collapsed" ToolTip="Clear search (Esc)" Cursor="Hand" Margin="4,0,0,0"
+                            Background="Transparent" BorderThickness="0" Padding="6,4">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border Background="#FEE2E2" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                    <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="12" 
+                                               Foreground="#DC2626" VerticalAlignment="Center"
+                                               UseLayoutRounding="True" TextOptions.TextFormattingMode="Display"/>
+                                </Border>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                </Grid>
+            </Border>
 
             <!-- Data Grid Section -->
             <Border Grid.Row="2" Background="White" BorderBrush="#DDDDDD" BorderThickness="1" CornerRadius="8">

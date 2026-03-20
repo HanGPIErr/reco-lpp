@@ -2007,15 +2007,58 @@ namespace RecoTool.Services
         {
             try
             {
-                // Récupérer le chemin de la base référentielle depuis App.config
-                _ReferentialDatabasePath = Properties.Settings.Default.ReferentialDB;
-                
+                // Load referential DB path from Settings
+                var basePath = Properties.Settings.Default.ReferentialDB;
+
+                // UAT override: if compiled with UAT_ENV, check for a _UAT suffixed setting
+                // or an environment variable RECOTOOL_REFERENTIAL_UAT
+                if (Configuration.FeatureFlags.IsUAT)
+                {
+                    var uatPath = System.Environment.GetEnvironmentVariable("RECOTOOL_REFERENTIAL_UAT");
+                    if (!string.IsNullOrWhiteSpace(uatPath) && System.IO.File.Exists(uatPath))
+                    {
+                        basePath = uatPath;
+                        System.Diagnostics.Debug.WriteLine($"[UAT] Using UAT referential from env var: {basePath}");
+                    }
+                    else
+                    {
+                        // Try convention: same folder, filename with _UAT suffix
+                        try
+                        {
+                            if (!string.IsNullOrWhiteSpace(basePath))
+                            {
+                                var dir = System.IO.Path.GetDirectoryName(basePath);
+                                var name = System.IO.Path.GetFileNameWithoutExtension(basePath);
+                                var ext = System.IO.Path.GetExtension(basePath);
+                                var uatConvention = System.IO.Path.Combine(dir, $"{name}_UAT{ext}");
+                                if (System.IO.File.Exists(uatConvention))
+                                {
+                                    basePath = uatConvention;
+                                    System.Diagnostics.Debug.WriteLine($"[UAT] Using UAT referential by convention: {basePath}");
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+
+                _ReferentialDatabasePath = basePath;
+
                 if (string.IsNullOrEmpty(_ReferentialDatabasePath))
                 {
-                    throw new InvalidOperationException("Le chemin de la base référentielle n'est pas configuré dans App.config (clé: ReferentialDB)");
+                    throw new InvalidOperationException(
+                        "Le chemin de la base référentielle n'est pas configuré.\n" +
+                        "Vérifiez Settings > ReferentialDB dans les propriétés du projet.\n" +
+                        "Paramètre attendu: chemin vers Referential_Common.accdb");
                 }
-                
-                System.Diagnostics.Debug.WriteLine($"Configuration chargée. Base référentielle (path): {_ReferentialDatabasePath}");
+
+                if (!System.IO.File.Exists(_ReferentialDatabasePath))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[WARNING] Referential DB not found at: {_ReferentialDatabasePath}");
+                }
+
+                System.Diagnostics.Debug.WriteLine($"Configuration chargée. Base référentielle: {_ReferentialDatabasePath}" +
+                    (Configuration.FeatureFlags.IsUAT ? " [UAT]" : ""));
             }
             catch (Exception ex)
             {

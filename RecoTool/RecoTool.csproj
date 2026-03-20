@@ -169,6 +169,7 @@
     <Compile Include="Infrastructure\DataAccess\OleDbQueryExecutor.cs" />
     <Compile Include="Infrastructure\DataAccess\OleDbSchemaHelper.cs" />
     <Compile Include="Infrastructure\DataAccess\OleDbUtils.cs" />
+    <Compile Include="Infrastructure\DataAccess\ReferentialConnectionPool.cs" />
     <Compile Include="Infrastructure\DI\ServiceLocator.cs" />
     <Compile Include="Infrastructure\IO\ExcelHelper.cs" />
     <Compile Include="Infrastructure\Logging\DiagLog.cs" />
@@ -266,6 +267,7 @@
     <Compile Include="Windows\InvoiceFinderWindow.xaml.cs">
       <DependentUpon>InvoiceFinderWindow.xaml</DependentUpon>
     </Compile>
+    <Compile Include="Windows\ReconciliationView\QuickSearch.cs" />
     <Compile Include="Windows\SpiritGeneSearchWindow.xaml.cs">
       <DependentUpon>SpiritGeneSearchWindow.xaml</DependentUpon>
     </Compile>

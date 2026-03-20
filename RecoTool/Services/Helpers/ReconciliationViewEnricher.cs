@@ -112,21 +112,65 @@ namespace RecoTool.Services.Helpers
         }
         
         /// <summary>
+        /// Retries DWINGS linking for Receivable rows that have a BGI (Receivable_InvoiceFromAmbre)
+        /// but were not linked to a DWINGS invoice (DWINGS_InvoiceID is empty).
+        /// This handles the case where DWINGS data was not yet available at import time.
+        /// Only targets: Receivable + BGI present + DWINGS_InvoiceID missing.
+        /// Returns the number of newly linked rows.
+        /// </summary>
+        public static int RetryUnlinkedReceivableBgi(List<ReconciliationViewData> rows, IEnumerable<DwingsInvoiceDto> invoices)
+        {
+            if (rows == null || invoices == null) return 0;
+
+            // Only build lookup if there are unlinked candidates
+            List<ReconciliationViewData> unlinked = null;
+            foreach (var r in rows)
+            {
+                if (!string.IsNullOrWhiteSpace(r.Receivable_InvoiceFromAmbre)
+                    && string.IsNullOrWhiteSpace(r.DWINGS_InvoiceID))
+                {
+                    if (unlinked == null) unlinked = new List<ReconciliationViewData>();
+                    unlinked.Add(r);
+                }
+            }
+            if (unlinked == null || unlinked.Count == 0) return 0;
+
+            var byInvoiceId = (invoices as IList<DwingsInvoiceDto> ?? invoices.ToList())
+                .Where(i => !string.IsNullOrWhiteSpace(i.INVOICE_ID))
+                .GroupBy(i => i.INVOICE_ID, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+            int linked = 0;
+            foreach (var row in unlinked)
+            {
+                if (byInvoiceId.TryGetValue(row.Receivable_InvoiceFromAmbre, out var inv))
+                {
+                    row.DWINGS_InvoiceID = inv.INVOICE_ID;
+                    row.INVOICE_ID = inv.INVOICE_ID;
+                    linked++;
+                }
+            }
+            return linked;
+        }
+
+        /// <summary>
         /// Calculates missing amounts for grouped lines (Receivable vs Pivot)
-        /// Groups by DWINGS_InvoiceID or InternalInvoiceReference
+        /// Groups by InternalInvoiceReference or DWINGS_InvoiceID
         /// </summary>
         public static void CalculateMissingAmounts(List<ReconciliationViewData> rows, string receivableAccountId, string pivotAccountId)
         {
             if (rows == null || string.IsNullOrWhiteSpace(receivableAccountId) || string.IsNullOrWhiteSpace(pivotAccountId)) return;
             
-            // Group by invoice reference (DWINGS_InvoiceID or InternalInvoiceReference)
+            // Group by invoice reference: InternalInvoiceReference (explicit user link) takes priority
+            // over DWINGS_InvoiceID (automatic link). This ensures basket-linked items with different
+            // DWINGS IDs are grouped together for correct MissingAmount calculation.
             var groups = rows
                 .Where(r => !string.IsNullOrWhiteSpace(r.DWINGS_InvoiceID) || !string.IsNullOrWhiteSpace(r.InternalInvoiceReference))
                 .GroupBy(r => 
                 {
-                    var key = !string.IsNullOrWhiteSpace(r.DWINGS_InvoiceID) 
-                        ? r.DWINGS_InvoiceID.Trim().ToUpperInvariant()
-                        : r.InternalInvoiceReference?.Trim().ToUpperInvariant();
+                    var key = !string.IsNullOrWhiteSpace(r.InternalInvoiceReference) 
+                        ? r.InternalInvoiceReference.Trim().ToUpperInvariant()
+                        : r.DWINGS_InvoiceID?.Trim().ToUpperInvariant();
                     return key;
                 })
                 .Where(g => !string.IsNullOrWhiteSpace(g.Key))

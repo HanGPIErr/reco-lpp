@@ -54,8 +54,16 @@ namespace RecoTool.Windows
                 newView.SortDescriptions.Add(sd);
 
 
-            UpdateKpis(_filteredData); // totals on entire set
-            UpdateStatusInfo($"{ViewData.Count} / {_filteredData.Count} lines displayed");
+            // Re-apply quick search on top of newly filtered data (if active)
+            if (!string.IsNullOrWhiteSpace(_quickSearchTerm))
+            {
+                ApplyQuickSearch();
+            }
+            else
+            {
+                UpdateKpis(_filteredData); // totals on entire set
+                UpdateStatusInfo($"{ViewData.Count} / {_filteredData.Count} lines displayed");
+            }
             var acc = VM.CurrentFilter?.AccountId ?? "All";
             var stat = VM.CurrentFilter?.Status ?? "All";
             LogAction("ApplyFilters", $"{ViewData.Count} / {_filteredData.Count} displayed | Account={acc} | Status={stat}");

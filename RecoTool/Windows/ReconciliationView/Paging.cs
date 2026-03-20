@@ -38,7 +38,8 @@ namespace RecoTool.Windows
             try
             {
                 var sw = Stopwatch.StartNew();
-                if (_filteredData == null || _filteredData.Count == 0) return;
+                var pagedSource = GetEffectivePagedData();
+                if (pagedSource == null || pagedSource.Count == 0) return;
                 var sv = sender as ScrollViewer;
                 if (sv == null) return;
                 // Ignore horizontal-only scroll changes to avoid unnecessary UI work
@@ -48,7 +49,7 @@ namespace RecoTool.Windows
                 }
                 // Show footer button when user reaches bottom (android-like behavior)
                 bool atBottom = sv.ScrollableHeight > 0 && sv.VerticalOffset >= (sv.ScrollableHeight * 0.9);
-                int remaining = Math.Max(0, _filteredData.Count - _loadedCount);
+                int remaining = Math.Max(0, pagedSource.Count - _loadedCount);
                 if (_loadMoreFooterButton == null)
                 {
                     _loadMoreFooterButton = this.FindName("LoadMoreFooterButton") as Button;
@@ -84,16 +85,17 @@ namespace RecoTool.Windows
             _isLoadingMore = true;
             try
             {
-                if (_filteredData == null) return;
-                int remaining = _filteredData.Count - _loadedCount;
+                var pagedSource = GetEffectivePagedData();
+                if (pagedSource == null) return;
+                int remaining = pagedSource.Count - _loadedCount;
                 if (remaining <= 0) return;
                 int take = Math.Min(InitialPageSize, remaining);
-                foreach (var item in _filteredData.Skip(_loadedCount).Take(take))
+                foreach (var item in pagedSource.Skip(_loadedCount).Take(take))
                 {
                     ViewData.Add(item);
                 }
                 _loadedCount += take;
-                UpdateStatusInfo($"{ViewData.Count} / {_filteredData.Count} lines displayed");
+                UpdateStatusInfo($"{ViewData.Count} / {pagedSource.Count} lines displayed");
                 // After load, hide footer if no more data, otherwise keep visible when still at bottom
                 if (_loadMoreFooterButton == null)
                 {
@@ -101,7 +103,7 @@ namespace RecoTool.Windows
                 }
                 if (_loadMoreFooterButton != null)
                 {
-                    int newRemaining = _filteredData.Count - _loadedCount;
+                    int newRemaining = pagedSource.Count - _loadedCount;
                     if (newRemaining <= 0 && _loadMoreFooterButton.Visibility != Visibility.Collapsed)
                         _loadMoreFooterButton.Visibility = Visibility.Collapsed;
                 }
