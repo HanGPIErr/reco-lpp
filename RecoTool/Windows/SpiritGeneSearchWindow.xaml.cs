@@ -4,6 +4,8 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using RecoTool.API;
+using RecoTool.Models;
+using RecoTool.Services;
 
 namespace RecoTool.Windows
 {
@@ -11,10 +13,13 @@ namespace RecoTool.Windows
     {
         private readonly SpiritGene _spiritGene;
 
-        public SpiritGeneSearchWindow(SpiritGene spiritGene, DateTime? operationDate = null, decimal? amount = null, string bic = null)
+        public SpiritGeneSearchWindow(SpiritGene spiritGene, OfflineFirstService offlineFirstService, DateTime? operationDate = null, decimal? amount = null, string bic = null)
         {
             InitializeComponent();
             _spiritGene = spiritGene;
+
+            // Populate BIC ListBox with all countries
+            PopulateBicListBox(offlineFirstService, bic);
 
             // Pre-fill from row context
             if (operationDate.HasValue)
@@ -35,11 +40,10 @@ namespace RecoTool.Windows
                 AmountMaxBox.Text = (abs + 1).ToString("F2");
 
                 // Set direction based on sign
-                DirectionCombo.SelectedIndex = amount.Value >= 0 ? 0 : 1; // R for positive, E for negative
+                DirectionCombo.SelectedIndex = amount.Value >= 0 ? 0 : 1; // R for positive, A for negative
             }
 
-            if (!string.IsNullOrWhiteSpace(bic))
-                BicBox.Text = bic;
+            // BIC is handled by PopulateBicListBox
         }
 
         private async void SearchButton_Click(object sender, RoutedEventArgs e)
@@ -58,7 +62,7 @@ namespace RecoTool.Windows
 
                 var dateFrom = DateFromPicker.SelectedDate ?? DateTime.Today.AddMonths(-1);
                 var dateTo = DateToPicker.SelectedDate ?? DateTime.Today;
-                var bic = BicBox.Text?.Trim() ?? "";
+                var bic = BicComboBox.SelectedValue as string ?? "";
 
                 decimal amountMin = 0, amountMax = 999999999;
                 decimal.TryParse(AmountMinBox.Text, out amountMin);
@@ -108,10 +112,64 @@ namespace RecoTool.Windows
             }
         }
 
+        private void PopulateBicListBox(OfflineFirstService offlineFirstService, string preferredBic = null)
+        {
+            try
+            {
+                var items = new List<BicListItem>();
+                
+                // Get all countries with BIC
+                var countries = offlineFirstService.GetCountries();
+                if (countries != null)
+                {
+                    foreach (var country in countries.Result.Where(c => !string.IsNullOrWhiteSpace(c.CNT_BIC)))
+                    {
+                        items.Add(new BicListItem
+                        {
+                            Bic = country.CNT_BIC.Trim(),
+                            DisplayText = $"{country.CNT_Name} ({country.CNT_BIC.Trim()})"
+                        });
+                    }
+                }
+                
+                // Sort by country name
+                items = items.OrderBy(i => i.DisplayText).ToList();
+                
+                BicComboBox.ItemsSource = items;
+                
+                // Pre-select preferred BIC or current country's BIC
+                string bicToSelect = preferredBic;
+                if (string.IsNullOrWhiteSpace(bicToSelect))
+                {
+                    var currentCountry = offlineFirstService.CurrentCountry;
+                    bicToSelect = currentCountry?.CNT_BIC?.Trim();
+                }
+                
+                if (!string.IsNullOrWhiteSpace(bicToSelect))
+                {
+                    var item = items.FirstOrDefault(i => string.Equals(i.Bic, bicToSelect.Trim(), StringComparison.OrdinalIgnoreCase));
+                    if (item != null)
+                    {
+                        BicComboBox.SelectedItem = item;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error populating BIC ComboBox: {ex.Message}");
+            }
+        }
+
         private void CloseButton_Click(object sender, RoutedEventArgs e)
         {
             Close();
         }
+    }
+
+    public class BicListItem
+    {
+        public string Bic { get; set; }
+        public string DisplayText { get; set; }
     }
 
     public class SpiritGeneResultRow

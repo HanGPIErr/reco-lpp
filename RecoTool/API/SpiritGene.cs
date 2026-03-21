@@ -134,7 +134,9 @@ namespace RecoTool.API
             request.Headers.Add("Sec-Fetch-Mode", "cors");
             request.Headers.Add("Sec-Fetch-Site", "same-origin");
 
-            if (!_cache.TryGet(request, out var result))
+            var cacheKey = RequestCache.GenerateKey(request);
+
+            if (!_cache.TryGet(cacheKey, out var result))
             {
                 try
                 {
@@ -143,7 +145,7 @@ namespace RecoTool.API
 
                     var content = await response.Content.ReadAsStringAsync();
 
-                    _cache.Set(request, content);
+                    _cache.Set(cacheKey, content);
                 }
                 catch
                 {
@@ -152,7 +154,7 @@ namespace RecoTool.API
                 }
             }
 
-            _cache.TryGet(request, out var json);
+            _cache.TryGet(cacheKey, out var json);
             if (json != "")
             {
                 return JsonSerializer.Deserialize<SpiritGeneTransactionsOutput.Output>(json).Result.FoncOut1.FoncOut101;
@@ -180,7 +182,9 @@ namespace RecoTool.API
             request.Headers.Add("Sec-Fetch-Mode", "cors");
             request.Headers.Add("Sec-Fetch-Site", "same-origin");
 
-            if (!_cache.TryGet(request, out var result))
+            var cacheKey = RequestCache.GenerateKey(request);
+
+            if (!_cache.TryGet(cacheKey, out var result))
             {
                 try
                 {
@@ -189,7 +193,7 @@ namespace RecoTool.API
 
                     var content = await response.Content.ReadAsStringAsync();
 
-                    _cache.Set(request, content);
+                    _cache.Set(cacheKey, content);
                 }
                 catch
                 {
@@ -197,7 +201,7 @@ namespace RecoTool.API
                 }
             }
 
-            _cache.TryGet(request, out var json);
+            _cache.TryGet(cacheKey, out var json);
             if (json != "")
             {
                 return JsonSerializer.Deserialize<SpiritGeneTransactionDetailOutput.Root>(json).Result.FoncOut1.FoncOut101.GDetOpe;

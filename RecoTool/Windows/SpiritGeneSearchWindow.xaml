@@ -43,12 +43,13 @@
                 <TextBox Grid.Row="1" Grid.Column="4" x:Name="AmountMaxBox" Margin="0,0,0,6"/>
 
                 <TextBlock Grid.Row="2" Grid.Column="0" Text="BIC:" VerticalAlignment="Center" Margin="0,0,8,6"/>
-                <TextBox Grid.Row="2" Grid.Column="1" x:Name="BicBox" Margin="0,0,0,6"/>
+                <ComboBox Grid.Row="2" Grid.Column="1" x:Name="BicComboBox" Margin="0,0,0,6"
+                          DisplayMemberPath="DisplayText" SelectedValuePath="Bic" IsEditable="False"/>
 
                 <TextBlock Grid.Row="2" Grid.Column="3" Text="Direction:" VerticalAlignment="Center" Margin="0,0,8,6"/>
                 <ComboBox Grid.Row="2" Grid.Column="4" x:Name="DirectionCombo" Margin="0,0,0,6" SelectedIndex="0">
                     <ComboBoxItem Content="Received (R)" Tag="R"/>
-                    <ComboBoxItem Content="Sent (E)" Tag="E"/>
+                    <ComboBoxItem Content="Sent (A)" Tag="A"/>
                 </ComboBox>
 
                 <Button Grid.Row="3" Grid.Column="4" x:Name="SearchButton" Content="🔍 Search" 

@@ -995,6 +995,7 @@ Do you want to apply these automatic rules?
                 // Pre-fill search parameters from the selected row
                 var window = new SpiritGeneSearchWindow(
                     spiritGene,
+                    _offlineFirstService,
                     operationDate: rowData.Operation_Date,
                     amount: rowData.SignedAmount,
                     bic: null // BIC not directly available on the row

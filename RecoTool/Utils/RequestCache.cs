@@ -18,7 +18,7 @@ namespace RecoTool.Utils
             = new ConcurrentDictionary<string, CacheEntry>();
 
         // Génère une clé unique pour la requête (méthode + URL + body)
-        private string Key(HttpRequestMessage req)
+        public static string GenerateKey(HttpRequestMessage req)
         {
             var body = req.Content == null
                 ? ""
@@ -30,10 +30,9 @@ namespace RecoTool.Utils
         }
 
         // Essaie de récupérer ; renvoie true si trouvé ET non expiré
-        public bool TryGet(HttpRequestMessage req, out string json)
+        public bool TryGet(string cacheKey, out string json)
         {
-            var key = Key(req);
-            if (_dict.TryGetValue(key, out var entry)
+            if (_dict.TryGetValue(cacheKey, out var entry)
              && entry.Expiration > DateTime.UtcNow)
             {
                 json = entry.Json;
@@ -44,15 +43,14 @@ namespace RecoTool.Utils
         }
 
         // Stocke pour une durée ttl
-        public void Set(HttpRequestMessage req, string json)
+        public void Set(string cacheKey, string json)
         {
-            var key = Key(req);
             var entry = new CacheEntry
             {
                 Json = json,
                 Expiration = DateTime.UtcNow.Add(TimeSpan.FromMinutes(15))
             };
-            _dict.AddOrUpdate(key, entry, (_, __) => entry);
+            _dict.AddOrUpdate(cacheKey, entry, (_, __) => entry);
         }
     }
 
