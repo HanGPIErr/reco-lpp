@@ -267,6 +267,8 @@
     <Compile Include="Windows\InvoiceFinderWindow.xaml.cs">
       <DependentUpon>InvoiceFinderWindow.xaml</DependentUpon>
     </Compile>
+    <Compile Include="Windows\ReconciliationView\ActivityLog.cs" />
+    <Compile Include="Windows\ReconciliationView\Mentions.cs" />
     <Compile Include="Windows\ReconciliationView\QuickSearch.cs" />
     <Compile Include="Windows\SpiritGeneSearchWindow.xaml.cs">
       <DependentUpon>SpiritGeneSearchWindow.xaml</DependentUpon>

@@ -221,6 +221,9 @@ namespace RecoTool.Windows
                 ApplyFilters();
                 swFilter.Stop();
 
+                // Refresh @mention badge after data load
+                try { RefreshMentionBadge(); } catch { }
+
                 swTotal.Stop();
                 UpdateStatusInfo($"{ViewData?.Count ?? 0} lines loaded");
                 try

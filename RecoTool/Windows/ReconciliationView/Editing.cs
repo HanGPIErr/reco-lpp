@@ -391,6 +391,14 @@ namespace RecoTool.Windows
             // Refresh KPIs to reflect changes immediately
             UpdateKpis(_filteredData);
 
+            // Notify multi-user tracker that we are editing (not just viewing)
+            try
+            {
+                if (_todoSessionTracker != null && _currentTodoId > 0)
+                    await _todoSessionTracker.NotifyEditActivityAsync(_currentTodoId);
+            }
+            catch { }
+
             // Best-effort background sync (debounced)
             try
             {

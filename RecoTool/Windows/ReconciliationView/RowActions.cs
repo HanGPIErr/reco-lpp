@@ -113,6 +113,7 @@ namespace RecoTool.Windows
                 {
                     Owner = Window.GetWindow(this)
                 };
+                dlg.SetUsers(AssigneeOptions);
                 dlg.SetConversationText(row.Comments ?? string.Empty);
                 var res = dlg.ShowDialog();
                 if (res == true)
@@ -137,6 +138,9 @@ namespace RecoTool.Windows
                         
                         // Refresh KPIs to reflect changes immediately
                         UpdateKpis(_filteredData);
+
+                        // Refresh @mention badge (comment may contain new mentions)
+                        try { RefreshMentionBadge(); } catch { }
 
                         // Best-effort background sync
                         try { ScheduleBulkPushDebounced(); } catch { }
@@ -561,6 +565,9 @@ Do you want to apply these automatic rules?
                 
                 // Refresh KPIs to reflect changes immediately
                 UpdateKpis(_filteredData);
+
+                // Refresh @mention badge (comment may contain new mentions)
+                try { RefreshMentionBadge(); } catch { }
 
                 // Background sync best effort (debounced)
                 try

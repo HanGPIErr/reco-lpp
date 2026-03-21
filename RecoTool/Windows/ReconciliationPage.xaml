@@ -80,6 +80,13 @@
                         <Button Style="{StaticResource StandardButtonStyle}" Margin="8,0,0,0" Height="26" Padding="10,0" Click="TodoExit_Click" ToolTip="Exit ToDo mode" Visibility="{Binding IsTodoMode, Converter={StaticResource BooleanToVisibilityConverter}}">
                             <TextBlock Text="Exit ToDo"/>
                         </Button>
+                        <!-- Multi-user indicator for current TodoList item -->
+                        <Border x:Name="TodoMultiUserBadge" Visibility="Collapsed" Background="#FFF3E0" CornerRadius="4" Padding="6,2" Margin="8,0,0,0" BorderBrush="#FFB74D" BorderThickness="1" VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE77B;" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="#E65100" VerticalAlignment="Center" Margin="0,0,4,0" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display"/>
+                                <TextBlock x:Name="TodoMultiUserText" Text="" FontSize="11" Foreground="#E65100" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </Border>
 

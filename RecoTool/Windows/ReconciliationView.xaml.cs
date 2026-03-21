@@ -1865,7 +1865,11 @@ namespace RecoTool.Windows
             {
                 Interval = TimeSpan.FromSeconds(30) // Refresh every 30 seconds (reduced frequency to improve UI performance)
             };
-            _multiUserWarningRefreshTimer.Tick += async (s, e) => await UpdateMultiUserWarningAsync();
+            _multiUserWarningRefreshTimer.Tick += async (s, e) =>
+            {
+                await UpdateMultiUserWarningAsync();
+                try { RefreshMentionBadge(); } catch { }
+            };
             _multiUserWarningRefreshTimer.Start();
 
             // Initial update
