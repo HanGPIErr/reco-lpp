@@ -340,19 +340,23 @@ namespace RecoTool.API
       =====================================================================*/
     internal sealed class DwingsHttpClient : IDisposable
     {
-        private readonly HttpClient _client;
-        private readonly HttpClientHandler _handler;
+        private HttpClient _client;
+        private HttpClientHandler _handler;
         private readonly Dwings _owner;
-        private string _sessionCookie;          // “SMSESSION=…”
+        private string _sessionCookie;          // "SMSESSION=…"
         private const string UserAgentDefault =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.74 Safari/537.36 Edg/99.0.1150.46";
 
         public DwingsHttpClient(Dwings owner)
         {
             _owner = owner ?? throw new ArgumentNullException(nameof(owner));
+            CreateInternalClient();
+        }
 
+        private void CreateInternalClient()
+        {
             // -----------------------------------------------------------------
-            // 1️⃣  Handler – client‑certificate + manual cookie handling
+            // Handler – client‑certificate + manual cookie handling
             // -----------------------------------------------------------------
             _handler = new HttpClientHandler
             {
@@ -368,7 +372,7 @@ namespace RecoTool.API
                 _handler.ClientCertificates.Add(cert);
 
             // -----------------------------------------------------------------
-            // 2️⃣  HttpClient + static headers
+            // HttpClient + static headers
             // -----------------------------------------------------------------
             _client = new HttpClient(_handler)
             {
@@ -396,6 +400,18 @@ namespace RecoTool.API
                 new StringWithQualityHeaderValue("en-US", 0.6));
 
             _client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentDefault);
+        }
+
+        /// <summary>
+        /// Recrée le HttpClient et le handler pour purger l'état SSL/Schannel obsolète.
+        /// Réinitialise également le cookie de session pour forcer une nouvelle authentification 302.
+        /// </summary>
+        private void RecreateHttpClient()
+        {
+            try { _client?.Dispose(); } catch { }
+            try { _handler?.Dispose(); } catch { }
+            _sessionCookie = null;
+            CreateInternalClient();
         }
 
         /// <summary>
@@ -454,8 +470,10 @@ namespace RecoTool.API
                 {
                     response = _client.SendAsync(request).Result;
                 }
-                catch (Exception) when (attempt < maxAttempts)
+                catch (Exception ex) when (attempt < maxAttempts)
                 {
+                    System.Diagnostics.Debug.WriteLine($"[Dwings] Connection error (attempt {attempt}), recreating client: {ex.Message}");
+                    RecreateHttpClient(); // purge stale SSL state + reset session cookie
                     Thread.Sleep(_owner.GetSleepBetweenCalls());
                     continue;
                 }
@@ -503,7 +521,22 @@ namespace RecoTool.API
                 ExtractSessionCookie(response);
 
                 // ---------------------------------------------------------
-                // 7️⃣ Success ?
+                // 7️⃣ Session expirée (401/403) – vider le cookie et relancer
+                // ---------------------------------------------------------
+                if (response.StatusCode == HttpStatusCode.Unauthorized ||
+                    response.StatusCode == HttpStatusCode.Forbidden)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Dwings] Session expired ({(int)response.StatusCode}), clearing cookie and retrying.");
+                    _sessionCookie = null; // force 302 flow on next attempt
+                    if (attempt < maxAttempts)
+                    {
+                        Thread.Sleep(_owner.GetSleepBetweenCalls());
+                        continue;
+                    }
+                }
+
+                // ---------------------------------------------------------
+                // 8️⃣ Success ?
                 // ---------------------------------------------------------
                 if (response.IsSuccessStatusCode)
                 {
@@ -511,7 +544,7 @@ namespace RecoTool.API
                 }
 
                 // ---------------------------------------------------------
-                // 8️⃣ Retry / fail
+                // 9️⃣ Retry / fail
                 // ---------------------------------------------------------
                 if (attempt >= maxAttempts)
                 {
@@ -548,8 +581,8 @@ namespace RecoTool.API
         // -----------------------------------------------------------------
         public void Dispose()
         {
-            _client?.Dispose();
-            _handler?.Dispose();
+            try { _client?.Dispose(); } catch { }
+            try { _handler?.Dispose(); } catch { }
         }
     }
 }

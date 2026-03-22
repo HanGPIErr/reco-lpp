@@ -13,14 +13,21 @@ namespace RecoTool.API
     public class SpiritGene : IDisposable
     {
         private const string BASE_URL = "https://spirit-gene.bddf.echonet";
+        private const int SESSION_TIMEOUT_MINUTES = 30;
 
-        private readonly HttpClient _httpClient;
-        private readonly CookieContainer _cookieContainer;
+        private HttpClient _httpClient;
+        private CookieContainer _cookieContainer;
         private DateTime _authenticatedTime;
 
-        private RequestCache _cache = new RequestCache();
+        private readonly RequestCache _cache = new RequestCache();
 
         public SpiritGene()
+        {
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+            _httpClient = CreateHttpClient();
+        }
+
+        private HttpClient CreateHttpClient()
         {
             _cookieContainer = new CookieContainer();
 
@@ -33,26 +40,40 @@ namespace RecoTool.API
                 CookieContainer = _cookieContainer
             };
 
-            _httpClient = new HttpClient(handler)
+            var client = new HttpClient(handler)
             {
                 BaseAddress = new Uri(BASE_URL),
                 Timeout = TimeSpan.FromSeconds(30)
             };
 
-            _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0");
+            client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0");
+            return client;
+        }
+
+        private void AddApiHeaders(HttpRequestMessage request)
+        {
+            request.Headers.Add("Accept", "*/*");
+            request.Headers.Add("Accept-Language", "fr");
+            request.Headers.Add("Connection", "keep-alive");
+            request.Headers.Referrer = new Uri($"{BASE_URL}/AVPW1/");
+            request.Headers.Add("Origin", BASE_URL);
+            request.Headers.Add("Sec-Fetch-Dest", "empty");
+            request.Headers.Add("Sec-Fetch-Mode", "cors");
+            request.Headers.Add("Sec-Fetch-Site", "same-origin");
         }
 
         /// <summary>
         /// Authentification utilisant une Smartcard Windows et récupération automatique du cookie.
+        /// Recrée systématiquement le HttpClient pour purger l'état SSL/Schannel obsolète.
         /// </summary>
         public async Task AuthenticateAsync()
         {
-            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+            var old = _httpClient;
+            _httpClient = CreateHttpClient();
+            try { old?.Dispose(); } catch { }
 
             var request = new HttpRequestMessage(HttpMethod.Get, "/AVPW1/");
-
-            // Headers spécifiques à l'authentification
             request.Headers.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
             request.Headers.Add("Accept-Language", "fr");
             request.Headers.Add("Connection", "keep-alive");
@@ -65,154 +86,139 @@ namespace RecoTool.API
             {
                 var response = await _httpClient.SendAsync(request);
                 response.EnsureSuccessStatusCode();
-
                 _authenticatedTime = DateTime.Now;
             }
-            catch
+            catch (Exception ex)
             {
-                MessageBox.Show("Impossible to connect to " + _httpClient.BaseAddress);
+                _authenticatedTime = DateTime.MinValue;
+                System.Diagnostics.Debug.WriteLine($"[SpiritGene] AuthenticateAsync failed: {ex.Message}");
+                MessageBox.Show($"Impossible to connect to {BASE_URL}\n{ex.Message}");
             }
         }
 
         private async Task EnsureAuthenticated()
         {
-            if ((DateTime.Now - _authenticatedTime).TotalMinutes >= 60)
+            if (_authenticatedTime == DateTime.MinValue ||
+                (DateTime.Now - _authenticatedTime).TotalMinutes >= SESSION_TIMEOUT_MINUTES)
                 await AuthenticateAsync();
+        }
 
+        /// <summary>
+        /// Exécute un appel API avec un retry automatique en cas d'erreur SSL/réseau/session :
+        /// recrée le client HTTP, se ré-authentifie, puis renvoie une seule fois.
+        /// </summary>
+        private async Task<string> ExecuteApiAsync(Func<HttpRequestMessage> requestFactory, string cacheKey = null)
+        {
+            if (cacheKey != null && _cache.TryGet(cacheKey, out var cached))
+                return cached;
+
+            await EnsureAuthenticated();
+
+            async Task<string> SendOnce()
+            {
+                var req = requestFactory();
+                var response = await _httpClient.SendAsync(req);
+                if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
+                    throw new UnauthorizedAccessException($"Session expired (HTTP {(int)response.StatusCode})");
+                response.EnsureSuccessStatusCode();
+                return await response.Content.ReadAsStringAsync();
+            }
+
+            string json;
+            try
+            {
+                json = await SendOnce();
+            }
+            catch (Exception ex) when (
+                ex is HttpRequestException ||
+                ex is UnauthorizedAccessException ||
+                ex is System.Security.Authentication.AuthenticationException ||
+                ex is System.IO.IOException)
+            {
+                System.Diagnostics.Debug.WriteLine($"[SpiritGene] Connection error, retrying after re-auth: {ex.Message}");
+                _authenticatedTime = DateTime.MinValue;
+                await AuthenticateAsync();
+                try
+                {
+                    json = await SendOnce();
+                }
+                catch (Exception retryEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[SpiritGene] Retry failed: {retryEx.Message}");
+                    MessageBox.Show($"SpiritGene request failed after retry: {retryEx.Message}");
+                    return null;
+                }
+            }
+
+            if (json != null && cacheKey != null)
+                _cache.Set(cacheKey, json);
+
+            return json;
         }
 
         public async Task<SpiritGeneUser.FoncOut101> GetUserInfo()
         {
-            await EnsureAuthenticated();
+            var body = "{\"no_version_1\":1}";
+            var cacheKey = $"POST:/spirit-server/AVPW1/recup_user.1.0.o_recup_user:{body}";
 
-            var request = new HttpRequestMessage(HttpMethod.Post, "/spirit-server/AVPW1/recup_user.1.0.o_recup_user")
+            var json = await ExecuteApiAsync(() =>
             {
-                Content = new StringContent("{\"no_version_1\":1}", Encoding.UTF8, "application/json")
-            };
+                var req = new HttpRequestMessage(HttpMethod.Post, "/spirit-server/AVPW1/recup_user.1.0.o_recup_user")
+                {
+                    Content = new StringContent(body, Encoding.UTF8, "application/json")
+                };
+                AddApiHeaders(req);
+                return req;
+            }, cacheKey);
 
-            request.Headers.Add("Accept", "*/*");
-            request.Headers.Add("Accept-Language", "fr");
-            request.Headers.Add("Connection", "keep-alive");
-            request.Headers.Referrer = new Uri($"{_httpClient.BaseAddress}/AVPW1/");
-            request.Headers.Add("Origin", $"{_httpClient.BaseAddress}");
-            request.Headers.Add("Sec-Fetch-Dest", "empty");
-            request.Headers.Add("Sec-Fetch-Mode", "cors");
-            request.Headers.Add("Sec-Fetch-Site", "same-origin");
-
-            var response = await _httpClient.SendAsync(request);
-
-            try
-            {
-                response.EnsureSuccessStatusCode();
-
-                var content = await response.Content.ReadAsStringAsync();
-                return JsonSerializer.Deserialize<SpiritGeneUser.User>(content).Result.FoncOut1.FoncOut101;
-            }
-            catch
-            {
-                _authenticatedTime = DateTime.MinValue;
-                MessageBox.Show("Problem retrieving data from SpiritGene, please retry later.");
-            }
-            return null;
+            if (json == null) return null;
+            try { return JsonSerializer.Deserialize<SpiritGeneUser.User>(json).Result.FoncOut1.FoncOut101; }
+            catch { return null; }
         }
 
         public async Task<SpiritGeneTransactionsOutput.FoncOut101> GetTransactions(DateTime DateDebut, DateTime DateFin, string BIC, decimal MontantMin, decimal MontantMax, string Sens = "R")
         {
-            await EnsureAuthenticated();
+            var body = SpiritGeneTransactionsInput.CreateTransactionBody(DateDebut, DateFin, BIC, (int)(MontantMin * 10000), (int)(MontantMax * 10000), Sens);
+            var cacheKey = $"POST:/spirit-server/AVPW1/list_operation.1.0.o_list_ope:{body}";
 
-            var request = new HttpRequestMessage(HttpMethod.Post, "/spirit-server/AVPW1/list_operation.1.0.o_list_ope")
+            var json = await ExecuteApiAsync(() =>
             {
-                Content = new StringContent(SpiritGeneTransactionsInput.CreateTransactionBody(DateDebut, DateFin, BIC, (int)(MontantMin * 10000), (int)(MontantMax * 10000), Sens), Encoding.UTF8, "application/json")
-            };
-
-            request.Headers.Add("Accept", "*/*");
-            request.Headers.Add("Accept-Language", "fr");
-            request.Headers.Add("Connection", "keep-alive");
-            request.Headers.Referrer = new Uri($"{_httpClient.BaseAddress}/AVPW1/");
-            request.Headers.Add("Origin", $"{_httpClient.BaseAddress}");
-            request.Headers.Add("Sec-Fetch-Dest", "empty");
-            request.Headers.Add("Sec-Fetch-Mode", "cors");
-            request.Headers.Add("Sec-Fetch-Site", "same-origin");
-
-            var cacheKey = RequestCache.GenerateKey(request);
-
-            if (!_cache.TryGet(cacheKey, out var result))
-            {
-                try
+                var req = new HttpRequestMessage(HttpMethod.Post, "/spirit-server/AVPW1/list_operation.1.0.o_list_ope")
                 {
-                    var response = await _httpClient.SendAsync(request);
-                    response.EnsureSuccessStatusCode();
+                    Content = new StringContent(body, Encoding.UTF8, "application/json")
+                };
+                AddApiHeaders(req);
+                return req;
+            }, cacheKey);
 
-                    var content = await response.Content.ReadAsStringAsync();
-
-                    _cache.Set(cacheKey, content);
-                }
-                catch
-                {
-                    _authenticatedTime = DateTime.MinValue;
-                    MessageBox.Show("Problem retrieving data from SpiritGene, please retry later.");
-                }
-            }
-
-            _cache.TryGet(cacheKey, out var json);
-            if (json != "")
-            {
-                return JsonSerializer.Deserialize<SpiritGeneTransactionsOutput.Output>(json).Result.FoncOut1.FoncOut101;
-            }
-
-            return null;
+            if (json == null) return null;
+            try { return JsonSerializer.Deserialize<SpiritGeneTransactionsOutput.Output>(json).Result.FoncOut1.FoncOut101; }
+            catch { return null; }
         }
-
 
         public async Task<SpiritGeneTransactionDetailOutput.GDetOpe> GetTransactionDetails(string TransactionId, string MsgId, string Sens = "R")
         {
-            await EnsureAuthenticated();
+            var body = SpiritGeneTransactionDetailInput.CreateTransactionBody(TransactionId, MsgId, Sens);
+            var cacheKey = $"POST:/spirit-server/AVPW1/detail_ope_2.1.0.o_detail_ope:{body}";
 
-            var request = new HttpRequestMessage(HttpMethod.Post, "/spirit-server/AVPW1/detail_ope_2.1.0.o_detail_ope")
+            var json = await ExecuteApiAsync(() =>
             {
-                Content = new StringContent(SpiritGeneTransactionDetailInput.CreateTransactionBody(TransactionId, MsgId, Sens), Encoding.UTF8, "application/json")
-            };
-
-            request.Headers.Add("Accept", "*/*");
-            request.Headers.Add("Accept-Language", "fr");
-            request.Headers.Add("Connection", "keep-alive");
-            request.Headers.Referrer = new Uri($"{_httpClient.BaseAddress}/AVPW1/");
-            request.Headers.Add("Origin", $"{_httpClient.BaseAddress}");
-            request.Headers.Add("Sec-Fetch-Dest", "empty");
-            request.Headers.Add("Sec-Fetch-Mode", "cors");
-            request.Headers.Add("Sec-Fetch-Site", "same-origin");
-
-            var cacheKey = RequestCache.GenerateKey(request);
-
-            if (!_cache.TryGet(cacheKey, out var result))
-            {
-                try
+                var req = new HttpRequestMessage(HttpMethod.Post, "/spirit-server/AVPW1/detail_ope_2.1.0.o_detail_ope")
                 {
-                    var response = await _httpClient.SendAsync(request);
-                    response.EnsureSuccessStatusCode();
+                    Content = new StringContent(body, Encoding.UTF8, "application/json")
+                };
+                AddApiHeaders(req);
+                return req;
+            }, cacheKey);
 
-                    var content = await response.Content.ReadAsStringAsync();
-
-                    _cache.Set(cacheKey, content);
-                }
-                catch
-                {
-                    MessageBox.Show("Problem retrieving data from SpiritGene, please retry later.");
-                }
-            }
-
-            _cache.TryGet(cacheKey, out var json);
-            if (json != "")
-            {
-                return JsonSerializer.Deserialize<SpiritGeneTransactionDetailOutput.Root>(json).Result.FoncOut1.FoncOut101.GDetOpe;
-            }
-
-            return null;
+            if (json == null) return null;
+            try { return JsonSerializer.Deserialize<SpiritGeneTransactionDetailOutput.Root>(json).Result.FoncOut1.FoncOut101.GDetOpe; }
+            catch { return null; }
         }
 
         public string GetStoredCookies()
         {
-            return _cookieContainer.GetCookieHeader(_httpClient.BaseAddress);
+            return _cookieContainer?.GetCookieHeader(new Uri(BASE_URL));
         }
 
         public void Dispose()
