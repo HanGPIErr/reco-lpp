@@ -990,6 +990,16 @@ namespace RecoTool.Windows
             _todoSessionTracker = tracker;
             _currentTodoId = todoId;
 
+            // Initialize the multi-user warning banner
+            try
+            {
+                if (SessionWarningBanner != null && tracker != null && todoId > 0)
+                {
+                    _ = SessionWarningBanner.InitializeAsync(tracker, todoId);
+                }
+            }
+            catch { }
+
             // Subscribe to rule application events to show floating toasts (edit/run-now)
             try
             {

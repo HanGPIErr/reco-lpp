@@ -285,6 +285,9 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
+        <!-- Multi-user session warning banner (shows when others are on this TodoList) -->
+        <local:TodoListSessionWarning x:Name="SessionWarningBanner" Grid.Row="0" Margin="0,0,0,2" Visibility="Collapsed"/>
+
         <!-- Compact Modern Header with Integrated KPIs -->
         <Border x:Name="HeaderBorder" Grid.Row="1" Background="White" Padding="12,8" Effect="{StaticResource StandardShadow}" BorderBrush="#E0E0E0" BorderThickness="0,0,0,1">
             <Grid>

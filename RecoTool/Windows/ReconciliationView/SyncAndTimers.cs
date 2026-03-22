@@ -126,6 +126,8 @@ namespace RecoTool.Windows
                 }
                 // Unsubscribe from rule-applied event
                 try { _reconciliationService.RuleApplied -= ReconciliationService_RuleApplied; } catch { }
+                // Stop session warning banner refresh timer
+                try { SessionWarningBanner?.Stop(); } catch { }
                 if (_highlightClearTimer != null)
                 {
                     _highlightClearTimer.Stop();
