@@ -103,7 +103,7 @@ namespace RecoTool.Windows
             public int ActiveUsersCount
             {
                 get => _activeUsersCount;
-                set { _activeUsersCount = value; OnPropertyChanged(nameof(ActiveUsersCount)); OnPropertyChanged(nameof(HasActiveUsers)); OnPropertyChanged(nameof(ActiveUsersText)); }
+                set { _activeUsersCount = value; OnPropertyChanged(nameof(ActiveUsersCount)); OnPropertyChanged(nameof(HasActiveUsers)); OnPropertyChanged(nameof(ActiveUsersText)); OnPropertyChanged(nameof(ActiveUsersBadgeBackground)); }
             }
 
             public bool HasActiveUsers => _activeUsersCount > 0;
@@ -113,7 +113,23 @@ namespace RecoTool.Windows
                 get
                 {
                     if (_activeUsersCount == 0) return "";
-                    return $"👁️ {_activeUsersCount}";
+                    if (_activeUsersCount == 1 && !string.IsNullOrWhiteSpace(_activeUsersTooltip))
+                    {
+                        var name = _activeUsersTooltip.Split('\n')[0].Trim();
+                        if (name.Length > 12) name = name.Substring(0, 10) + "..";
+                        return name;
+                    }
+                    return $"{_activeUsersCount} users";
+                }
+            }
+
+            public Brush ActiveUsersBadgeBackground
+            {
+                get
+                {
+                    if (_activeUsersCount == 0) return Brushes.Transparent;
+                    if (_activeUsersCount == 1) return Brushes.LightGreen;
+                    return Brushes.Orange;
                 }
             }
 
@@ -121,7 +137,7 @@ namespace RecoTool.Windows
             public string ActiveUsersTooltip
             {
                 get => _activeUsersTooltip ?? "";
-                set { _activeUsersTooltip = value; OnPropertyChanged(nameof(ActiveUsersTooltip)); }
+                set { _activeUsersTooltip = value; OnPropertyChanged(nameof(ActiveUsersTooltip)); OnPropertyChanged(nameof(ActiveUsersText)); }
             }
 
             public event PropertyChangedEventHandler PropertyChanged;
@@ -2428,12 +2444,6 @@ namespace RecoTool.Windows
         #region TodoCard Multi-User Indicators
 
         private int _todoSessionRefreshRunning; // Re-entrancy guard: 0=idle, 1=running
-        private string _sessionDiagStatus = "Not initialized";
-        public string SessionDiagStatus
-        {
-            get => _sessionDiagStatus;
-            set { _sessionDiagStatus = value; OnPropertyChanged(); }
-        }
 
         /// <summary>
         /// Setup timer to refresh TodoCard multi-user indicators
@@ -2464,17 +2474,9 @@ namespace RecoTool.Windows
                 if (_todoSessionTracker == null)
                 {
                     InitializeTodoSessionTracker();
-                    if (_todoSessionTracker == null)
-                    {
-                        SessionDiagStatus = $"[{DateTime.Now:HH:mm:ss}] Tracker NULL after init";
-                        return;
-                    }
+                    if (_todoSessionTracker == null) return;
                 }
-                if (TodoCards == null || TodoCards.Count == 0)
-                {
-                    SessionDiagStatus = $"[{DateTime.Now:HH:mm:ss}] No TodoCards";
-                    return;
-                }
+                if (TodoCards == null || TodoCards.Count == 0) return;
 
                 // Collect all TodoIds and do ONE batch directory scan
                 var todoIds = TodoCards
@@ -2483,14 +2485,9 @@ namespace RecoTool.Windows
                     .Distinct()
                     .ToList();
 
-                if (todoIds.Count == 0)
-                {
-                    SessionDiagStatus = $"[{DateTime.Now:HH:mm:ss}] No valid TodoIds";
-                    return;
-                }
+                if (todoIds.Count == 0) return;
 
                 var allSessions = await _todoSessionTracker.GetAllActiveSessionsAsync(todoIds);
-                int totalSessionsFound = allSessions.Values.Sum(l => l.Count);
 
                 // Update UI (already on dispatcher thread from DispatcherTimer)
                 foreach (var card in TodoCards)
@@ -2500,7 +2497,15 @@ namespace RecoTool.Windows
                     if (allSessions.TryGetValue(card.Item.TDL_id, out var sessions) && sessions.Count > 0)
                     {
                         card.ActiveUsersCount = sessions.Count;
-                        card.ActiveUsersTooltip = string.Join("\n", sessions.Select(s => s.UserName ?? s.UserId ?? "?"));
+                        card.ActiveUsersTooltip = string.Join("\n", sessions.Select(s =>
+                        {
+                            var name = s.UserName ?? s.UserId ?? "?";
+                            var dur = s.Duration;
+                            var ago = dur.TotalMinutes < 1 ? "just now"
+                                    : dur.TotalMinutes < 60 ? $"{(int)dur.TotalMinutes}m ago"
+                                    : $"{(int)dur.TotalHours}h ago";
+                            return $"{name} — viewing ({ago})";
+                        }));
                     }
                     else
                     {
@@ -2509,11 +2514,10 @@ namespace RecoTool.Windows
                     }
                 }
 
-                SessionDiagStatus = $"[{DateTime.Now:HH:mm:ss}] OK — {todoIds.Count} cards, {totalSessionsFound} other sessions\n{_todoSessionTracker.GetDiagnostics()}";
             }
-            catch (Exception ex)
+            catch
             {
-                SessionDiagStatus = $"[{DateTime.Now:HH:mm:ss}] ERROR: {ex.Message}";
+                // Best effort, don't break UI
             }
             finally
             {

@@ -1885,11 +1885,9 @@ namespace RecoTool.Windows
             catch { }
             
             // Check multi-user conflicts and register session if in TodoList mode
-            System.Diagnostics.Debug.WriteLine($"[AddView] IsTodoMode={IsTodoMode}, SelectedTodoItem={SelectedTodoItem?.TDL_id}");
             if (IsTodoMode && SelectedTodoItem != null)
             {
                 var todoId = SelectedTodoItem.TDL_id;
-                System.Diagnostics.Debug.WriteLine($"[AddView] TodoId={todoId}, checking multi-user...");
 
                 // Warn if another user is already editing this TodoList
                 var canProceed = await CheckAndWarnMultiUserBeforeOpeningTodoAsync(todoId);
@@ -1898,16 +1896,10 @@ namespace RecoTool.Windows
 
                 // Register session (only if not already registered for this TodoId)
                 var alreadyRegistered = _viewTodoIds.Values.Contains(todoId);
-                System.Diagnostics.Debug.WriteLine($"[AddView] alreadyRegistered={alreadyRegistered}");
                 if (!alreadyRegistered)
                 {
                     await RegisterTodoSessionAsync(todoId);
-                    System.Diagnostics.Debug.WriteLine($"[AddView] RegisterTodoSessionAsync completed for TodoId={todoId}");
                 }
-            }
-            else
-            {
-                System.Diagnostics.Debug.WriteLine($"[AddView] SKIPPED registration: IsTodoMode={IsTodoMode}, SelectedTodoItem is null={SelectedTodoItem == null}");
             }
             
             await AwaitSafeToOpenViewAsync();
@@ -2597,47 +2589,21 @@ namespace RecoTool.Windows
         {
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] START");
-                
-                // Dispose existing tracker if any
                 _todoSessionTracker?.Dispose();
                 _todoSessionTracker = null;
 
-                // Get current country
                 var country = _offlineFirstService?.CurrentCountry;
-                if (country == null)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] No country");
-                    return;
-                }
-                System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] Country: {country.CNT_Id}");
+                if (country == null) return;
 
-                // Derive file-based session folder from the lock DB connection string
                 var lockDbConnString = _offlineFirstService?.GetControlConnectionString(country.CNT_Id);
                 var sessionFolder = TodoListSessionTracker.DeriveSessionFolder(lockDbConnString);
-                if (string.IsNullOrEmpty(sessionFolder))
-                {
-                    System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] Cannot derive session folder");
-                    return;
-                }
-                System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] SessionFolder: {sessionFolder}");
-                
-                // Get current user ID
+                if (string.IsNullOrEmpty(sessionFolder)) return;
+
                 var currentUserId = Environment.UserName;
-                System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] User: {currentUserId}");
-
-                // Create file-based tracker (no OleDb — uses lightweight .session files)
                 _todoSessionTracker = new TodoListSessionTracker(sessionFolder, currentUserId, _offlineFirstService);
-                System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] Tracker created");
-
-                // Ensure session folder exists (cheap mkdir, no DB)
                 await _todoSessionTracker.EnsureTableAsync();
-                System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] SUCCESS");
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] ERROR: {ex.Message}");
-            }
+            catch { }
         }
 
         /// <summary>
@@ -2692,30 +2658,19 @@ namespace RecoTool.Windows
             try
             {
                 await EnsureTodoSessionTrackerAsync();
-                if (_todoSessionTracker == null)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[RegisterTodoSession] Tracker is NULL after EnsureInit");
-                    return;
-                }
-                
-                if (todoId <= 0)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[RegisterTodoSession] Invalid TodoId: {todoId}");
-                    return;
-                }
+                if (_todoSessionTracker == null) return;
+                if (todoId <= 0) return;
 
                 var userName = _offlineFirstService?.CurrentUser ?? Environment.UserName;
-                System.Diagnostics.Debug.WriteLine($"[RegisterTodoSession] Registering TodoId={todoId}, User={userName}");
-                var success = await _todoSessionTracker.RegisterViewingAsync(todoId, userName, isEditing: false);
-                System.Diagnostics.Debug.WriteLine($"[RegisterTodoSession] Result: {success}");
+                await _todoSessionTracker.RegisterViewingAsync(todoId, userName, isEditing: false);
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[RegisterTodoSession] ERROR: {ex.Message}");
-            }
+            catch { }
         }
 
-        private async void CleanupTodoSessionTracker()
+        /// <summary>
+        /// Cleans up the TodoList session tracker when leaving the page
+        /// </summary>
+        private async Task CleanupTodoSessionTracker()
         {
             try
             {

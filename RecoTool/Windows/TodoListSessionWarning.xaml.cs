@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
@@ -16,10 +17,10 @@ namespace RecoTool.Windows
         private TodoListSessionTracker _sessionTracker;
         private int _currentTodoId;
         private DispatcherTimer _refreshTimer;
+        private DispatcherTimer _notificationClearTimer;
         private ObservableCollection<SessionViewModel> _activeSessions;
-        private bool _hasActiveSessions;
-        private bool _hasEditingSessions;
-        private int _refreshRunning; // Re-entrancy guard
+        private HashSet<string> _previousUserIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private int _refreshRunning;
 
         public event PropertyChangedEventHandler PropertyChanged;
 
@@ -29,149 +30,158 @@ namespace RecoTool.Windows
             DataContext = this;
 
             _activeSessions = new ObservableCollection<SessionViewModel>();
-            
-            // Refresh every 10 seconds — lightweight, non-blocking
-            _refreshTimer = new DispatcherTimer
-            {
-                Interval = TimeSpan.FromSeconds(10)
-            };
+
+            _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
             _refreshTimer.Tick += async (s, e) => await RefreshSessionsAsync();
+
+            _notificationClearTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
+            _notificationClearTimer.Tick += (s, e) =>
+            {
+                _notificationClearTimer.Stop();
+                NotificationMessage = null;
+                HasNotification = false;
+            };
         }
 
         public ObservableCollection<SessionViewModel> ActiveSessions
         {
             get => _activeSessions;
-            set
-            {
-                _activeSessions = value;
-                OnPropertyChanged(nameof(ActiveSessions));
-            }
+            set { _activeSessions = value; OnPropertyChanged(nameof(ActiveSessions)); }
         }
 
-        public bool HasActiveSessions
+        private string _summaryMessage;
+        public string SummaryMessage
         {
-            get => _hasActiveSessions;
-            set
-            {
-                _hasActiveSessions = value;
-                OnPropertyChanged(nameof(HasActiveSessions));
-            }
+            get => _summaryMessage;
+            set { _summaryMessage = value; OnPropertyChanged(nameof(SummaryMessage)); }
         }
 
-        public bool HasEditingSessions
+        private string _notificationMessage;
+        public string NotificationMessage
         {
-            get => _hasEditingSessions;
-            set
-            {
-                _hasEditingSessions = value;
-                OnPropertyChanged(nameof(HasEditingSessions));
-            }
+            get => _notificationMessage;
+            set { _notificationMessage = value; OnPropertyChanged(nameof(NotificationMessage)); }
         }
 
-        /// <summary>
-        /// Initializes the warning control for a specific TodoList item
-        /// </summary>
+        private bool _hasNotification;
+        public bool HasNotification
+        {
+            get => _hasNotification;
+            set { _hasNotification = value; OnPropertyChanged(nameof(HasNotification)); }
+        }
+
+        private string _lastRefreshText;
+        public string LastRefreshText
+        {
+            get => _lastRefreshText;
+            set { _lastRefreshText = value; OnPropertyChanged(nameof(LastRefreshText)); }
+        }
+
         public async Task InitializeAsync(TodoListSessionTracker sessionTracker, int todoId)
         {
             _sessionTracker = sessionTracker;
             _currentTodoId = todoId;
+            _previousUserIds.Clear();
 
             await RefreshSessionsAsync();
-            
-            // Always start auto-refresh to detect new sessions
+
             if (!_refreshTimer.IsEnabled)
-            {
                 _refreshTimer.Start();
-            }
         }
 
-        /// <summary>
-        /// Loads and displays active sessions for a TodoList item
-        /// </summary>
         public async Task LoadSessionsAsync(TodoListSessionTracker sessionTracker, int todoId)
         {
-            _sessionTracker = sessionTracker;
-            _currentTodoId = todoId;
-
-            await RefreshSessionsAsync();
-            
-            // Update UI visibility
-            UpdateVisibility();
-            
-            // Always start auto-refresh to detect new sessions
-            if (!_refreshTimer.IsEnabled)
-            {
-                _refreshTimer.Start();
-            }
+            await InitializeAsync(sessionTracker, todoId);
         }
 
-        /// <summary>
-        /// Stops monitoring and cleans up
-        /// </summary>
         public void Stop()
         {
             _refreshTimer?.Stop();
+            _notificationClearTimer?.Stop();
         }
 
-        /// <summary>
-        /// Refreshes the list of active sessions
-        /// </summary>
         private async Task RefreshSessionsAsync()
         {
             if (_sessionTracker == null || _currentTodoId == 0) return;
 
-            // Re-entrancy guard: skip if previous refresh is still running
             if (System.Threading.Interlocked.Exchange(ref _refreshRunning, 1) == 1)
                 return;
 
             try
             {
                 var sessions = await _sessionTracker.GetActiveSessionsAsync(_currentTodoId);
-                var activeSessions = sessions.Where(s => s.IsActive).ToList();
+                var active = sessions.Where(s => s.IsActive).ToList();
 
-                // Use BeginInvoke (non-blocking) instead of Invoke to avoid UI contention
                 Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
                 {
                     try
                     {
-                        ActiveSessions.Clear();
-                        foreach (var session in activeSessions)
+                        // Detect joins and leaves
+                        var currentIds = new HashSet<string>(
+                            active.Select(s => s.UserId ?? ""),
+                            StringComparer.OrdinalIgnoreCase);
+
+                        if (_previousUserIds.Count > 0)
                         {
-                            ActiveSessions.Add(new SessionViewModel(session));
+                            var joined = active
+                                .Where(s => !_previousUserIds.Contains(s.UserId ?? ""))
+                                .Select(s => s.UserName ?? s.UserId)
+                                .ToList();
+                            var left = _previousUserIds
+                                .Where(id => !currentIds.Contains(id))
+                                .ToList();
+
+                            if (joined.Count > 0)
+                            {
+                                NotificationMessage = $"{string.Join(", ", joined)} joined";
+                                HasNotification = true;
+                                _notificationClearTimer.Stop();
+                                _notificationClearTimer.Start();
+                            }
+                            else if (left.Count > 0)
+                            {
+                                NotificationMessage = $"{left.Count} user(s) left";
+                                HasNotification = true;
+                                _notificationClearTimer.Stop();
+                                _notificationClearTimer.Start();
+                            }
                         }
 
-                        HasActiveSessions = ActiveSessions.Count > 0;
-                        HasEditingSessions = false;
-                        UpdateVisibility();
+                        _previousUserIds = currentIds;
+
+                        // Update session list
+                        ActiveSessions.Clear();
+                        foreach (var s in active)
+                            ActiveSessions.Add(new SessionViewModel(s));
+
+                        // Update summary
+                        if (active.Count == 0)
+                        {
+                            SummaryMessage = null;
+                            Visibility = Visibility.Collapsed;
+                        }
+                        else if (active.Count == 1)
+                        {
+                            var u = active[0].UserName ?? active[0].UserId;
+                            SummaryMessage = $"{u} is also viewing this TodoList";
+                            Visibility = Visibility.Visible;
+                        }
+                        else
+                        {
+                            SummaryMessage = $"{active.Count} other users on this TodoList";
+                            Visibility = Visibility.Visible;
+                        }
+
+                        LastRefreshText = DateTime.Now.ToString("HH:mm");
                     }
                     catch { }
                 }));
             }
-            catch { /* Silently fail */ }
+            catch { }
             finally
             {
                 System.Threading.Interlocked.Exchange(ref _refreshRunning, 0);
             }
-        }
-
-        /// <summary>
-        /// Updates the visibility of the control and its child elements
-        /// </summary>
-        private void UpdateVisibility()
-        {
-            try
-            {
-                // Show/hide the entire control
-                Visibility = HasActiveSessions ? Visibility.Visible : Visibility.Collapsed;
-                
-                // Show/hide the editing warning
-                var editingWarning = FindName("EditingWarning") as TextBlock;
-                if (editingWarning != null)
-                {
-                    editingWarning.Visibility = HasEditingSessions ? Visibility.Visible : Visibility.Collapsed;
-                }
-            }
-            catch { /* Best effort */ }
         }
 
         protected void OnPropertyChanged(string propertyName)
@@ -180,9 +190,6 @@ namespace RecoTool.Windows
         }
     }
 
-    /// <summary>
-    /// ViewModel for displaying session information
-    /// </summary>
     public class SessionViewModel
     {
         private readonly TodoSessionInfo _session;
@@ -193,22 +200,17 @@ namespace RecoTool.Windows
         }
 
         public string UserName => _session.UserName ?? _session.UserId;
-        public bool IsEditing => false; // IsEditing removed from simplified tracker
 
         public string StatusText => "viewing";
-
-        public Brush StatusColor => new SolidColorBrush(Color.FromRgb(255, 193, 7)); // Yellow for viewing
 
         public string DurationText
         {
             get
             {
                 var duration = _session.Duration;
-                if (duration.TotalMinutes < 1)
-                    return "(just now)";
-                if (duration.TotalMinutes < 60)
-                    return $"({(int)duration.TotalMinutes}m ago)";
-                return $"({(int)duration.TotalHours}h ago)";
+                if (duration.TotalMinutes < 1) return "(just now)";
+                if (duration.TotalMinutes < 60) return $"({(int)duration.TotalMinutes}m)";
+                return $"({(int)duration.TotalHours}h)";
             }
         }
     }

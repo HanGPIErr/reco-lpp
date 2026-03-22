@@ -10,41 +10,57 @@
         <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
     </UserControl.Resources>
 
-    <Border x:Name="WarningBorder" Background="#FFF3CD" BorderBrush="#FFC107" BorderThickness="1" CornerRadius="4" Padding="12,8">
-        <StackPanel>
-            <!-- Warning Header -->
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                <TextBlock Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="16" 
-                           Foreground="#FF8C00" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <TextBlock Text="Multi-User Warning" FontWeight="Bold" Foreground="#856404" VerticalAlignment="Center"/>
+    <Border x:Name="WarningBorder" CornerRadius="6" Padding="10,7" Margin="0,0,0,2">
+        <Border.Style>
+            <Style TargetType="Border">
+                <Setter Property="Background" Value="#E8F4FD"/>
+                <Setter Property="BorderBrush" Value="#90CAF9"/>
+                <Setter Property="BorderThickness" Value="1"/>
+            </Style>
+        </Border.Style>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Icon -->
+            <TextBlock Grid.Column="0" Text="&#xE716;" FontFamily="Segoe MDL2 Assets" FontSize="16" 
+                       Foreground="#1976D2" VerticalAlignment="Center" Margin="0,0,10,0"/>
+
+            <!-- Content -->
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <!-- Summary line -->
+                <TextBlock x:Name="SummaryText" FontSize="12" Foreground="#1565C0" FontWeight="SemiBold"
+                           Text="{Binding SummaryMessage}" TextTrimming="CharacterEllipsis"/>
+
+                <!-- User details (expandable) -->
+                <ItemsControl x:Name="SessionsList" ItemsSource="{Binding ActiveSessions}" Margin="0,3,0,0">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal" Margin="0,1,0,1">
+                                <Ellipse Width="6" Height="6" Fill="#4CAF50" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock VerticalAlignment="Center" FontSize="11" Foreground="#37474F">
+                                    <Run Text="{Binding UserName, Mode=OneWay}" FontWeight="SemiBold"/>
+                                    <Run Text=" — "/>
+                                    <Run Text="{Binding StatusText, Mode=OneWay}"/>
+                                    <Run Text="{Binding DurationText, Mode=OneWay}" Foreground="#90A4AE" FontSize="10"/>
+                                </TextBlock>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- Join/leave notification -->
+                <TextBlock x:Name="NotificationText" FontSize="10" Foreground="#FF8F00" FontStyle="Italic"
+                           Text="{Binding NotificationMessage}" Margin="0,2,0,0"
+                           Visibility="{Binding HasNotification, Converter={StaticResource BoolToVisibilityConverter}}"/>
             </StackPanel>
-            
-            <!-- Active Users List -->
-            <ItemsControl x:Name="SessionsList" ItemsSource="{Binding ActiveSessions}">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <StackPanel Orientation="Horizontal" Margin="24,2,0,2">
-                            <!-- User Icon -->
-                            <TextBlock Text="&#xE77B;" FontFamily="Segoe MDL2 Assets" FontSize="12" 
-                                       Foreground="#856404" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            
-                            <!-- User Info -->
-                            <TextBlock VerticalAlignment="Center">
-                                <Run Text="{Binding UserName, Mode=OneWay}" FontWeight="SemiBold"/>
-                                <Run Text="is" Foreground="#856404"/>
-                                <Run Text="{Binding StatusText, Mode=OneWay}" FontWeight="SemiBold" 
-                                     Foreground="{Binding StatusColor, Mode=OneWay}"/>
-                                <Run Text="this item" Foreground="#856404"/>
-                                <Run Text="{Binding DurationText, Mode=OneWay}" FontSize="10" Foreground="#999"/>
-                            </TextBlock>
-                        </StackPanel>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-            
-            <!-- Action Hint -->
-            <TextBlock x:Name="EditingWarning" Text="⚠️ Proceed with caution to avoid conflicts" 
-                       FontSize="10" Foreground="#856404" Margin="24,4,0,0" FontStyle="Italic"/>
-        </StackPanel>
+
+            <!-- Dismiss / timestamp -->
+            <TextBlock Grid.Column="2" Text="{Binding LastRefreshText}" FontSize="9" Foreground="#90A4AE" 
+                       VerticalAlignment="Center" Margin="10,0,0,0"/>
+        </Grid>
     </Border>
 </UserControl>

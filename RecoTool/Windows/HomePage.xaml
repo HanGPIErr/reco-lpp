@@ -112,8 +112,6 @@
 
             <!-- KPI Cards -->
             <TextBlock Text="KPI CARDS" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8" Foreground="{DynamicResource BNPMainGreenBrush}"/>
-            <!-- Session tracking diagnostic (temporary — remove once confirmed working) -->
-            <TextBlock Text="{Binding SessionDiagStatus}" FontSize="9" Foreground="#999" Margin="0,0,0,4" TextWrapping="Wrap"/>
             <ItemsControl ItemsSource="{Binding TodoCards}" HorizontalAlignment="Left">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
@@ -195,15 +193,14 @@
                                             </Border>
                                             <TextBlock HorizontalAlignment="Center" Grid.Column="1" Text="{Binding Item.TDL_Name}" Foreground="White" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
                                             <!-- Multi-user badge -->
-                                            <Border Grid.Column="2" CornerRadius="8" Padding="5,2" VerticalAlignment="Center"
+                                            <Border Grid.Column="2" CornerRadius="10" Padding="6,3" VerticalAlignment="Center"
                                                     Visibility="{Binding HasActiveUsers, Converter={StaticResource BoolToVisibilityConverter}}"
+                                                    Background="{Binding ActiveUsersBadgeBackground}"
                                                     ToolTip="{Binding ActiveUsersTooltip}">
-                                                <Border.Style>
-                                                    <Style TargetType="Border">
-                                                        <Setter Property="Background" Value="#80FFFFFF"/>
-                                                    </Style>
-                                                </Border.Style>
-                                                <TextBlock Text="{Binding ActiveUsersText}" FontSize="9" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#333"/>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="&#xE77B;" FontFamily="Segoe MDL2 Assets" FontSize="10" VerticalAlignment="Center" Foreground="#333" Margin="0,0,3,0"/>
+                                                    <TextBlock Text="{Binding ActiveUsersText}" FontSize="9" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#333"/>
+                                                </StackPanel>
                                             </Border>
                                         </Grid>
                                     </Border>
