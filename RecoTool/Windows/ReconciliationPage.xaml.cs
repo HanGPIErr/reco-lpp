@@ -1885,9 +1885,11 @@ namespace RecoTool.Windows
             catch { }
             
             // Check multi-user conflicts and register session if in TodoList mode
+            System.Diagnostics.Debug.WriteLine($"[AddView] IsTodoMode={IsTodoMode}, SelectedTodoItem={SelectedTodoItem?.TDL_id}");
             if (IsTodoMode && SelectedTodoItem != null)
             {
                 var todoId = SelectedTodoItem.TDL_id;
+                System.Diagnostics.Debug.WriteLine($"[AddView] TodoId={todoId}, checking multi-user...");
 
                 // Warn if another user is already editing this TodoList
                 var canProceed = await CheckAndWarnMultiUserBeforeOpeningTodoAsync(todoId);
@@ -1896,10 +1898,16 @@ namespace RecoTool.Windows
 
                 // Register session (only if not already registered for this TodoId)
                 var alreadyRegistered = _viewTodoIds.Values.Contains(todoId);
+                System.Diagnostics.Debug.WriteLine($"[AddView] alreadyRegistered={alreadyRegistered}");
                 if (!alreadyRegistered)
                 {
                     await RegisterTodoSessionAsync(todoId);
+                    System.Diagnostics.Debug.WriteLine($"[AddView] RegisterTodoSessionAsync completed for TodoId={todoId}");
                 }
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine($"[AddView] SKIPPED registration: IsTodoMode={IsTodoMode}, SelectedTodoItem is null={SelectedTodoItem == null}");
             }
             
             await AwaitSafeToOpenViewAsync();

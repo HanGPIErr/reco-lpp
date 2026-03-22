@@ -112,6 +112,8 @@
 
             <!-- KPI Cards -->
             <TextBlock Text="KPI CARDS" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8" Foreground="{DynamicResource BNPMainGreenBrush}"/>
+            <!-- Session tracking diagnostic (temporary — remove once confirmed working) -->
+            <TextBlock Text="{Binding SessionDiagStatus}" FontSize="9" Foreground="#999" Margin="0,0,0,4" TextWrapping="Wrap"/>
             <ItemsControl ItemsSource="{Binding TodoCards}" HorizontalAlignment="Left">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>

@@ -27,6 +27,8 @@ namespace RecoTool.Services
         private readonly object _lock = new object();
         private bool _disposed;
         private int _heartbeatRunning;
+        private string _lastError;
+        private DateTime _lastSuccessfulOp;
 
         private const int HEARTBEAT_INTERVAL_MS = 60_000;
         private const int SESSION_TIMEOUT_SECONDS = 180;
@@ -55,6 +57,62 @@ namespace RecoTool.Services
             {
                 _heartbeatTimer = new Timer(HeartbeatCallback, null, HEARTBEAT_INTERVAL_MS, HEARTBEAT_INTERVAL_MS);
             }
+            LogDiag($"Tracker created. Folder={_sessionFolder}, User={_currentUserId}");
+        }
+
+        /// <summary>
+        /// Returns a diagnostic summary of the tracker state.
+        /// </summary>
+        public string GetDiagnostics()
+        {
+            try
+            {
+                var folderExists = Directory.Exists(_sessionFolder);
+                int fileCount = 0;
+                string[] files = null;
+                if (folderExists)
+                {
+                    files = Directory.GetFiles(_sessionFolder, "*.session");
+                    fileCount = files.Length;
+                }
+                int trackedCount;
+                lock (_lock) { trackedCount = _trackedTodoIds.Count; }
+                return $"Folder: {_sessionFolder}\n" +
+                       $"Folder exists: {folderExists}\n" +
+                       $"Session files: {fileCount}\n" +
+                       $"Tracked TodoIds: {trackedCount}\n" +
+                       $"User: {_currentUserId}\n" +
+                       $"Last error: {_lastError ?? "(none)"}\n" +
+                       $"Last OK: {_lastSuccessfulOp:HH:mm:ss}\n" +
+                       (files != null && files.Length > 0 ? $"Files: {string.Join(", ", files.Select(Path.GetFileName))}" : "Files: (none)");
+            }
+            catch (Exception ex)
+            {
+                return $"Diagnostics error: {ex.Message}";
+            }
+        }
+
+        private void LogDiag(string message)
+        {
+            try
+            {
+                var line = $"[{DateTime.Now:HH:mm:ss.fff}] [{_currentUserId}] {message}";
+                System.Diagnostics.Debug.WriteLine($"[SessionTracker] {line}");
+                // Also write to a log file in the session folder for cross-PC debugging
+                if (!string.IsNullOrWhiteSpace(_sessionFolder))
+                {
+                    try
+                    {
+                        if (!Directory.Exists(_sessionFolder))
+                            Directory.CreateDirectory(_sessionFolder);
+                        File.AppendAllText(
+                            Path.Combine(_sessionFolder, "_session_diag.log"),
+                            line + Environment.NewLine);
+                    }
+                    catch { }
+                }
+            }
+            catch { }
         }
 
         /// <summary>
@@ -109,14 +167,16 @@ namespace RecoTool.Services
                             // Already registered — just touch it
                             File.SetLastWriteTimeUtc(filePath, DateTime.UtcNow);
                         }
+                        _lastSuccessfulOp = DateTime.Now;
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[SessionTracker.Register] File write error: {ex.Message}");
+                        _lastError = $"Register file write: {ex.Message}";
+                        LogDiag($"Register FAILED: {ex.Message}");
                     }
                 }).ConfigureAwait(false);
 
-                System.Diagnostics.Debug.WriteLine($"[SessionTracker] Registered TodoId={todoId} User={_currentUserId}");
+                LogDiag($"Registered TodoId={todoId} User={_currentUserId} File={filePath}");
                 return true;
             }
             catch (Exception ex)
@@ -214,7 +274,8 @@ namespace RecoTool.Services
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[SessionTracker.GetActiveSessions] ERROR: {ex.Message}");
+                    _lastError = $"GetActiveSessions: {ex.Message}";
+                    LogDiag($"GetActiveSessions FAILED: {ex.Message}");
                 }
                 return sessions;
             }).ConfigureAwait(false);

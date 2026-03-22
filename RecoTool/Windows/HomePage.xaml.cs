@@ -2428,6 +2428,12 @@ namespace RecoTool.Windows
         #region TodoCard Multi-User Indicators
 
         private int _todoSessionRefreshRunning; // Re-entrancy guard: 0=idle, 1=running
+        private string _sessionDiagStatus = "Not initialized";
+        public string SessionDiagStatus
+        {
+            get => _sessionDiagStatus;
+            set { _sessionDiagStatus = value; OnPropertyChanged(); }
+        }
 
         /// <summary>
         /// Setup timer to refresh TodoCard multi-user indicators
@@ -2458,9 +2464,17 @@ namespace RecoTool.Windows
                 if (_todoSessionTracker == null)
                 {
                     InitializeTodoSessionTracker();
-                    if (_todoSessionTracker == null) return;
+                    if (_todoSessionTracker == null)
+                    {
+                        SessionDiagStatus = $"[{DateTime.Now:HH:mm:ss}] Tracker NULL after init";
+                        return;
+                    }
                 }
-                if (TodoCards == null || TodoCards.Count == 0) return;
+                if (TodoCards == null || TodoCards.Count == 0)
+                {
+                    SessionDiagStatus = $"[{DateTime.Now:HH:mm:ss}] No TodoCards";
+                    return;
+                }
 
                 // Collect all TodoIds and do ONE batch directory scan
                 var todoIds = TodoCards
@@ -2469,9 +2483,14 @@ namespace RecoTool.Windows
                     .Distinct()
                     .ToList();
 
-                if (todoIds.Count == 0) return;
+                if (todoIds.Count == 0)
+                {
+                    SessionDiagStatus = $"[{DateTime.Now:HH:mm:ss}] No valid TodoIds";
+                    return;
+                }
 
                 var allSessions = await _todoSessionTracker.GetAllActiveSessionsAsync(todoIds);
+                int totalSessionsFound = allSessions.Values.Sum(l => l.Count);
 
                 // Update UI (already on dispatcher thread from DispatcherTimer)
                 foreach (var card in TodoCards)
@@ -2489,10 +2508,12 @@ namespace RecoTool.Windows
                         card.ActiveUsersTooltip = "";
                     }
                 }
+
+                SessionDiagStatus = $"[{DateTime.Now:HH:mm:ss}] OK — {todoIds.Count} cards, {totalSessionsFound} other sessions\n{_todoSessionTracker.GetDiagnostics()}";
             }
-            catch
+            catch (Exception ex)
             {
-                // Best effort, don't break UI
+                SessionDiagStatus = $"[{DateTime.Now:HH:mm:ss}] ERROR: {ex.Message}";
             }
             finally
             {
