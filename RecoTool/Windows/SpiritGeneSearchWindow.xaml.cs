@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using RecoTool.API;
@@ -12,6 +13,8 @@ namespace RecoTool.Windows
     public partial class SpiritGeneSearchWindow : Window
     {
         private readonly SpiritGene _spiritGene;
+        private SpiritGeneResultRow _selectedRow;
+        private bool _detailsLoaded = false;
 
         public SpiritGeneSearchWindow(SpiritGene spiritGene, OfflineFirstService offlineFirstService, DateTime? operationDate = null, decimal? amount = null, string bic = null)
         {
@@ -36,8 +39,9 @@ namespace RecoTool.Windows
             if (amount.HasValue)
             {
                 var abs = Math.Abs(amount.Value);
-                AmountMinBox.Text = (abs - 1).ToString("F2");
-                AmountMaxBox.Text = (abs + 1).ToString("F2");
+                // Use exact amount as both min and max
+                AmountMinBox.Text = abs.ToString("F2");
+                AmountMaxBox.Text = abs.ToString("F2");
 
                 // Set direction based on sign
                 DirectionCombo.SelectedIndex = amount.Value >= 0 ? 0 : 1; // R for positive, A for negative
@@ -67,7 +71,7 @@ namespace RecoTool.Windows
                 decimal amountMin = 0, amountMax = 999999999;
                 decimal.TryParse(AmountMinBox.Text, out amountMin);
                 decimal.TryParse(AmountMaxBox.Text, out amountMax);
-                if (amountMax < amountMin) amountMax = amountMin + 100;
+                if (amountMax < amountMin) amountMax = amountMin;
 
                 var direction = (DirectionCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "R";
 
@@ -89,12 +93,25 @@ namespace RecoTool.Windows
                         ITransid = op.ITransid,
                         LEndToEndId = op.LEndToEndId,
                         CCsm = op.CCsm,
-                        Sens = direction
+                        Sens = direction,
+                        DetailStatus = "Loading..."
                     }).ToList();
 
                     ResultsGrid.ItemsSource = displayList;
                     CountText.Text = $"{displayList.Count} transaction(s) found";
                     StatusText.Text = $"Found {displayList.Count} transaction(s)";
+
+                    // If less than 10 results, preload details automatically
+                    if (displayList.Count < 10)
+                    {
+                        StatusText.Text = "Loading transaction details...";
+                        await LoadDetailsForAllTransactions(displayList);
+                        StatusText.Text = $"Ready - {displayList.Count} transactions with details";
+                    }
+                    else
+                    {
+                        StatusText.Text = $"Ready - {displayList.Count} transactions (click to load details)";
+                    }
                 }
                 else
                 {
@@ -161,45 +178,248 @@ namespace RecoTool.Windows
             }
         }
 
-        private async void ResultsGrid_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private async Task LoadDetailsForAllTransactions(List<SpiritGeneResultRow> transactions)
+        {
+            var tasks = transactions.Select(async row =>
+            {
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(row.ITransid) || !string.IsNullOrWhiteSpace(row.IMsgId))
+                    {
+                        var detail = await _spiritGene.GetTransactionDetails(row.ITransid, row.IMsgId, row.Sens ?? "R");
+                        if (detail != null)
+                        {
+                            row.TransactionDetail = detail;
+                            row.DetailStatus = "✓";
+                        }
+                        else
+                        {
+                            row.DetailStatus = "✗";
+                        }
+                    }
+                    else
+                    {
+                        row.DetailStatus = "N/A";
+                    }
+                }
+                catch
+                {
+                    row.DetailStatus = "✗";
+                }
+            });
+
+            await Task.WhenAll(tasks);
+            
+            // Refresh the grid to show updated status
+            if (ResultsGrid.ItemsSource != null)
+            {
+                var refreshed = ResultsGrid.ItemsSource.Cast<SpiritGeneResultRow>().ToList();
+                ResultsGrid.ItemsSource = null;
+                ResultsGrid.ItemsSource = refreshed;
+            }
+        }
+
+        private async void ResultsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             var row = ResultsGrid.SelectedItem as SpiritGeneResultRow;
-            if (row == null) return;
+            if (row == null)
+            {
+                ShowEmptyDetails();
+                return;
+            }
 
+            _selectedRow = row;
+            
+            // If details are already loaded, show them
+            if (row.TransactionDetail != null)
+            {
+                ShowTransactionDetails(row);
+                return;
+            }
+
+            // If no details yet, load them (for >=10 results scenario)
             if (string.IsNullOrWhiteSpace(row.ITransid) && string.IsNullOrWhiteSpace(row.IMsgId))
             {
-                MessageBox.Show("No Transaction ID or Message ID available for this row.", "Details unavailable", MessageBoxButton.OK, MessageBoxImage.Warning);
+                ShowEmptyDetails("No Transaction ID or Message ID available for this transaction.");
                 return;
             }
 
             try
             {
                 StatusText.Text = "Loading details...";
-                IsEnabled = false;
-
+                
                 var detail = await _spiritGene.GetTransactionDetails(row.ITransid, row.IMsgId, row.Sens ?? "R");
 
-                if (detail == null)
+                if (detail != null)
                 {
-                    MessageBox.Show("No details returned for this transaction.", "No data", MessageBoxButton.OK, MessageBoxImage.Information);
-                    return;
+                    row.TransactionDetail = detail;
+                    row.DetailStatus = "✓";
+                    ShowTransactionDetails(row);
+                    
+                    // Refresh grid to show updated status
+                    var refreshed = ResultsGrid.ItemsSource.Cast<SpiritGeneResultRow>().ToList();
+                    ResultsGrid.ItemsSource = null;
+                    ResultsGrid.ItemsSource = refreshed;
+                    ResultsGrid.SelectedItem = row; // Re-select the row
                 }
-
-                var detailWindow = new SpiritGeneDetailWindow(detail, row.ITransid ?? row.IMsgId)
+                else
                 {
-                    Owner = this
-                };
-                detailWindow.Show();
+                    row.DetailStatus = "✗";
+                    ShowEmptyDetails("No details returned for this transaction.");
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed to load details: {ex.Message}", "SpiritGene Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                row.DetailStatus = "✗";
+                ShowEmptyDetails($"Failed to load details: {ex.Message}");
             }
             finally
             {
-                IsEnabled = true;
                 StatusText.Text = string.Empty;
             }
+        }
+
+        private void ShowTransactionDetails(SpiritGeneResultRow row)
+        {
+            var detail = row.TransactionDetail;
+            if (detail == null) return;
+
+            DetailsPanel.Children.Clear();
+            
+            // Transaction Header
+            var header = new TextBlock 
+            { 
+                Text = $"Transaction {row.ITransid ?? row.IMsgId}", 
+                FontWeight = FontWeights.Bold, 
+                FontSize = 14,
+                Margin = new Thickness(0, 0, 0, 12)
+            };
+            DetailsPanel.Children.Add(header);
+
+            // Create detail groups
+            AddDetailGroup("Basic Information", new Dictionary<string, string>
+            {
+                ["Transaction Type"] = detail.CTypeOpe ?? "N/A",
+                ["Status"] = detail.CStatOpe ?? "N/A",
+                ["Execution Date"] = detail.DExeOpe ?? "N/A",
+                ["Settlement Date"] = detail.DRgltOpe ?? "N/A",
+                ["Currency"] = detail.CDevise ?? "N/A"
+            });
+
+            AddDetailGroup("Amount Information", new Dictionary<string, string>
+            {
+                ["Amount"] = detail.MOpe?.ToString("F2") ?? "N/A",
+                ["Commission Amount"] = detail.MCom?.ToString("F2") ?? "N/A",
+                ["Commission Tax"] = detail.MComTax?.ToString("F2") ?? "N/A"
+            });
+
+            AddDetailGroup("Debitor Information", new Dictionary<string, string>
+            {
+                ["Name"] = detail.LNomDo ?? "N/A",
+                ["Address"] = $"{detail.LAdr1Do} {detail.LAdr2Do}".Trim(),
+                ["City"] = $"{detail.LCpDo} {detail.LVilleDo}".Trim(),
+                ["Country"] = detail.LPaysDo ?? "N/A",
+                ["IBAN"] = detail.IIbanDo ?? "N/A",
+                ["BIC"] = detail.IBicDo ?? "N/A"
+            });
+
+            AddDetailGroup("Creditor Information", new Dictionary<string, string>
+            {
+                ["Name"] = detail.LNomBen ?? "N/A",
+                ["Address"] = $"{detail.LAdr1Ben} {detail.LAdr2Ben}".Trim(),
+                ["City"] = $"{detail.LCpBen} {detail.LVilleBen}".Trim(),
+                ["Country"] = detail.LPaysBen ?? "N/A",
+                ["IBAN"] = detail.IIbanBen ?? "N/A",
+                ["BIC"] = detail.IBicBen ?? "N/A"
+            });
+
+            AddDetailGroup("Communication", new Dictionary<string, string>
+            {
+                ["Message ID"] = detail.IMsgId ?? "N/A",
+                ["End-to-End ID"] = detail.LEndToEndId ?? "N/A",
+                ["Transaction ID"] = detail.ITransid ?? "N/A",
+                ["Communication"] = detail.LCom ?? "N/A",
+                ["Structured Communication"] = detail.LComStr ?? "N/A"
+            });
+
+            if (!string.IsNullOrWhiteSpace(detail.LMotifRejet))
+            {
+                AddDetailGroup("Rejection Information", new Dictionary<string, string>
+                {
+                    ["Rejection Reason"] = detail.LMotifRejet
+                });
+            }
+        }
+
+        private void AddDetailGroup(string title, Dictionary<string, string> details)
+        {
+            if (details == null || details.All(kvp => string.IsNullOrWhiteSpace(kvp.Value)))
+                return;
+
+            // Group header
+            var groupHeader = new Border 
+            { 
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(240, 240, 240)),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(8, 4),
+                Margin = new Thickness(0, 8, 0, 4)
+            };
+            var headerText = new TextBlock 
+            { 
+                Text = title, 
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(25, 118, 210))
+            };
+            groupHeader.Child = headerText;
+            DetailsPanel.Children.Add(groupHeader);
+
+            // Detail items
+            foreach (var kvp in details)
+            {
+                if (string.IsNullOrWhiteSpace(kvp.Value)) continue;
+
+                var detailGrid = new Grid 
+                { 
+                    Margin = new Thickness(8, 2)
+                };
+                detailGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                detailGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+                var label = new TextBlock 
+                { 
+                    Text = kvp.Key + ":", 
+                    FontWeight = FontWeights.Medium,
+                    TextWrapping = TextWrapping.Wrap
+                };
+                Grid.SetColumn(label, 0);
+                
+                var value = new TextBlock 
+                { 
+                    Text = kvp.Value, 
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(4, 0, 0, 0)
+                };
+                Grid.SetColumn(value, 1);
+
+                detailGrid.Children.Add(label);
+                detailGrid.Children.Add(value);
+                DetailsPanel.Children.Add(detailGrid);
+            }
+        }
+
+        private void ShowEmptyDetails(string message = null)
+        {
+            DetailsPanel.Children.Clear();
+            var emptyText = new TextBlock 
+            { 
+                Text = message ?? "Select a transaction to view details", 
+                TextAlignment = TextAlignment.Center, 
+                VerticalAlignment = VerticalAlignment.Center, 
+                Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(153, 153, 153)), 
+                FontStyle = FontStyles.Italic,
+                Margin = new Thickness(0, 40, 0, 0)
+            };
+            DetailsPanel.Children.Add(emptyText);
         }
 
         private void CloseButton_Click(object sender, RoutedEventArgs e)
@@ -228,5 +448,7 @@ namespace RecoTool.Windows
         public string LEndToEndId { get; set; }
         public string CCsm { get; set; }
         public string Sens { get; set; }
+        public string DetailStatus { get; set; } // ✓, ✗, N/A, Loading...
+        public SpiritGeneTransactionDetailOutput.GDetOpe TransactionDetail { get; set; }
     }
 }

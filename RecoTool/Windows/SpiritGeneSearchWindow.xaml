@@ -70,40 +70,89 @@
         <!-- Status -->
         <TextBlock Grid.Row="1" x:Name="StatusText" Text="" Margin="0,0,0,4" FontStyle="Italic" Foreground="#666"/>
 
-        <!-- Results DataGrid -->
-        <DataGrid Grid.Row="2" x:Name="ResultsGrid"
-                  MouseDoubleClick="ResultsGrid_MouseDoubleClick"
-                  AutoGenerateColumns="False" IsReadOnly="True"
-                  CanUserAddRows="False" CanUserDeleteRows="False"
-                  SelectionMode="Single" SelectionUnit="FullRow"
-                  GridLinesVisibility="Horizontal"
-                  HeadersVisibility="Column"
-                  VirtualizingPanel.IsVirtualizing="True"
-                  VirtualizingPanel.VirtualizationMode="Recycling"
-                  EnableRowVirtualization="True">
-            <DataGrid.Columns>
-                <DataGridTextColumn Header="Type" Binding="{Binding CTypeOpe}" Width="80"/>
-                <DataGridTextColumn Header="Date" Binding="{Binding DRgltOpe}" Width="100"/>
-                <DataGridTextColumn Header="Amount" Binding="{Binding DisplayAmount}" Width="120">
-                    <DataGridTextColumn.ElementStyle>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="HorizontalAlignment" Value="Right"/>
-                        </Style>
-                    </DataGridTextColumn.ElementStyle>
-                </DataGridTextColumn>
-                <DataGridTextColumn Header="Ordering IBAN" Binding="{Binding IIbanDo}" Width="200"/>
-                <DataGridTextColumn Header="Ordering BIC" Binding="{Binding IBicDo}" Width="120"/>
-                <DataGridTextColumn Header="Beneficiary IBAN" Binding="{Binding IIbanBen}" Width="200"/>
-                <DataGridTextColumn Header="Beneficiary BIC" Binding="{Binding IBicBen}" Width="120"/>
-                <DataGridTextColumn Header="Message ID" Binding="{Binding IMsgId}" Width="180"/>
-                <DataGridTextColumn Header="End-to-End ID" Binding="{Binding LEndToEndId}" Width="180"/>
-                <DataGridTextColumn Header="CSM" Binding="{Binding CCsm}" Width="80"/>
-            </DataGrid.Columns>
-        </DataGrid>
+        <!-- Results Container - Split View -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="5"/>
+                <ColumnDefinition Width="400"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Results DataGrid -->
+            <DataGrid Grid.Column="0" x:Name="ResultsGrid"
+                      SelectionChanged="ResultsGrid_SelectionChanged"
+                      AutoGenerateColumns="False" IsReadOnly="True"
+                      CanUserAddRows="False" CanUserDeleteRows="False"
+                      SelectionMode="Single" SelectionUnit="FullRow"
+                      GridLinesVisibility="Horizontal"
+                      HeadersVisibility="Column"
+                      VirtualizingPanel.IsVirtualizing="True"
+                      VirtualizingPanel.VirtualizationMode="Recycling"
+                      EnableRowVirtualization="True">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Type" Binding="{Binding CTypeOpe}" Width="80"/>
+                    <DataGridTextColumn Header="Date" Binding="{Binding DRgltOpe}" Width="100"/>
+                    <DataGridTextColumn Header="Amount" Binding="{Binding DisplayAmount}" Width="120">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="HorizontalAlignment" Value="Right"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                    <DataGridTextColumn Header="Ordering IBAN" Binding="{Binding IIbanDo}" Width="200"/>
+                    <DataGridTextColumn Header="Ordering BIC" Binding="{Binding IBicDo}" Width="120"/>
+                    <DataGridTextColumn Header="Beneficiary IBAN" Binding="{Binding IIbanBen}" Width="200"/>
+                    <DataGridTextColumn Header="Beneficiary BIC" Binding="{Binding IBicBen}" Width="120"/>
+                    <DataGridTextColumn Header="Message ID" Binding="{Binding IMsgId}" Width="180"/>
+                    <DataGridTextColumn Header="End-to-End ID" Binding="{Binding LEndToEndId}" Width="180"/>
+                    <DataGridTextColumn Header="CSM" Binding="{Binding CCsm}" Width="80"/>
+                    <DataGridTextColumn Header="Status" Binding="{Binding DetailStatus}" Width="80">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="Green"/>
+                                <Setter Property="FontWeight" Value="Bold"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <!-- Splitter -->
+            <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" 
+                          Background="#E0E0E0" ShowsPreview="True"/>
+
+            <!-- Details Panel -->
+            <Border Grid.Column="2" BorderBrush="#DDD" BorderThickness="1" CornerRadius="4" Background="#FAFAFA">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Details Header -->
+                    <Border Grid.Row="0" Background="#1976D2" CornerRadius="4,4,0,0" Padding="12,8" Margin="-8,-8,-8,8">
+                        <TextBlock Text="Transaction Details" Foreground="White" FontWeight="SemiBold" FontSize="14"/>
+                    </Border>
+
+                    <!-- Details Content -->
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel x:Name="DetailsPanel" Margin="0,0,8,0">
+                            <!-- Default empty state -->
+                            <TextBlock Text="Select a transaction to view details" 
+                                       TextAlignment="Center" 
+                                       VerticalAlignment="Center" 
+                                       Foreground="#999" 
+                                       FontStyle="Italic"
+                                       Margin="0,40,0,0"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
 
         <!-- Footer -->
         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-            <TextBlock Text="Double-click a row to view details" VerticalAlignment="Center" Margin="0,0,16,0" Foreground="#999" FontStyle="Italic" FontSize="11"/>
+            <TextBlock Text="Click a transaction to view details" VerticalAlignment="Center" Margin="0,0,16,0" Foreground="#999" FontStyle="Italic" FontSize="11"/>
             <TextBlock x:Name="CountText" Text="" VerticalAlignment="Center" Margin="0,0,12,0" Foreground="#666"/>
             <Button Content="Close" Click="CloseButton_Click" Padding="12,6" IsCancel="True"/>
         </StackPanel>
