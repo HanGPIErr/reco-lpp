@@ -54,7 +54,7 @@ namespace RecoTool.Windows
                 .Take(maxItems)
                 .Select(r => new ActivityLogItem
                 {
-                    User = r.Reco_ModifiedBy,
+                    User = ResolveUserDisplayName(r.Reco_ModifiedBy),
                     Timestamp = r.Reco_LastModified,
                     TimeAgo = FormatTimeAgo(r.Reco_LastModified),
                     RecordRef = r.Reconciliation_Num ?? r.ID,

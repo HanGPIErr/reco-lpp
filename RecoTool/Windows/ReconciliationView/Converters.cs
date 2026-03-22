@@ -369,9 +369,11 @@ namespace RecoTool.Windows
                 string id = values?.Length > 0 ? values[0]?.ToString() : null;
                 var options = values?.Length > 1 ? values[1] as System.Collections.IEnumerable : null;
 
-                if (string.IsNullOrWhiteSpace(id) || options == null) return string.Empty;
+                if (string.IsNullOrWhiteSpace(id)) return string.Empty;
+                if (options == null) return id;
 
-                return FindNameById(options, id);
+                var name = FindNameById(options, id);
+                return string.IsNullOrEmpty(name) ? id : name;
             }
             catch { return string.Empty; }
         }
@@ -391,7 +393,7 @@ namespace RecoTool.Windows
                 }
                 catch { }
             }
-            return string.Empty;
+            return null; // caller decides fallback
         }
 
         public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture)

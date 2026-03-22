@@ -1770,7 +1770,20 @@
                             </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Swift Code" Binding="{Binding SwiftCode}" Width="100" HeaderStyle="{StaticResource UserHeaderStyle}"/>
                             <DataGridTextColumn Header="Payment Reference" Binding="{Binding PaymentReference}" Width="130" HeaderStyle="{StaticResource UserHeaderStyle}"/>
-                            <DataGridTextColumn Header="User" Binding="{Binding Reco_ModifiedBy}" Width="120" IsReadOnly="True" HeaderStyle="{StaticResource UserHeaderStyle}"/>
+                            <DataGridTemplateColumn Header="User" Width="120" IsReadOnly="True" SortMemberPath="Reco_ModifiedBy" HeaderStyle="{StaticResource UserHeaderStyle}">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock>
+                                            <TextBlock.Text>
+                                                <MultiBinding Converter="{StaticResource AssigneeIdToNameConverter}">
+                                                    <Binding Path="Reco_ModifiedBy"/>
+                                                    <Binding Path="DataContext.AssigneeOptions" RelativeSource="{RelativeSource AncestorType=UserControl}"/>
+                                                </MultiBinding>
+                                            </TextBlock.Text>
+                                        </TextBlock>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <!-- KPI: editable ComboBox -->
                             <DataGridTemplateColumn Header="KPI" Width="160" SortMemberPath="KPI" HeaderStyle="{StaticResource UserHeaderStyle}">
                                 <DataGridTemplateColumn.CellTemplate>

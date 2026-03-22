@@ -2578,9 +2578,27 @@ namespace RecoTool.Windows
         #region TodoList Multi-User Session Tracking
 
         /// <summary>
-        /// Initializes the TodoList session tracker for multi-user awareness
+        /// Initializes the TodoList session tracker for multi-user awareness.
+        /// Fire-and-forget wrapper for callers that cannot await (e.g. constructor).
         /// </summary>
         private async void InitializeTodoSessionTracker()
+        {
+            await InitializeTodoSessionTrackerCoreAsync();
+        }
+
+        /// <summary>
+        /// Ensures the tracker is initialized. Safe to call multiple times; no-op if already ready.
+        /// </summary>
+        private async Task EnsureTodoSessionTrackerAsync()
+        {
+            if (_todoSessionTracker != null) return;
+            await InitializeTodoSessionTrackerCoreAsync();
+        }
+
+        /// <summary>
+        /// Core awaitable initialization logic for the TodoList session tracker.
+        /// </summary>
+        private async Task InitializeTodoSessionTrackerCoreAsync()
         {
             try
             {
@@ -2635,8 +2653,9 @@ namespace RecoTool.Windows
         {
             try
             {
-                if (_todoSessionTracker == null || todoId <= 0)
-                    return true;
+                if (todoId <= 0) return true;
+                await EnsureTodoSessionTrackerAsync();
+                if (_todoSessionTracker == null) return true;
 
                 // Check if we already warned about this TodoList in this session
                 if (_warnedTodoIds.Contains(todoId))
@@ -2693,9 +2712,10 @@ namespace RecoTool.Windows
         {
             try
             {
+                await EnsureTodoSessionTrackerAsync();
                 if (_todoSessionTracker == null)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[RegisterTodoSession] Tracker is NULL");
+                    System.Diagnostics.Debug.WriteLine($"[RegisterTodoSession] Tracker is NULL after EnsureInit");
                     return;
                 }
                 
@@ -2749,6 +2769,7 @@ namespace RecoTool.Windows
                 var badge = FindName("TodoMultiUserBadge") as System.Windows.Controls.Border;
                 var text = FindName("TodoMultiUserText") as System.Windows.Controls.TextBlock;
                 if (badge == null || text == null) return;
+                await EnsureTodoSessionTrackerAsync();
                 if (_todoSessionTracker == null || todoId <= 0) { badge.Visibility = Visibility.Collapsed; return; }
 
                 var sessions = await _todoSessionTracker.GetActiveSessionsAsync(todoId);
