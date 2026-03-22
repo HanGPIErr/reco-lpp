@@ -2604,24 +2604,25 @@ namespace RecoTool.Windows
                 }
                 System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] Country: {country.CNT_Id}");
 
-                // Get Lock DB connection string for this country
+                // Derive file-based session folder from the lock DB connection string
                 var lockDbConnString = _offlineFirstService?.GetControlConnectionString(country.CNT_Id);
-                if (string.IsNullOrEmpty(lockDbConnString))
+                var sessionFolder = TodoListSessionTracker.DeriveSessionFolder(lockDbConnString);
+                if (string.IsNullOrEmpty(sessionFolder))
                 {
-                    System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] No lock DB connection string");
+                    System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] Cannot derive session folder");
                     return;
                 }
-                System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] LockDB: {lockDbConnString}");
+                System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] SessionFolder: {sessionFolder}");
                 
                 // Get current user ID
                 var currentUserId = Environment.UserName;
                 System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] User: {currentUserId}");
 
-                // Create tracker with OfflineFirstService reference to avoid lock contention during imports
-                _todoSessionTracker = new TodoListSessionTracker(lockDbConnString, currentUserId, _offlineFirstService);
+                // Create file-based tracker (no OleDb — uses lightweight .session files)
+                _todoSessionTracker = new TodoListSessionTracker(sessionFolder, currentUserId, _offlineFirstService);
                 System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] Tracker created");
 
-                // Ensure table exists (MUST await before any registration can happen)
+                // Ensure session folder exists (cheap mkdir, no DB)
                 await _todoSessionTracker.EnsureTableAsync();
                 System.Diagnostics.Debug.WriteLine($"[InitializeTodoSessionTracker] SUCCESS");
             }

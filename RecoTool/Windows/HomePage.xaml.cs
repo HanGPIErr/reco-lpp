@@ -2427,6 +2427,8 @@ namespace RecoTool.Windows
 
         #region TodoCard Multi-User Indicators
 
+        private int _todoSessionRefreshRunning; // Re-entrancy guard: 0=idle, 1=running
+
         /// <summary>
         /// Setup timer to refresh TodoCard multi-user indicators
         /// </summary>
@@ -2435,7 +2437,7 @@ namespace RecoTool.Windows
             _todoSessionRefreshTimer?.Stop();
             _todoSessionRefreshTimer = new System.Windows.Threading.DispatcherTimer
             {
-                Interval = TimeSpan.FromSeconds(10) // Refresh every 10 seconds (aligned with session check)
+                Interval = TimeSpan.FromSeconds(10) 
             };
             _todoSessionRefreshTimer.Tick += async (s, e) => await RefreshTodoCardSessionsAsync();
             _todoSessionRefreshTimer.Start();
@@ -2446,27 +2448,40 @@ namespace RecoTool.Windows
         /// </summary>
         private async Task RefreshTodoCardSessionsAsync()
         {
-            // Lazy re-init: tracker may be null if country wasn't set during constructor
-            if (_todoSessionTracker == null)
-            {
-                InitializeTodoSessionTracker();
-                if (_todoSessionTracker == null) return; // still null → no country yet
-            }
-            if (TodoCards == null || TodoCards.Count == 0) return;
+            // Re-entrancy guard: skip if previous tick is still running
+            if (System.Threading.Interlocked.Exchange(ref _todoSessionRefreshRunning, 1) == 1)
+                return;
 
             try
             {
-                System.Diagnostics.Debug.WriteLine("Refreshing TodoCard sessions...");
+                // Lazy re-init: tracker may be null if country wasn't set during constructor
+                if (_todoSessionTracker == null)
+                {
+                    InitializeTodoSessionTracker();
+                    if (_todoSessionTracker == null) return;
+                }
+                if (TodoCards == null || TodoCards.Count == 0) return;
+
+                // Collect all TodoIds and do ONE batch directory scan
+                var todoIds = TodoCards
+                    .Where(c => c?.Item != null && c.Item.TDL_id > 0)
+                    .Select(c => c.Item.TDL_id)
+                    .Distinct()
+                    .ToList();
+
+                if (todoIds.Count == 0) return;
+
+                var allSessions = await _todoSessionTracker.GetAllActiveSessionsAsync(todoIds);
+
+                // Update UI (already on dispatcher thread from DispatcherTimer)
                 foreach (var card in TodoCards)
                 {
                     if (card?.Item == null || card.Item.TDL_id <= 0) continue;
 
-                    var sessions = await _todoSessionTracker.GetActiveSessionsAsync(card.Item.TDL_id);
-                    if (sessions != null && sessions.Any())
+                    if (allSessions.TryGetValue(card.Item.TDL_id, out var sessions) && sessions.Count > 0)
                     {
                         card.ActiveUsersCount = sessions.Count;
-                        var names = sessions.Select(s => s.UserName ?? s.UserId ?? "?");
-                        card.ActiveUsersTooltip = string.Join("\n", names);
+                        card.ActiveUsersTooltip = string.Join("\n", sessions.Select(s => s.UserName ?? s.UserId ?? "?"));
                     }
                     else
                     {
@@ -2478,6 +2493,10 @@ namespace RecoTool.Windows
             catch
             {
                 // Best effort, don't break UI
+            }
+            finally
+            {
+                System.Threading.Interlocked.Exchange(ref _todoSessionRefreshRunning, 0);
             }
         }
 
@@ -2499,17 +2518,19 @@ namespace RecoTool.Windows
                 // Get current country
                 var country = _offlineFirstService?.CurrentCountry;
                 if (country == null) return;
-                // Get Lock DB connection string for this country (already a full connection string)
+
+                // Derive file-based session folder from the lock DB connection string
                 var lockDbConnString = _offlineFirstService?.GetControlConnectionString(country.CNT_Id);
-                if (string.IsNullOrEmpty(lockDbConnString)) return;
+                var sessionFolder = TodoListSessionTracker.DeriveSessionFolder(lockDbConnString);
+                if (string.IsNullOrEmpty(sessionFolder)) return;
 
                 // Get current user ID (Windows username)
                 var currentUserId = Environment.UserName;
 
-                // Create tracker with OfflineFirstService reference to avoid lock contention during imports
-                _todoSessionTracker = new TodoListSessionTracker(lockDbConnString, currentUserId, _offlineFirstService);
+                // Create file-based tracker (no OleDb — uses lightweight .session files)
+                _todoSessionTracker = new TodoListSessionTracker(sessionFolder, currentUserId, _offlineFirstService);
 
-                // Ensure table exists
+                // Ensure session folder exists (cheap mkdir, no DB)
                 _ = _todoSessionTracker.EnsureTableAsync();
             }
             catch (Exception ex)
@@ -2540,6 +2561,6 @@ namespace RecoTool.Windows
             }
             catch { /* best effort */ }
         }
+        #endregion
     }
-    #endregion
 }

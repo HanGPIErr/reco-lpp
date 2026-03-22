@@ -19,6 +19,7 @@ namespace RecoTool.Windows
         private ObservableCollection<SessionViewModel> _activeSessions;
         private bool _hasActiveSessions;
         private bool _hasEditingSessions;
+        private int _refreshRunning; // Re-entrancy guard
 
         public event PropertyChangedEventHandler PropertyChanged;
 
@@ -29,7 +30,7 @@ namespace RecoTool.Windows
 
             _activeSessions = new ObservableCollection<SessionViewModel>();
             
-            // Refresh every 10 seconds (aligned with session check)
+            // Refresh every 10 seconds — lightweight, non-blocking
             _refreshTimer = new DispatcherTimer
             {
                 Interval = TimeSpan.FromSeconds(10)
@@ -119,25 +120,38 @@ namespace RecoTool.Windows
         {
             if (_sessionTracker == null || _currentTodoId == 0) return;
 
+            // Re-entrancy guard: skip if previous refresh is still running
+            if (System.Threading.Interlocked.Exchange(ref _refreshRunning, 1) == 1)
+                return;
+
             try
             {
                 var sessions = await _sessionTracker.GetActiveSessionsAsync(_currentTodoId);
-                
-                Application.Current?.Dispatcher.Invoke(() =>
-                {
-                    ActiveSessions.Clear();
-                    foreach (var session in sessions.Where(s => s.IsActive))
-                    {
-                        ActiveSessions.Add(new SessionViewModel(session));
-                    }
+                var activeSessions = sessions.Where(s => s.IsActive).ToList();
 
-                    HasActiveSessions = ActiveSessions.Count > 0;
-                    HasEditingSessions = false; // IsEditing removed — all sessions are viewing
-                    
-                    UpdateVisibility();
-                });
+                // Use BeginInvoke (non-blocking) instead of Invoke to avoid UI contention
+                Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        ActiveSessions.Clear();
+                        foreach (var session in activeSessions)
+                        {
+                            ActiveSessions.Add(new SessionViewModel(session));
+                        }
+
+                        HasActiveSessions = ActiveSessions.Count > 0;
+                        HasEditingSessions = false;
+                        UpdateVisibility();
+                    }
+                    catch { }
+                }));
             }
             catch { /* Silently fail */ }
+            finally
+            {
+                System.Threading.Interlocked.Exchange(ref _refreshRunning, 0);
+            }
         }
 
         /// <summary>
