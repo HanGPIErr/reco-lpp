@@ -72,6 +72,7 @@
 
         <!-- Results DataGrid -->
         <DataGrid Grid.Row="2" x:Name="ResultsGrid"
+                  MouseDoubleClick="ResultsGrid_MouseDoubleClick"
                   AutoGenerateColumns="False" IsReadOnly="True"
                   CanUserAddRows="False" CanUserDeleteRows="False"
                   SelectionMode="Single" SelectionUnit="FullRow"
@@ -102,6 +103,7 @@
 
         <!-- Footer -->
         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+            <TextBlock Text="Double-click a row to view details" VerticalAlignment="Center" Margin="0,0,16,0" Foreground="#999" FontStyle="Italic" FontSize="11"/>
             <TextBlock x:Name="CountText" Text="" VerticalAlignment="Center" Margin="0,0,12,0" Foreground="#666"/>
             <Button Content="Close" Click="CloseButton_Click" Padding="12,6" IsCancel="True"/>
         </StackPanel>

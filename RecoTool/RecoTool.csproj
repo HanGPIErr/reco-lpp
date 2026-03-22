@@ -273,6 +273,9 @@
     <Compile Include="Windows\SpiritGeneSearchWindow.xaml.cs">
       <DependentUpon>SpiritGeneSearchWindow.xaml</DependentUpon>
     </Compile>
+    <Compile Include="Windows\SpiritGeneDetailWindow.xaml.cs">
+      <DependentUpon>SpiritGeneDetailWindow.xaml</DependentUpon>
+    </Compile>
     <Compile Include="Windows\MainWindow.xaml.cs">
       <DependentUpon>MainWindow.xaml</DependentUpon>
     </Compile>
@@ -370,6 +373,10 @@
       <SubType>Designer</SubType>
     </Page>
     <Page Include="Windows\SpiritGeneSearchWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\SpiritGeneDetailWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>

@@ -88,7 +88,8 @@ namespace RecoTool.Windows
                         IMsgId = op.IMsgId,
                         ITransid = op.ITransid,
                         LEndToEndId = op.LEndToEndId,
-                        CCsm = op.CCsm
+                        CCsm = op.CCsm,
+                        Sens = direction
                     }).ToList();
 
                     ResultsGrid.ItemsSource = displayList;
@@ -160,6 +161,47 @@ namespace RecoTool.Windows
             }
         }
 
+        private async void ResultsGrid_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            var row = ResultsGrid.SelectedItem as SpiritGeneResultRow;
+            if (row == null) return;
+
+            if (string.IsNullOrWhiteSpace(row.ITransid) && string.IsNullOrWhiteSpace(row.IMsgId))
+            {
+                MessageBox.Show("No Transaction ID or Message ID available for this row.", "Details unavailable", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            try
+            {
+                StatusText.Text = "Loading details...";
+                IsEnabled = false;
+
+                var detail = await _spiritGene.GetTransactionDetails(row.ITransid, row.IMsgId, row.Sens ?? "R");
+
+                if (detail == null)
+                {
+                    MessageBox.Show("No details returned for this transaction.", "No data", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                var detailWindow = new SpiritGeneDetailWindow(detail, row.ITransid ?? row.IMsgId)
+                {
+                    Owner = this
+                };
+                detailWindow.Show();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to load details: {ex.Message}", "SpiritGene Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                IsEnabled = true;
+                StatusText.Text = string.Empty;
+            }
+        }
+
         private void CloseButton_Click(object sender, RoutedEventArgs e)
         {
             Close();
@@ -185,5 +227,6 @@ namespace RecoTool.Windows
         public string ITransid { get; set; }
         public string LEndToEndId { get; set; }
         public string CCsm { get; set; }
+        public string Sens { get; set; }
     }
 }
