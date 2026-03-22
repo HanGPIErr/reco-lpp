@@ -503,52 +503,19 @@ Do you want to apply these automatic rules?
         {
             try
             {
-                // Check multi-user before editing
-                if (!await CheckMultiUserBeforeEditAsync())
-                    return;
+                if (!await CheckMultiUserBeforeEditAsync()) return;
+                if (_reconciliationService == null) return;
 
                 var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                if (dg == null || _reconciliationService == null) return;
-
-                var selected = dg.SelectedItems?.OfType<ReconciliationViewData>().ToList() ?? new List<ReconciliationViewData>();
+                var selected = dg?.SelectedItems?.OfType<ReconciliationViewData>().ToList() ?? new List<ReconciliationViewData>();
                 if (selected.Count == 0) return;
 
-                // Build an ad-hoc prompt window for comment input
-                var prompt = new Window
-                {
-                    Title = $"Set Comment for {selected.Count} row(s)",
-                    Width = 480,
-                    Height = 220,
-                    WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                    Owner = Window.GetWindow(this),
-                    ResizeMode = ResizeMode.NoResize,
-                    Content = null
-                };
+                var text = ShowTextInputDialog($"Set Comment for {selected.Count} row(s)", multiLine: true);
+                if (text == null) return;
 
-                var grid = new Grid { Margin = new Thickness(12) };
-                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                var tb = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-                Grid.SetRow(tb, 0);
-                var panel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 10, 0, 0) };
-                var btnOk = new Button { Content = "OK", Width = 80, Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
-                var btnCancel = new Button { Content = "Cancel", Width = 80, IsCancel = true };
-                btnOk.Click += (s, ea) => { prompt.DialogResult = true; prompt.Close(); };
-                btnCancel.Click += (s, ea) => { prompt.DialogResult = false; prompt.Close(); };
-                panel.Children.Add(btnOk);
-                panel.Children.Add(btnCancel);
-                Grid.SetRow(panel, 1);
-                grid.Children.Add(tb);
-                grid.Children.Add(panel);
-                prompt.Content = grid;
-
-                var result = prompt.ShowDialog();
-                if (result != true) return;
-                var text = tb.Text ?? string.Empty;
-
-                var updates = new List<Reconciliation>();
-                var user = _reconciliationService?.CurrentUser ?? Environment.UserName;
+                var user = _reconciliationService.CurrentUser ?? Environment.UserName;
                 string prefix = $"[{DateTime.Now:yyyy-MM-dd HH:mm}] {user}: ";
+                var updates = new List<Reconciliation>();
                 foreach (var r in selected)
                 {
                     var reco = await _reconciliationService.GetOrCreateReconciliationAsync(r.ID);
@@ -560,21 +527,9 @@ Do you want to apply these automatic rules?
                     reco.Comments = appended;
                     updates.Add(reco);
                 }
-
                 await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
-                
-                // Refresh KPIs to reflect changes immediately
-                UpdateKpis(_filteredData);
-
-                // Refresh @mention badge (comment may contain new mentions)
+                AfterSave();
                 try { RefreshMentionBadge(); } catch { }
-
-                // Background sync best effort (debounced)
-                try
-                {
-                    ScheduleBulkPushDebounced();
-                }
-                catch { }
             }
             catch (Exception ex)
             {
@@ -598,24 +553,17 @@ Do you want to apply these automatic rules?
         {
             try
             {
-                // Check multi-user before editing
-                if (!await CheckMultiUserBeforeEditAsync())
-                    return;
-
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                if (dg == null || _reconciliationService == null) return;
-                var rowCtx = (sender as FrameworkElement)?.DataContext as ReconciliationViewData;
-                var targetRows = dg.SelectedItems.Count > 1 && rowCtx != null && dg.SelectedItems.OfType<ReconciliationViewData>().Contains(rowCtx)
-                    ? dg.SelectedItems.OfType<ReconciliationViewData>().ToList()
-                    : (rowCtx != null ? new List<ReconciliationViewData> { rowCtx } : new List<ReconciliationViewData>());
+                if (!await CheckMultiUserBeforeEditAsync()) return;
+                if (_reconciliationService == null) return;
+                var targetRows = GetTargetRows(sender);
                 if (targetRows.Count == 0) return;
 
                 var updates = new List<Reconciliation>();
                 foreach (var r in targetRows)
                 {
-                    if (!r.Action.HasValue) continue; // only set status if an action exists
+                    if (!r.Action.HasValue) continue;
                     var reco = await _reconciliationService.GetOrCreateReconciliationAsync(r.ID);
-                    r.ActionStatus = isDone; 
+                    r.ActionStatus = isDone;
                     r.ActionDate = DateTime.Now;
                     reco.ActionStatus = isDone;
                     reco.ActionDate = r.ActionDate;
@@ -623,11 +571,7 @@ Do you want to apply these automatic rules?
                 }
                 if (updates.Count == 0) return;
                 await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
-                
-                // Refresh KPIs to reflect changes immediately
-                UpdateKpis(_filteredData);
-                
-                try { ScheduleBulkPushDebounced(); } catch { }
+                AfterSave();
             }
             catch (Exception ex)
             {
@@ -635,38 +579,28 @@ Do you want to apply these automatic rules?
             }
         }
 
-        // Quick take ownership
+        // Quick take ownership (assigns ALL visible rows, not just selection)
         private async void QuickTakeMenuItem_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                // Check multi-user before editing
-                if (!await CheckMultiUserBeforeEditAsync())
-                    return;
-
+                if (!await CheckMultiUserBeforeEditAsync()) return;
                 var dg = this.FindName("ResultsDataGrid") as DataGrid;
                 if (dg == null) return;
-                var rowCtx = (sender as FrameworkElement)?.DataContext as ReconciliationViewData;
                 var targetRows = dg.Items.OfType<ReconciliationViewData>().ToList();
                 if (targetRows.Count == 0) return;
 
+                var user = _reconciliationService.CurrentUser;
                 var updates = new List<Reconciliation>();
                 foreach (var r in targetRows)
                 {
                     var reco = await _reconciliationService.GetOrCreateReconciliationAsync(r.ID);
-                    var user = _reconciliationService.CurrentUser;
                     r.Assignee = user;
                     reco.Assignee = user;
                     updates.Add(reco);
                 }
                 await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
-
-                // Schedule debounced background sync
-                try
-                {
-                    ScheduleBulkPushDebounced();
-                }
-                catch { }
+                AfterSave();
             }
             catch (Exception ex)
             {
@@ -679,51 +613,15 @@ Do you want to apply these automatic rules?
         {
             try
             {
-                // Check multi-user before editing
-                if (!await CheckMultiUserBeforeEditAsync())
-                    return;
-
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                if (dg == null) return;
-                var rowCtx = (sender as FrameworkElement)?.DataContext as ReconciliationViewData;
-                var targetRows = dg.SelectedItems.Count > 1 && rowCtx != null && dg.SelectedItems.OfType<ReconciliationViewData>().Contains(rowCtx)
-                    ? dg.SelectedItems.OfType<ReconciliationViewData>().ToList()
-                    : (rowCtx != null ? new List<ReconciliationViewData> { rowCtx } : new List<ReconciliationViewData>());
+                if (!await CheckMultiUserBeforeEditAsync()) return;
+                var targetRows = GetTargetRows(sender);
                 if (targetRows.Count == 0) return;
 
-                // Prompt date selection
-                var prompt = new Window
-                {
-                    Title = "Set Reminder Date",
-                    Width = 320,
-                    Height = 160,
-                    WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                    Owner = Window.GetWindow(this),
-                    ResizeMode = ResizeMode.NoResize
-                };
-                var grid = new Grid { Margin = new Thickness(10) };
-                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                var datePicker = new DatePicker { SelectedDate = DateTime.Today };
-                Grid.SetRow(datePicker, 0);
-                grid.Children.Add(datePicker);
-                var panel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 10, 0, 0) };
-                var btnOk = new Button { Content = "OK", Width = 80, Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
-                var btnCancel = new Button { Content = "Cancel", Width = 80, IsCancel = true };
-                btnOk.Click += (s, ea) => { prompt.DialogResult = true; prompt.Close(); };
-                btnCancel.Click += (s, ea) => { prompt.DialogResult = false; prompt.Close(); };
-                panel.Children.Add(btnOk);
-                panel.Children.Add(btnCancel);
-                Grid.SetRow(panel, 1);
-                grid.Children.Add(panel);
-                prompt.Content = grid;
-                var res = prompt.ShowDialog();
-                if (res != true) return;
-                var selDate = datePicker.SelectedDate;
+                DateTime? selDate = ShowDatePickerDialog();
                 if (!selDate.HasValue) return;
 
-                var updates = new List<Reconciliation>();
                 var currentUser = _reconciliationService.CurrentUser;
+                var updates = new List<Reconciliation>();
                 foreach (var r in targetRows)
                 {
                     var reco = await _reconciliationService.GetOrCreateReconciliationAsync(r.ID);
@@ -739,16 +637,7 @@ Do you want to apply these automatic rules?
                     updates.Add(reco);
                 }
                 await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
-                
-                // Refresh KPIs to reflect changes immediately
-                UpdateKpis(_filteredData);
-
-                // Background sync best effort (debounced)
-                try
-                {
-                    ScheduleBulkPushDebounced();
-                }
-                catch { }
+                AfterSave();
             }
             catch (Exception ex)
             {
@@ -757,126 +646,9 @@ Do you want to apply these automatic rules?
         }
         // Quick set First Claim Date = user‑chosen date (or cancel)
         private async void QuickSetFirstClaimTodayMenuItem_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                // 1️⃣ Vérifier le mode multi‑utilisateur avant toute édition
-                if (!await CheckMultiUserBeforeEditAsync())
-                    return;
-
-                // 2️⃣ Récupérer la DataGrid et les lignes concernées
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                if (dg == null) return;
-
-                var rowCtx = (sender as FrameworkElement)?.DataContext as ReconciliationViewData;
-                var targetRows =
-                    dg.SelectedItems?.Count > 1 && rowCtx != null && dg.SelectedItems.OfType<ReconciliationViewData>().Contains(rowCtx)
-                        ? dg.SelectedItems.OfType<ReconciliationViewData>().ToList()
-                        : (rowCtx != null ? new List<ReconciliationViewData> { rowCtx } : new List<ReconciliationViewData>());
-
-                if (targetRows.Count == 0) return;
-
-                // 3️⃣ Ouvrir un dialogue de sélection de date
-                DateTime? chosenDate = ShowDatePickerDialog();
-                if (!chosenDate.HasValue)               // L'utilisateur a annulé
-                    return;                             // → on ne touche à rien
-
-                // 4️⃣ Préparer les entités à mettre à jour
-                var updates = new List<Reconciliation>();
-                foreach (var r in targetRows)
-                {
-                    // Récupérer (ou créer) le POCO métier depuis le service
-                    var reco = await _reconciliationService.GetOrCreateReconciliationAsync(r.ID);
-
-                    r.FirstClaimDate = chosenDate.Value;
-                    reco.FirstClaimDate = chosenDate.Value;
-
-                    updates.Add(reco);
-                }
-
-                // 5️⃣ Persister les modifications (sans déclencher les règles de validation)
-                await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
-
-                // 6️⃣ Rafraîchir les KPI pour refléter immédiatement la modification
-                UpdateKpis(_filteredData);
-
-                // 7️⃣ Lancer la synchronisation en arrière‑plan (dé‑bouncée)
-                try
-                {
-                    ScheduleBulkPushDebounced();
-                }
-                catch { /* Ignorer les exceptions de sync best‑effort */ }
-            }
-            catch (Exception ex)
-            {
-                ShowError($"Failed to set First Claim Date: {ex.Message}");
-            }
-        }
-        // Quick set First Claim Date = user‑chosen date (or cancel)
+            => await SetClaimDateAsync(sender, isLastClaim: false);
         private async void QuickSetLastClaimTodayMenuItem_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                // 1️⃣ Vérifier le mode multi‑utilisateur avant toute édition
-                if (!await CheckMultiUserBeforeEditAsync())
-                    return;
-
-                // 2️⃣ Récupérer la DataGrid et les lignes concernées
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                if (dg == null) return;
-
-                var rowCtx = (sender as FrameworkElement)?.DataContext as ReconciliationViewData;
-                var targetRows =
-                    dg.SelectedItems?.Count > 1 && rowCtx != null && dg.SelectedItems.OfType<ReconciliationViewData>().Contains(rowCtx)
-                        ? dg.SelectedItems.OfType<ReconciliationViewData>().ToList()
-                        : (rowCtx != null ? new List<ReconciliationViewData> { rowCtx } : new List<ReconciliationViewData>());
-
-                if (targetRows.Count == 0) return;
-
-                // 3️⃣ Ouvrir un dialogue de sélection de date
-                DateTime? chosenDate = ShowDatePickerDialog();
-                if (!chosenDate.HasValue)               // L'utilisateur a annulé
-                    return;                             // → on ne touche à rien
-
-                // 4️⃣ Préparer les entités à mettre à jour
-                var updates = new List<Reconciliation>();
-                foreach (var r in targetRows)
-                {
-                    // Récupérer (ou créer) le POCO métier depuis le service
-                    var reco = await _reconciliationService.GetOrCreateReconciliationAsync(r.ID);
-
-                    // Si la première date était déjà renseignée, on met à jour la 2ᵉ date,
-                    // sinon on remplisse la première date.
-                    if (!r.FirstClaimDate.HasValue)
-                    {
-                        r.FirstClaimDate = chosenDate.Value;
-                        reco.FirstClaimDate = chosenDate.Value;
-                    }
-
-                    r.LastClaimDate = chosenDate.Value;
-                    reco.LastClaimDate = chosenDate.Value;
-
-                    updates.Add(reco);
-                }
-
-                // 5️⃣ Persister les modifications (sans déclencher les règles de validation)
-                await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
-
-                // 6️⃣ Rafraîchir les KPI pour refléter immédiatement la modification
-                UpdateKpis(_filteredData);
-
-                // 7️⃣ Lancer la synchronisation en arrière‑plan (dé‑bouncée)
-                try
-                {
-                    ScheduleBulkPushDebounced();
-                }
-                catch { /* Ignorer les exceptions de sync best‑effort */ }
-            }
-            catch (Exception ex)
-            {
-                ShowError($"Failed to set First Claim Date: {ex.Message}");
-            }
-        }
+            => await SetClaimDateAsync(sender, isLastClaim: true);
 
         /// <summary>
         /// Affiche une petite fenêtre modal contenant un <see cref="DatePicker"/>
@@ -944,6 +716,140 @@ Do you want to apply these automatic rules?
                 ? datePicker.SelectedDate.Value
                 : (DateTime?)null;
         }
+
+        #region Shared Helpers
+
+        /// <summary>
+        /// Resolves target rows from a context menu click: uses multi-selection if the clicked
+        /// row is part of the selection, otherwise returns only the clicked row.
+        /// </summary>
+        private List<ReconciliationViewData> GetTargetRows(object sender)
+        {
+            var dg = this.FindName("ResultsDataGrid") as DataGrid;
+            var rowCtx = (sender as FrameworkElement)?.DataContext as ReconciliationViewData;
+            if (dg?.SelectedItems?.Count > 1 && rowCtx != null
+                && dg.SelectedItems.OfType<ReconciliationViewData>().Contains(rowCtx))
+                return dg.SelectedItems.OfType<ReconciliationViewData>().ToList();
+            return rowCtx != null ? new List<ReconciliationViewData> { rowCtx } : new List<ReconciliationViewData>();
+        }
+
+        /// <summary>
+        /// Common post-save refresh: update KPIs, schedule sync push, optionally raise DataChanged.
+        /// </summary>
+        private void AfterSave(bool raiseDataChanged = false)
+        {
+            UpdateKpis(_filteredData);
+            try { ScheduleBulkPushDebounced(); } catch { }
+            if (raiseDataChanged) DataChanged?.Invoke();
+        }
+
+        /// <summary>
+        /// Shows a modal text input dialog. Returns the entered text, or null if cancelled.
+        /// </summary>
+        private string ShowTextInputDialog(string title, bool multiLine = false)
+        {
+            var prompt = new Window
+            {
+                Title = title,
+                Width = multiLine ? 480 : 400,
+                Height = multiLine ? 220 : 150,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = Window.GetWindow(this),
+                ResizeMode = ResizeMode.NoResize
+            };
+            var grid = new Grid { Margin = new Thickness(10) };
+            grid.RowDefinitions.Add(new RowDefinition { Height = multiLine ? new GridLength(1, GridUnitType.Star) : GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var tb = new TextBox { Margin = new Thickness(0, 0, 0, 8) };
+            if (multiLine) { tb.AcceptsReturn = true; tb.TextWrapping = TextWrapping.Wrap; tb.VerticalScrollBarVisibility = ScrollBarVisibility.Auto; }
+            Grid.SetRow(tb, 0);
+            var panel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            var btnOk = new Button { Content = "OK", Width = 80, Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
+            var btnCancel = new Button { Content = "Cancel", Width = 80, IsCancel = true };
+            btnOk.Click += (_, __) => { prompt.DialogResult = true; prompt.Close(); };
+            btnCancel.Click += (_, __) => { prompt.DialogResult = false; prompt.Close(); };
+            panel.Children.Add(btnOk);
+            panel.Children.Add(btnCancel);
+            Grid.SetRow(panel, 1);
+            grid.Children.Add(tb);
+            grid.Children.Add(panel);
+            prompt.Content = grid;
+            return prompt.ShowDialog() == true ? tb.Text : null;
+        }
+
+        /// <summary>
+        /// Marks a set of reconciliation rows as TRIGGER DONE (Action=Trigger, ActionStatus=true).
+        /// Skips IDs already present in <paramref name="alreadyProcessedIds"/>.
+        /// </summary>
+        private async Task<List<Reconciliation>> MarkTriggerDoneAsync(
+            IEnumerable<string> ids, HashSet<string> alreadyProcessedIds = null)
+        {
+            var triggerActionId = (int)ActionType.Trigger;
+            var now = DateTime.UtcNow;
+            var updates = new List<Reconciliation>();
+            foreach (var id in ids)
+            {
+                var trimmed = id?.Trim();
+                if (string.IsNullOrEmpty(trimmed)) continue;
+                if (alreadyProcessedIds != null && alreadyProcessedIds.Contains(trimmed)) continue;
+                var reco = await _reconciliationService.GetReconciliationByIdAsync(_currentCountryId, trimmed);
+                if (reco != null)
+                {
+                    reco.Action = triggerActionId;
+                    reco.ActionStatus = true;
+                    reco.ActionDate = now;
+                    reco.TriggerDate = now;
+                    updates.Add(reco);
+                }
+            }
+            return updates;
+        }
+
+        /// <summary>
+        /// Sets a claim date field on target rows. Used by both First Claim and Last Claim handlers.
+        /// </summary>
+        private async Task SetClaimDateAsync(object sender, bool isLastClaim)
+        {
+            try
+            {
+                if (!await CheckMultiUserBeforeEditAsync()) return;
+                var targetRows = GetTargetRows(sender);
+                if (targetRows.Count == 0) return;
+
+                DateTime? chosenDate = ShowDatePickerDialog();
+                if (!chosenDate.HasValue) return;
+
+                var updates = new List<Reconciliation>();
+                foreach (var r in targetRows)
+                {
+                    var reco = await _reconciliationService.GetOrCreateReconciliationAsync(r.ID);
+                    if (isLastClaim)
+                    {
+                        if (!r.FirstClaimDate.HasValue)
+                        {
+                            r.FirstClaimDate = chosenDate.Value;
+                            reco.FirstClaimDate = chosenDate.Value;
+                        }
+                        r.LastClaimDate = chosenDate.Value;
+                        reco.LastClaimDate = chosenDate.Value;
+                    }
+                    else
+                    {
+                        r.FirstClaimDate = chosenDate.Value;
+                        reco.FirstClaimDate = chosenDate.Value;
+                    }
+                    updates.Add(reco);
+                }
+                await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
+                AfterSave();
+            }
+            catch (Exception ex)
+            {
+                ShowError($"Failed to set {(isLastClaim ? "Last" : "First")} Claim Date: {ex.Message}");
+            }
+        }
+
+        #endregion
 
         // Helper: Get user field name by category and ID
         private string GetUserFieldName(string category, int id)
@@ -1025,22 +931,19 @@ Do you want to apply these automatic rules?
                 var receivableId = country.CNT_AmbreReceivable;
 
                 // ---- target rows (single or multi-select) ----
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                var rowCtx = (sender as FrameworkElement)?.DataContext as ReconciliationViewData;
-                var targetRows = dg?.SelectedItems?.Count > 1
-                                 && rowCtx != null
-                                 && dg.SelectedItems.OfType<ReconciliationViewData>().Contains(rowCtx)
-                    ? dg.SelectedItems.OfType<ReconciliationViewData>().ToList()
-                    : (rowCtx != null ? new List<ReconciliationViewData> { rowCtx } : new List<ReconciliationViewData>());
-
+                var targetRows = GetTargetRows(sender);
                 if (targetRows.Count == 0) return;
 
-                // ---- build trigger items (same logic as DwingsButtonsWindow.LoadDataAsync) ----
+                // ---- build trigger items PER BGPMT (DWINGS API = one call per BGPMT) ----
                 // We need the full dataset to find matching pivots
                 var allData = _allViewData ?? _filteredData ?? ViewData?.ToList() ?? new List<ReconciliationViewData>();
                 var triggerItems = new List<(string AllIds, string PaymentRef, DateTime? ValueDate,
                                              string RequestedAmount, string Currency, string Bgpmt,
                                              bool IsGrouped, ReconciliationViewData SourceRow)>();
+
+                // Track all linked group IDs (by InternalInvoiceReference + BGPMT) for TRIGGER DONE expansion
+                var allGroupIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var processedBgpmts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
                 foreach (var row in targetRows)
                 {
@@ -1048,53 +951,67 @@ Do you want to apply these automatic rules?
                     if (row.IsDeleted || !row.IsMatchedAcrossAccounts)
                         continue;
 
-                    // Determine grouping key
                     bool hasInvRef = !string.IsNullOrWhiteSpace(row.InternalInvoiceReference);
                     bool hasBgpmt = !string.IsNullOrWhiteSpace(row.DWINGS_BGPMT);
                     if (!hasInvRef && !hasBgpmt) continue;
 
-                    string keyType = hasInvRef ? "INV" : "BGPMT";
-                    string keyValue = hasInvRef ? row.InternalInvoiceReference.Trim() : row.DWINGS_BGPMT.Trim();
-
-                    // Determine if clicked row is receivable
-                    bool isReceivable = string.Equals(row.Account_ID, receivableId, StringComparison.OrdinalIgnoreCase);
-
-                    // Find the receivable(s) and pivot(s) for this group
+                    // Find all related rows (by InternalInvoiceReference OR BGPMT)
                     var groupRows = allData.Where(r =>
                         !r.IsDeleted
-                        && (keyType == "INV"
-                            ? string.Equals(r.InternalInvoiceReference, keyValue, StringComparison.OrdinalIgnoreCase)
-                            : string.Equals(r.DWINGS_BGPMT, keyValue, StringComparison.OrdinalIgnoreCase))
+                        && ((hasInvRef && string.Equals(r.InternalInvoiceReference?.Trim(), row.InternalInvoiceReference?.Trim(), StringComparison.OrdinalIgnoreCase))
+                            || (hasBgpmt && string.Equals(r.DWINGS_BGPMT?.Trim(), row.DWINGS_BGPMT?.Trim(), StringComparison.OrdinalIgnoreCase)))
                     ).ToList();
 
-                    var recvLines = groupRows.Where(r => string.Equals(r.Account_ID, receivableId, StringComparison.OrdinalIgnoreCase)).ToList();
-                    var pivotLines = groupRows.Where(r => !string.Equals(r.Account_ID, receivableId, StringComparison.OrdinalIgnoreCase)).ToList();
+                    // Track ALL linked IDs for TRIGGER DONE expansion after success
+                    foreach (var g in groupRows)
+                        allGroupIds.Add(g.ID);
 
-                    if (recvLines.Count == 0 || pivotLines.Count == 0) continue;
+                    // Extract distinct BGPMTs from the full group — one API call per BGPMT
+                    var distinctBgpmts = groupRows
+                        .Where(r => !string.IsNullOrWhiteSpace(r.DWINGS_BGPMT))
+                        .Select(r => r.DWINGS_BGPMT.Trim())
+                        .Distinct(StringComparer.OrdinalIgnoreCase);
 
-                    // Build combined IDs list (receivable + pivots)
-                    var allIds = recvLines.Select(r => r.ID).Concat(pivotLines.Select(r => r.ID)).ToList();
+                    foreach (var bgpmt in distinctBgpmts)
+                    {
+                        if (processedBgpmts.Contains(bgpmt)) continue;
+                        processedBgpmts.Add(bgpmt);
 
-                    // PaymentReference: prefer pivot's Reconciliation_Num > PaymentReference > Pivot_TRNFromLabel
-                    string payRef = pivotLines
-                        .Where(p => p.Reconciliation_Num?.Length > 3)
-                        .Select(p => p.Reconciliation_Num)
-                        .FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
-                        ?? pivotLines.Select(p => p.PaymentReference).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
-                        ?? pivotLines.Select(p => p.Pivot_TRNFromLabel).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
-                        ?? string.Empty;
+                        // Find receivable + pivot rows for THIS specific BGPMT
+                        var bgpmtRows = allData.Where(r =>
+                            !r.IsDeleted
+                            && string.Equals(r.DWINGS_BGPMT?.Trim(), bgpmt, StringComparison.OrdinalIgnoreCase)
+                        ).ToList();
 
-                    var recvFirst = recvLines.First();
-                    triggerItems.Add((
-                        AllIds: string.Join(",", allIds),
-                        PaymentRef: payRef,
-                        ValueDate: pivotLines.Select(p => p.Value_Date).FirstOrDefault(),
-                        RequestedAmount: recvFirst.I_REQUESTED_INVOICE_AMOUNT,
-                        Currency: recvFirst.I_BILLING_CURRENCY,
-                        Bgpmt: recvFirst.DWINGS_BGPMT ?? string.Empty,
-                        IsGrouped: groupRows.Any(r => r.IsMatchedAcrossAccounts),
-                        SourceRow: recvFirst
-                    ));
+                        var recvLines = bgpmtRows.Where(r => string.Equals(r.Account_ID, receivableId, StringComparison.OrdinalIgnoreCase)).ToList();
+                        var pivotLines = bgpmtRows.Where(r => !string.Equals(r.Account_ID, receivableId, StringComparison.OrdinalIgnoreCase)).ToList();
+
+                        if (recvLines.Count == 0 || pivotLines.Count == 0) continue;
+
+                        // Build IDs for this BGPMT (receivable + pivots)
+                        var bgpmtIds = recvLines.Select(r => r.ID).Concat(pivotLines.Select(r => r.ID)).ToList();
+
+                        // PaymentReference: prefer pivot's Reconciliation_Num > PaymentReference > Pivot_TRNFromLabel
+                        string payRef = pivotLines
+                            .Where(p => p.Reconciliation_Num?.Length > 3)
+                            .Select(p => p.Reconciliation_Num)
+                            .FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
+                            ?? pivotLines.Select(p => p.PaymentReference).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
+                            ?? pivotLines.Select(p => p.Pivot_TRNFromLabel).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
+                            ?? string.Empty;
+
+                        var recvFirst = recvLines.First();
+                        triggerItems.Add((
+                            AllIds: string.Join(",", bgpmtIds),
+                            PaymentRef: payRef,
+                            ValueDate: pivotLines.Select(p => p.Value_Date).FirstOrDefault(),
+                            RequestedAmount: recvFirst.I_REQUESTED_INVOICE_AMOUNT,
+                            Currency: recvFirst.I_BILLING_CURRENCY,
+                            Bgpmt: bgpmt,
+                            IsGrouped: bgpmtRows.Any(r => r.IsMatchedAcrossAccounts),
+                            SourceRow: recvFirst
+                        ));
+                    }
                 }
 
                 if (triggerItems.Count == 0)
@@ -1109,37 +1026,14 @@ Do you want to apply these automatic rules?
                     var item = triggerItems[i];
                     if (string.IsNullOrWhiteSpace(item.PaymentRef))
                     {
-                        var prompt = new Window
+                        var title = $"Payment Reference for {item.SourceRow.DWINGS_BGPMT ?? item.SourceRow.InternalInvoiceReference}";
+                        var input = ShowTextInputDialog(title);
+                        if (string.IsNullOrWhiteSpace(input))
                         {
-                            Title = $"Payment Reference for {item.SourceRow.DWINGS_BGPMT ?? item.SourceRow.InternalInvoiceReference}",
-                            Width = 400, Height = 150,
-                            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                            Owner = Window.GetWindow(this),
-                            ResizeMode = ResizeMode.NoResize
-                        };
-                        var grid = new Grid { Margin = new Thickness(10) };
-                        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                        var tb = new TextBox { Margin = new Thickness(0, 0, 0, 8) };
-                        Grid.SetRow(tb, 0);
-                        var panel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-                        var btnOk = new Button { Content = "OK", Width = 80, Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
-                        var btnCancel = new Button { Content = "Cancel", Width = 80, IsCancel = true };
-                        btnOk.Click += (_, __) => { prompt.DialogResult = true; prompt.Close(); };
-                        btnCancel.Click += (_, __) => { prompt.DialogResult = false; prompt.Close(); };
-                        panel.Children.Add(btnOk);
-                        panel.Children.Add(btnCancel);
-                        Grid.SetRow(panel, 1);
-                        grid.Children.Add(tb);
-                        grid.Children.Add(panel);
-                        prompt.Content = grid;
-
-                        if (prompt.ShowDialog() != true || string.IsNullOrWhiteSpace(tb.Text))
-                        {
-                            ShowToast("Cancelled — Payment Reference required.");
+                            ShowToast("Cancelled \u2014 Payment Reference required.");
                             return;
                         }
-                        triggerItems[i] = (item.AllIds, tb.Text.Trim(), item.ValueDate,
+                        triggerItems[i] = (item.AllIds, input.Trim(), item.ValueDate,
                                            item.RequestedAmount, item.Currency, item.Bgpmt,
                                            item.IsGrouped, item.SourceRow);
                     }
@@ -1177,18 +1071,10 @@ Do you want to apply these automatic rules?
                         if (ok)
                         {
                             var ids = item.AllIds.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
-                            foreach (var id in ids)
-                            {
-                                var reco = await _reconciliationService.GetReconciliationByIdAsync(_currentCountryId, id.Trim());
-                                if (reco != null)
-                                {
-                                    reco.ActionStatus = true;
-                                    reco.TriggerDate = DateTime.UtcNow;
-                                    if (!item.IsGrouped && !string.IsNullOrWhiteSpace(item.PaymentRef))
-                                        reco.PaymentReference = item.PaymentRef;
-                                    allUpdates.Add(reco);
-                                }
-                            }
+                            var bgpmtUpdates = await MarkTriggerDoneAsync(ids);
+                            if (!item.IsGrouped && !string.IsNullOrWhiteSpace(item.PaymentRef))
+                                foreach (var u in bgpmtUpdates) u.PaymentReference = item.PaymentRef;
+                            allUpdates.AddRange(bgpmtUpdates);
                             successCount++;
                             messages.Add($"OK: {item.Bgpmt}");
                         }
@@ -1205,25 +1091,26 @@ Do you want to apply these automatic rules?
 
                 Mouse.OverrideCursor = null;
 
-                // ---- persist ----
+                // ---- persist: also expand TRIGGER DONE to all linked/grouped rows ----
                 if (allUpdates.Count > 0)
                 {
+                    var alreadyUpdatedIds = new HashSet<string>(allUpdates.Select(u => u.ID ?? ""), StringComparer.OrdinalIgnoreCase);
+                    var expansionUpdates = await MarkTriggerDoneAsync(allGroupIds, alreadyUpdatedIds);
+                    allUpdates.AddRange(expansionUpdates);
+
                     await _reconciliationService.SaveReconciliationsAsync(allUpdates, applyRulesOnEdit: false);
-                    try { ScheduleBulkPushDebounced(); } catch { }
                 }
 
                 // ---- refresh UI ----
-                // Update in-memory rows to reflect ActionStatus change
-                foreach (var item in triggerItems)
+                var triggerActionIdUi = (int)ActionType.Trigger;
+                var nowUi = DateTime.UtcNow;
+                foreach (var viewRow in allData.Where(r => allGroupIds.Contains(r.ID)))
                 {
-                    var ids = item.AllIds.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
-                    foreach (var viewRow in allData.Where(r => ids.Contains(r.ID)))
-                    {
-                        viewRow.ActionStatus = true;
-                    }
+                    viewRow.Action = triggerActionIdUi;
+                    viewRow.ActionStatus = true;
+                    viewRow.ActionDate = nowUi;
                 }
-                UpdateKpis(_filteredData);
-                DataChanged?.Invoke();
+                AfterSave(raiseDataChanged: true);
 
                 ShowToast($"DWINGS: {successCount}/{triggerItems.Count} processed.\n" + string.Join("\n", messages));
             }
@@ -1238,16 +1125,8 @@ Do you want to apply these automatic rules?
         {
             try
             {
-                var dg = this.FindName("ResultsDataGrid") as System.Windows.Controls.DataGrid;
-                if (dg == null) return;
-
-                var rowCtx = (sender as FrameworkElement)?.DataContext as ReconciliationViewData;
-                var rows = dg.SelectedItems?.Count > 1 && rowCtx != null && dg.SelectedItems.OfType<ReconciliationViewData>().Contains(rowCtx)
-                    ? dg.SelectedItems.OfType<ReconciliationViewData>().ToList()
-                    : (rowCtx != null ? new List<ReconciliationViewData> { rowCtx } : new List<ReconciliationViewData>());
-
+                var rows = GetTargetRows(sender);
                 if (rows.Count == 0) return;
-
                 AddToLinkingBasketRequested?.Invoke(rows);
                 ShowToast($"🔗 {rows.Count} row(s) added to linking basket");
             }

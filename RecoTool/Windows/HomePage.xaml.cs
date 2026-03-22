@@ -125,6 +125,13 @@ namespace RecoTool.Windows
                 }
             }
 
+            private string _activeUsersTooltip;
+            public string ActiveUsersTooltip
+            {
+                get => _activeUsersTooltip ?? "";
+                set { _activeUsersTooltip = value; OnPropertyChanged(nameof(ActiveUsersTooltip)); }
+            }
+
             public event PropertyChangedEventHandler PropertyChanged;
             private void OnPropertyChanged(string propertyName)
             {
@@ -2460,11 +2467,18 @@ namespace RecoTool.Windows
                     {
                         card.ActiveUsersCount = sessions.Count;
                         card.IsBeingEdited = sessions.Any(s => s.IsEditing);
+                        var names = sessions.Select(s =>
+                        {
+                            var name = s.UserName ?? s.UserId ?? "?";
+                            return s.IsEditing ? $" {name} (editing)" : $" {name}";
+                        });
+                        card.ActiveUsersTooltip = string.Join("\n", names);
                     }
                     else
                     {
                         card.ActiveUsersCount = 0;
                         card.IsBeingEdited = false;
+                        card.ActiveUsersTooltip = "";
                     }
                 }
             }

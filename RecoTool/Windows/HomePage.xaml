@@ -186,11 +186,39 @@
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
                                             <Border Grid.Column="0" Background="LightBlue" CornerRadius="8" Padding="7" Margin="0,0,10,0" HorizontalAlignment="Center">
                                                 <TextBlock Text="&#xE73A;" FontFamily="Segoe MDL2 Assets" Foreground="#333" FontSize="14"  HorizontalAlignment="Center"/>
                                             </Border>
                                             <TextBlock HorizontalAlignment="Center" Grid.Column="1" Text="{Binding Item.TDL_Name}" Foreground="White" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                            <!-- Multi-user badge -->
+                                            <Border Grid.Column="2" CornerRadius="8" Padding="5,2" VerticalAlignment="Center"
+                                                    Visibility="{Binding HasActiveUsers, Converter={StaticResource BoolToVisibilityConverter}}"
+                                                    ToolTip="{Binding ActiveUsersTooltip}">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Background" Value="#80FFFFFF"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsBeingEdited}" Value="True">
+                                                                <Setter Property="Background" Value="#FF8A80"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <TextBlock Text="{Binding ActiveUsersText}" FontSize="9" FontWeight="SemiBold" VerticalAlignment="Center">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="#333"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsBeingEdited}" Value="True">
+                                                                    <Setter Property="Foreground" Value="#B71C1C"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </Border>
                                         </Grid>
                                     </Border>
 

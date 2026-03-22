@@ -2777,6 +2777,74 @@ namespace RecoTool.Windows
 
         #endregion
 
+        #region Shortcut Actions (delegates to last-focused ReconciliationView)
+
+        private void ShortcutsToggle_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var popup = FindName("ShortcutsPopup") as System.Windows.Controls.Primitives.Popup;
+                if (popup != null) popup.IsOpen = !popup.IsOpen;
+            }
+            catch { }
+        }
+
+        private ReconciliationView GetActiveView()
+        {
+            var view = ReconciliationViewFocusTracker.GetLastFocused();
+            if (view != null) return view;
+            var all = GetAllOpenViews();
+            return all.Count > 0 ? all[0] : null;
+        }
+
+        private void ShortcutLinkingBasket_Click(object sender, RoutedEventArgs e)
+        {
+            try { GetActiveView()?.ShortcutLinkingBasket_Click(sender, e); } catch { }
+            CloseShortcutsPopup();
+        }
+
+        private void ShortcutOpenGrouped_Click(object sender, RoutedEventArgs e)
+        {
+            try { GetActiveView()?.ShortcutOpenGrouped_Click(sender, e); } catch { }
+            CloseShortcutsPopup();
+        }
+
+        private void ShortcutMarkDone_Click(object sender, RoutedEventArgs e)
+        {
+            try { GetActiveView()?.ShortcutMarkDone_Click(sender, e); } catch { }
+            CloseShortcutsPopup();
+        }
+
+        private void ShortcutComment_Click(object sender, RoutedEventArgs e)
+        {
+            try { GetActiveView()?.ShortcutComment_Click(sender, e); } catch { }
+            CloseShortcutsPopup();
+        }
+
+        private void ShortcutReminder_Click(object sender, RoutedEventArgs e)
+        {
+            try { GetActiveView()?.ShortcutReminder_Click(sender, e); } catch { }
+            CloseShortcutsPopup();
+        }
+
+        private void ShortcutProcessDwings_Click(object sender, RoutedEventArgs e)
+        {
+            try { GetActiveView()?.ShortcutProcessDwings_Click(sender, e); } catch { }
+            CloseShortcutsPopup();
+        }
+
+        private void CloseShortcutsPopup()
+        {
+            try
+            {
+                var popup = FindName("ShortcutsPopup") as System.Windows.Controls.Primitives.Popup;
+                if (popup != null) popup.IsOpen = false;
+            }
+            catch { }
+        }
+
+        #endregion
+
     }
 
     #region Helper Classes

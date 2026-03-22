@@ -174,6 +174,80 @@
                             <TextBlock Text="Invoice Finder" FontSize="12" Foreground="#2196F3" FontWeight="SemiBold" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
+                    <Button x:Name="ShortcutsToggleBtn" Style="{StaticResource StandardButtonStyle}" Padding="10,6" Margin="6,0,0,0"
+                            Click="ShortcutsToggle_Click" IsEnabled="{Binding CanInteract}"
+                            ToolTip="Quick actions for selected rows" Background="#F0FFF4" BorderBrush="#16A34A" BorderThickness="1">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="#16A34A" VerticalAlignment="Center" Margin="0,0,5,0" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display"/>
+                            <TextBlock Text="Actions" FontSize="12" Foreground="#16A34A" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Popup x:Name="ShortcutsPopup" StaysOpen="False" Placement="Bottom" PlacementTarget="{Binding ElementName=ShortcutsToggleBtn}" AllowsTransparency="True">
+                        <Border Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="8" Padding="4" Margin="0,4,0,0">
+                            <Border.Effect>
+                                <DropShadowEffect Color="#000000" BlurRadius="12" ShadowDepth="2" Opacity="0.15"/>
+                            </Border.Effect>
+                            <StackPanel Width="230">
+                                <TextBlock Text="Quick Actions" FontSize="11" FontWeight="SemiBold" Foreground="#94A3B8" Margin="8,4,8,6"/>
+                                <Button Click="ShortcutLinkingBasket_Click" Background="Transparent" BorderThickness="0" Padding="8,6" Cursor="Hand" HorizontalContentAlignment="Left">
+                                    <DockPanel Width="210">
+                                        <TextBlock Text="&#x1F517;" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" DockPanel.Dock="Left"/>
+                                        <Border Background="#F1F5F9" CornerRadius="3" Padding="4,1" DockPanel.Dock="Right" VerticalAlignment="Center">
+                                            <TextBlock Text="Ctrl+L" FontSize="9" Foreground="#64748B" FontFamily="Consolas"/>
+                                        </Border>
+                                        <TextBlock Text="Add to Linking Basket" FontSize="12" Foreground="#334155" VerticalAlignment="Center"/>
+                                    </DockPanel>
+                                </Button>
+                                <Button Click="ShortcutOpenGrouped_Click" Background="Transparent" BorderThickness="0" Padding="8,6" Cursor="Hand" HorizontalContentAlignment="Left">
+                                    <DockPanel Width="210">
+                                        <TextBlock Text="G" FontSize="13" FontWeight="Bold" Foreground="#2E7D32" VerticalAlignment="Center" Margin="0,0,8,0" DockPanel.Dock="Left"/>
+                                        <Border Background="#F1F5F9" CornerRadius="3" Padding="4,1" DockPanel.Dock="Right" VerticalAlignment="Center">
+                                            <TextBlock Text="Ctrl+G" FontSize="9" Foreground="#64748B" FontFamily="Consolas"/>
+                                        </Border>
+                                        <TextBlock Text="Open Other Account" FontSize="12" Foreground="#334155" VerticalAlignment="Center"/>
+                                    </DockPanel>
+                                </Button>
+                                <Rectangle Height="1" Fill="#F1F5F9" Margin="8,2"/>
+                                <Button Click="ShortcutMarkDone_Click" Background="Transparent" BorderThickness="0" Padding="8,6" Cursor="Hand" HorizontalContentAlignment="Left">
+                                    <DockPanel Width="210">
+                                        <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="#16A34A" VerticalAlignment="Center" Margin="0,0,8,0" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display" DockPanel.Dock="Left"/>
+                                        <Border Background="#F1F5F9" CornerRadius="3" Padding="4,1" DockPanel.Dock="Right" VerticalAlignment="Center">
+                                            <TextBlock Text="Ctrl+D" FontSize="9" Foreground="#64748B" FontFamily="Consolas"/>
+                                        </Border>
+                                        <TextBlock Text="Mark Done" FontSize="12" Foreground="#334155" VerticalAlignment="Center"/>
+                                    </DockPanel>
+                                </Button>
+                                <Button Click="ShortcutComment_Click" Background="Transparent" BorderThickness="0" Padding="8,6" Cursor="Hand" HorizontalContentAlignment="Left">
+                                    <DockPanel Width="210">
+                                        <TextBlock Text="&#xE90A;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="#2563EB" VerticalAlignment="Center" Margin="0,0,8,0" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display" DockPanel.Dock="Left"/>
+                                        <Border Background="#F1F5F9" CornerRadius="3" Padding="4,1" DockPanel.Dock="Right" VerticalAlignment="Center">
+                                            <TextBlock Text="Ctrl+K" FontSize="9" Foreground="#64748B" FontFamily="Consolas"/>
+                                        </Border>
+                                        <TextBlock Text="Set Comment" FontSize="12" Foreground="#334155" VerticalAlignment="Center"/>
+                                    </DockPanel>
+                                </Button>
+                                <Button Click="ShortcutReminder_Click" Background="Transparent" BorderThickness="0" Padding="8,6" Cursor="Hand" HorizontalContentAlignment="Left">
+                                    <DockPanel Width="210">
+                                        <TextBlock Text="&#xE787;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="#D97706" VerticalAlignment="Center" Margin="0,0,8,0" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display" DockPanel.Dock="Left"/>
+                                        <Border Background="#F1F5F9" CornerRadius="3" Padding="4,1" DockPanel.Dock="Right" VerticalAlignment="Center">
+                                            <TextBlock Text="Ctrl+R" FontSize="9" Foreground="#64748B" FontFamily="Consolas"/>
+                                        </Border>
+                                        <TextBlock Text="Set Reminder" FontSize="12" Foreground="#334155" VerticalAlignment="Center"/>
+                                    </DockPanel>
+                                </Button>
+                                <Rectangle Height="1" Fill="#F1F5F9" Margin="8,2"/>
+                                <Button Click="ShortcutProcessDwings_Click" Background="Transparent" BorderThickness="0" Padding="8,6" Cursor="Hand" HorizontalContentAlignment="Left">
+                                    <DockPanel Width="210">
+                                        <TextBlock Text="&#x26A1;" FontSize="13" Foreground="#4169E1" VerticalAlignment="Center" Margin="0,0,8,0" DockPanel.Dock="Left"/>
+                                        <Border Background="#F1F5F9" CornerRadius="3" Padding="4,1" DockPanel.Dock="Right" VerticalAlignment="Center">
+                                            <TextBlock Text="Ctrl+Shift+D" FontSize="9" Foreground="#64748B" FontFamily="Consolas"/>
+                                        </Border>
+                                        <TextBlock Text="Process DWINGS" FontSize="12" Foreground="#334155" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                    </DockPanel>
+                                </Button>
+                            </StackPanel>
+                        </Border>
+                    </Popup>
                 </StackPanel>
 
                 <!-- Status Indicators -->

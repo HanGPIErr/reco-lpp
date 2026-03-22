@@ -718,8 +718,8 @@ namespace RecoTool.Windows
 
                     cm.Items.Add(new Separator { Tag = "__InjectedSep__" });
                     
-                    // Add "Open Other Account grouped lines" if counterpart exists
-                    if (rowData.CounterpartCount.HasValue && rowData.CounterpartCount.Value > 0)
+                    // Add "Open Other Account grouped lines" if cross-account match exists
+                    if (rowData.IsMatchedAcrossAccounts)
                     {
                         var openGroupedItem = new MenuItem { Header = "Open Other Account grouped lines", Tag = "__OpenGrouped__", DataContext = rowData };
                         openGroupedItem.Click += (s2, e2) =>
@@ -961,6 +961,7 @@ namespace RecoTool.Windows
             Unloaded += ReconciliationView_Unloaded;
             InitializeFilterDebounce();
             InitializeQuickSearchCommand();
+            InitializeShortcutCommands();
             SubscribeToSyncEvents();
             RefreshCompleted += (s, e) => _hasLoadedOnce = true;
             try { VM.PropertyChanged += VM_PropertyChanged; } catch { }

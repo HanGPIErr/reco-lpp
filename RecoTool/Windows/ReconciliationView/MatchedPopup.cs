@@ -28,25 +28,22 @@ namespace RecoTool.Windows
             {
                 if (rowData == null) return;
 
-                // Build backend WHERE clause (BGI -> InternalRef -> Event_Num fallback)
-                string where = null;
+                // Build backend WHERE clause using OR of ALL available grouping keys.
+                // A row can be matched across accounts via any of these keys, so we must
+                // include all of them to guarantee we find the counterpart rows.
+                var clauses = new System.Collections.Generic.List<string>();
                 if (!string.IsNullOrWhiteSpace(rowData.DWINGS_InvoiceID))
-                {
-                    var key = rowData.DWINGS_InvoiceID.Replace("'", "''");
-                    where = $"r.DWINGS_InvoiceID = '{key}'";
-                }
-                else if (!string.IsNullOrWhiteSpace(rowData.InternalInvoiceReference))
-                {
-                    var key = rowData.InternalInvoiceReference.Replace("'", "''");
-                    where = $"r.InternalInvoiceReference = '{key}'";
-                }
-                else if (!string.IsNullOrWhiteSpace(rowData.Event_Num))
-                {
-                    var key = rowData.Event_Num.Replace("'", "''");
-                    where = $"a.Event_Num = '{key}'"; // fallback group by Event_Num
-                }
+                    clauses.Add($"r.DWINGS_InvoiceID = '{rowData.DWINGS_InvoiceID.Replace("'", "''")}'");
+                if (!string.IsNullOrWhiteSpace(rowData.InternalInvoiceReference))
+                    clauses.Add($"r.InternalInvoiceReference = '{rowData.InternalInvoiceReference.Replace("'", "''")}'");
+                if (!string.IsNullOrWhiteSpace(rowData.DWINGS_BGPMT))
+                    clauses.Add($"r.DWINGS_BGPMT = '{rowData.DWINGS_BGPMT.Replace("'", "''")}'");
+                // Last-resort fallback: Event_Num (only when no stronger key exists)
+                if (clauses.Count == 0 && !string.IsNullOrWhiteSpace(rowData.Event_Num))
+                    clauses.Add($"a.Event_Num = '{rowData.Event_Num.Replace("'", "''")}'");
 
-                if (string.IsNullOrWhiteSpace(where)) return;
+                if (clauses.Count == 0) return;
+                string where = clauses.Count == 1 ? clauses[0] : $"({string.Join(" OR ", clauses)})";
 
                 // Try to hook existing windows by Tag in case static refs were lost
                 try

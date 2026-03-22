@@ -10,6 +10,12 @@
              Focusable="True">
     <UserControl.InputBindings>
         <KeyBinding Key="F" Modifiers="Ctrl" Command="{x:Static local:ReconciliationView.FocusQuickSearchCommand}"/>
+        <KeyBinding Key="L" Modifiers="Ctrl" Command="{x:Static local:ReconciliationView.ShortcutLinkingBasketCommand}"/>
+        <KeyBinding Key="G" Modifiers="Ctrl" Command="{x:Static local:ReconciliationView.ShortcutOpenGroupedCommand}"/>
+        <KeyBinding Key="D" Modifiers="Ctrl" Command="{x:Static local:ReconciliationView.ShortcutMarkDoneCommand}"/>
+        <KeyBinding Key="D" Modifiers="Ctrl+Shift" Command="{x:Static local:ReconciliationView.ShortcutProcessDwingsCommand}"/>
+        <KeyBinding Key="K" Modifiers="Ctrl" Command="{x:Static local:ReconciliationView.ShortcutSetCommentCommand}"/>
+        <KeyBinding Key="R" Modifiers="Ctrl" Command="{x:Static local:ReconciliationView.ShortcutSetReminderCommand}"/>
     </UserControl.InputBindings>
     <UserControl.Resources>
         <!-- Item template that renders null items as an empty option so users can clear selection -->
@@ -1409,15 +1415,21 @@
                                                     Visibility="{Binding HasStatusIndicatorVisibility}">
                                                 <TextBlock Text="{Binding StatusIndicator}" FontWeight="Bold" FontSize="9" Foreground="White"/>
                                             </Border>
-                                            <!-- Status color dot (right side) -->
+                                            <!-- Status color dot -->
                                             <Ellipse Width="12" Height="12" Fill="{Binding StatusColor}" 
                                                      ToolTip="{Binding StatusTooltip}"/>
+                                            <!-- Group indicator (G) merged into first column -->
+                                            <TextBlock Text="G" Foreground="#2E7D32" FontWeight="Bold" FontSize="11" Margin="4,0,0,0"
+                                                       Cursor="Hand" VerticalAlignment="Center"
+                                                       ToolTip="Open related entries across accounts (appears only when a cross-account pair exists: same BGI or Internal Reference)"
+                                                       Visibility="{Binding IsMatchedAcrossAccountsVisibility}"
+                                                       MouseLeftButtonUp="MatchedIndicator_MouseLeftButtonUp"/>
                                         </StackPanel>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
                             <!-- Group indicator (clickable) - OPTIMIZED: Direct Visibility binding -->
-                            <DataGridTemplateColumn Header="Group" Width="50" IsReadOnly="True" CanUserResize="False" CanUserReorder="False" CellStyle="{StaticResource ReviewedTodayHighlight}">
+                            <DataGridTemplateColumn Header="Group" Width="50" IsReadOnly="True" CanUserResize="False" CanUserReorder="False" Visibility="Collapsed" CellStyle="{StaticResource ReviewedTodayHighlight}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="G" Foreground="#2E7D32" FontWeight="Bold" HorizontalAlignment="Center" Cursor="Hand"
