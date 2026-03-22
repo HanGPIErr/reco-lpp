@@ -145,11 +145,6 @@ namespace RecoTool.Windows
                     _pushDebounceTimer.Tick -= PushDebounceTimer_Tick;
                     _pushDebounceTimer = null;
                 }
-                if (_multiUserWarningRefreshTimer != null)
-                {
-                    _multiUserWarningRefreshTimer.Stop();
-                    _multiUserWarningRefreshTimer = null;
-                }
                 // Unhook grid scroll events
                 if (_resultsScrollViewer != null)
                 {

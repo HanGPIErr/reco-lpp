@@ -157,14 +157,7 @@ namespace RecoTool.Services
                 finalTimer.Stop();
                 LogManager.Info($"[PERF] Finalization completed in {finalTimer.ElapsedMilliseconds}ms");
                 
-                // Force reconnection of TodoListSessionTracker to avoid lingering OleDbExceptions
-                // after import completes (in case Access DB had lock contention issues)
-                try
-                {
-                    TodoListSessionTracker.CloseAllConnections();
-                    LogManager.Info("TodoListSessionTracker connections reset after import");
-                }
-                catch { /* best effort */ }
+                // No persistent connections to reset — tracker uses fresh connections per operation
                 
                 result.IsSuccess = true;
                 result.EndTime = DateTime.UtcNow;
@@ -178,9 +171,6 @@ namespace RecoTool.Services
                 result.Errors.Add($"Error during import: {ex.Message}");
                 result.EndTime = DateTime.UtcNow;
                 LogManager.Error($"[PERF] ===== AMBRE IMPORT FAILED for {countryId} after {totalTimer.ElapsedMilliseconds}ms =====", ex);
-                
-                // Force reconnection even on error to avoid lingering OleDbExceptions
-                try { TodoListSessionTracker.CloseAllConnections(); } catch { }
                 
                 return result;
             }

@@ -132,7 +132,7 @@ namespace RecoTool.Windows
                     }
 
                     HasActiveSessions = ActiveSessions.Count > 0;
-                    HasEditingSessions = ActiveSessions.Any(s => s.IsEditing);
+                    HasEditingSessions = false; // IsEditing removed — all sessions are viewing
                     
                     UpdateVisibility();
                 });
@@ -179,13 +179,11 @@ namespace RecoTool.Windows
         }
 
         public string UserName => _session.UserName ?? _session.UserId;
-        public bool IsEditing => _session.IsEditing;
+        public bool IsEditing => false; // IsEditing removed from simplified tracker
 
-        public string StatusText => IsEditing ? "editing" : "viewing";
+        public string StatusText => "viewing";
 
-        public Brush StatusColor => IsEditing 
-            ? new SolidColorBrush(Color.FromRgb(220, 53, 69))  // Red for editing
-            : new SolidColorBrush(Color.FromRgb(255, 193, 7)); // Yellow for viewing
+        public Brush StatusColor => new SolidColorBrush(Color.FromRgb(255, 193, 7)); // Yellow for viewing
 
         public string DurationText
         {

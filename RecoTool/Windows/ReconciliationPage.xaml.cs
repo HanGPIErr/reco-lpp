@@ -59,7 +59,7 @@ namespace RecoTool.Windows
         private InvoiceFinderWindow _invoiceFinderWindow; // modeless invoice finder
         private TodoListSessionTracker _todoSessionTracker; // Multi-user session tracking
         private HashSet<int> _warnedTodoIds = new HashSet<int>(); // Track which TodoLists we've warned about
-        private System.Windows.Threading.DispatcherTimer _todoMultiUserBadgeTimer; // Periodic refresh of page-level multi-user badge
+        // (multi-user badge timer removed for performance — check-on-open only)
         private Dictionary<ReconciliationView, int> _viewTodoIds = new Dictionary<ReconciliationView, int>(); // Map views to their TodoList IDs
         private readonly LinkingBasket _linkingBasket = new LinkingBasket(); // Cross-view linking basket
 
@@ -1311,10 +1311,6 @@ namespace RecoTool.Windows
                 {
                     await ApplyTodoToNextViewAsync(todo);
                 }
-
-                // Refresh multi-user indicator and start auto-refresh timer
-                await RefreshTodoMultiUserBadgeAsync(todo.TDL_id);
-                StartTodoMultiUserBadgeTimer();
             }
             catch { }
         }
@@ -1356,20 +1352,11 @@ namespace RecoTool.Windows
 
                 await LoadDataAsync(token).ConfigureAwait(false);
 
-                // Start multi-user badge refresh (lazy re-init tracker if needed)
+                // Ensure tracker is ready for session registration when user opens a TodoList
                 try
                 {
                     if (_todoSessionTracker == null)
                         InitializeTodoSessionTracker();
-                    var todo = SelectedTodoItem;
-                    if (todo != null && todo.TDL_id > 0)
-                    {
-                        await Dispatcher.InvokeAsync(async () =>
-                        {
-                            await RefreshTodoMultiUserBadgeAsync(todo.TDL_id);
-                            StartTodoMultiUserBadgeTimer();
-                        });
-                    }
                 }
                 catch { }
 
@@ -2657,50 +2644,33 @@ namespace RecoTool.Windows
                 await EnsureTodoSessionTrackerAsync();
                 if (_todoSessionTracker == null) return true;
 
-                // Check if we already warned about this TodoList in this session
                 if (_warnedTodoIds.Contains(todoId))
-                    return true; // Already warned, proceed
+                    return true;
 
                 var sessions = await _todoSessionTracker.GetActiveSessionsAsync(todoId);
                 if (sessions == null || !sessions.Any())
-                    return true; // No other users
+                    return true;
 
                 var currentUserId = Environment.UserName;
-                var otherSessions = sessions.Where(s => 
+                var otherSessions = sessions.Where(s =>
                     !string.Equals(s.UserId, currentUserId, StringComparison.OrdinalIgnoreCase))
                     .ToList();
 
                 if (!otherSessions.Any())
                     return true;
 
-                var otherEditingSessions = otherSessions.Where(s => s.IsEditing).ToList();
-
-                if (otherEditingSessions.Any())
-                {
-                    // Show blocking warning dialog for editing conflicts
-                    var result = await MultiUserHelper.ShowEditWarningAsync(otherEditingSessions);
-                    if (!result)
-                        return false; // User cancelled
-
-                    _warnedTodoIds.Add(todoId);
-                }
-                else
-                {
-                    // Other users are viewing — show informational message (non-blocking)
-                    var names = string.Join(", ", otherSessions.Select(s => s.UserName ?? s.UserId));
-                    MessageBox.Show(
-                        $"{names} is also viewing this TodoList.\nYou can proceed, but be aware of potential conflicts.",
-                        "Multi-User Info",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Information);
-                    _warnedTodoIds.Add(todoId);
-                }
+                var names = string.Join(", ", otherSessions.Select(s => s.UserName ?? s.UserId));
+                MessageBox.Show(
+                    $"{names} is also on this TodoList.\nYou can proceed, but be aware of potential conflicts.",
+                    "Multi-User Info",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                _warnedTodoIds.Add(todoId);
 
                 return true;
             }
             catch
             {
-                // Best effort, don't block on error
                 return true;
             }
         }
@@ -2736,72 +2706,10 @@ namespace RecoTool.Windows
             }
         }
 
-        private void StartTodoMultiUserBadgeTimer()
-        {
-            StopTodoMultiUserBadgeTimer();
-            _todoMultiUserBadgeTimer = new System.Windows.Threading.DispatcherTimer
-            {
-                Interval = TimeSpan.FromSeconds(30)
-            };
-            _todoMultiUserBadgeTimer.Tick += async (s, e) =>
-            {
-                try
-                {
-                    var todo = SelectedTodoItem;
-                    if (todo != null && todo.TDL_id > 0)
-                        await RefreshTodoMultiUserBadgeAsync(todo.TDL_id);
-                }
-                catch { }
-            };
-            _todoMultiUserBadgeTimer.Start();
-        }
-
-        private void StopTodoMultiUserBadgeTimer()
-        {
-            _todoMultiUserBadgeTimer?.Stop();
-            _todoMultiUserBadgeTimer = null;
-        }
-
-        private async Task RefreshTodoMultiUserBadgeAsync(int todoId)
-        {
-            try
-            {
-                var badge = FindName("TodoMultiUserBadge") as System.Windows.Controls.Border;
-                var text = FindName("TodoMultiUserText") as System.Windows.Controls.TextBlock;
-                if (badge == null || text == null) return;
-                await EnsureTodoSessionTrackerAsync();
-                if (_todoSessionTracker == null || todoId <= 0) { badge.Visibility = Visibility.Collapsed; return; }
-
-                var sessions = await _todoSessionTracker.GetActiveSessionsAsync(todoId);
-                var currentUserId = Environment.UserName;
-                var others = sessions?.Where(s => !string.Equals(s.UserId, currentUserId, StringComparison.OrdinalIgnoreCase)).ToList();
-                if (others == null || !others.Any()) { badge.Visibility = Visibility.Collapsed; return; }
-
-                var names = string.Join(", ", others.Select(s => s.UserName ?? s.UserId));
-                var editing = others.Any(s => s.IsEditing);
-                text.Text = editing ? $"{names} editing" : $"{names} viewing";
-                badge.Background = editing
-                    ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xEB, 0xEE))
-                    : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xF3, 0xE0));
-                badge.BorderBrush = editing
-                    ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xEF, 0x53, 0x50))
-                    : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xB7, 0x4D));
-                text.Foreground = editing
-                    ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xCC, 0x00, 0x00))
-                    : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE6, 0x51, 0x00));
-                badge.Visibility = Visibility.Visible;
-            }
-            catch
-            {
-                try { var b = FindName("TodoMultiUserBadge") as System.Windows.Controls.Border; if (b != null) b.Visibility = Visibility.Collapsed; } catch { }
-            }
-        }
-
         private async void CleanupTodoSessionTracker()
         {
             try
             {
-                StopTodoMultiUserBadgeTimer();
                 if (_todoSessionTracker != null)
                 {
                     foreach (var tid in _viewTodoIds.Values.Distinct())

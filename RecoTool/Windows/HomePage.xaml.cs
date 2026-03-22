@@ -106,13 +106,6 @@ namespace RecoTool.Windows
                 set { _activeUsersCount = value; OnPropertyChanged(nameof(ActiveUsersCount)); OnPropertyChanged(nameof(HasActiveUsers)); OnPropertyChanged(nameof(ActiveUsersText)); }
             }
 
-            private bool _isBeingEdited;
-            public bool IsBeingEdited
-            {
-                get => _isBeingEdited;
-                set { _isBeingEdited = value; OnPropertyChanged(nameof(IsBeingEdited)); OnPropertyChanged(nameof(ActiveUsersText)); }
-            }
-
             public bool HasActiveUsers => _activeUsersCount > 0;
 
             public string ActiveUsersText
@@ -120,7 +113,6 @@ namespace RecoTool.Windows
                 get
                 {
                     if (_activeUsersCount == 0) return "";
-                    if (_isBeingEdited) return $"🔴 {_activeUsersCount} editing";
                     return $"👁️ {_activeUsersCount}";
                 }
             }
@@ -2473,18 +2465,12 @@ namespace RecoTool.Windows
                     if (sessions != null && sessions.Any())
                     {
                         card.ActiveUsersCount = sessions.Count;
-                        card.IsBeingEdited = sessions.Any(s => s.IsEditing);
-                        var names = sessions.Select(s =>
-                        {
-                            var name = s.UserName ?? s.UserId ?? "?";
-                            return s.IsEditing ? $" {name} (editing)" : $" {name}";
-                        });
+                        var names = sessions.Select(s => s.UserName ?? s.UserId ?? "?");
                         card.ActiveUsersTooltip = string.Join("\n", names);
                     }
                     else
                     {
                         card.ActiveUsersCount = 0;
-                        card.IsBeingEdited = false;
                         card.ActiveUsersTooltip = "";
                     }
                 }

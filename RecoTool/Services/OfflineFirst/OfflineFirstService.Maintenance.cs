@@ -90,16 +90,8 @@ namespace RecoTool.Services
             }
             catch { /* best-effort cleanup */ }
 
-            // 2) Close all TodoListSessionTracker connections to release locks
-            //    (connections will automatically recreate on next heartbeat tick)
-            try
-            {
-                TodoListSessionTracker.CloseAllConnections();
-            }
-            catch { /* best-effort cleanup */ }
-            
-            // Wait briefly for connections to fully release
-            await Task.Delay(1000).ConfigureAwait(false);
+            // Wait briefly for any in-flight DB operations to complete
+            await Task.Delay(500).ConfigureAwait(false);
 
             // 3) Compact & Repair the lock/control database to reclaim space
             try

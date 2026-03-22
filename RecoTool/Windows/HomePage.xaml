@@ -199,25 +199,9 @@
                                                 <Border.Style>
                                                     <Style TargetType="Border">
                                                         <Setter Property="Background" Value="#80FFFFFF"/>
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsBeingEdited}" Value="True">
-                                                                <Setter Property="Background" Value="#FF8A80"/>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
                                                     </Style>
                                                 </Border.Style>
-                                                <TextBlock Text="{Binding ActiveUsersText}" FontSize="9" FontWeight="SemiBold" VerticalAlignment="Center">
-                                                    <TextBlock.Style>
-                                                        <Style TargetType="TextBlock">
-                                                            <Setter Property="Foreground" Value="#333"/>
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsBeingEdited}" Value="True">
-                                                                    <Setter Property="Foreground" Value="#B71C1C"/>
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </TextBlock.Style>
-                                                </TextBlock>
+                                                <TextBlock Text="{Binding ActiveUsersText}" FontSize="9" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#333"/>
                                             </Border>
                                         </Grid>
                                     </Border>

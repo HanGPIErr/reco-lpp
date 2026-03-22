@@ -161,13 +161,7 @@ namespace RecoTool.Windows
             try
             {
                 /* -----------------------------------------------------------------
-                 * 1️⃣  Vérification multi‑utilisateur
-                 * -----------------------------------------------------------------*/
-                if (!await CheckMultiUserBeforeEditAsync())
-                    return;
-
-                /* -----------------------------------------------------------------
-                 * 2️⃣  Récupération du MenuItem et de la ligne concernée
+                 * Récupération du MenuItem et de la ligne concernée
                  * -----------------------------------------------------------------*/
                 var mi = sender as MenuItem;
                 if (mi == null) return;
@@ -503,7 +497,6 @@ Do you want to apply these automatic rules?
         {
             try
             {
-                if (!await CheckMultiUserBeforeEditAsync()) return;
                 if (_reconciliationService == null) return;
 
                 var dg = this.FindName("ResultsDataGrid") as DataGrid;
@@ -553,7 +546,6 @@ Do you want to apply these automatic rules?
         {
             try
             {
-                if (!await CheckMultiUserBeforeEditAsync()) return;
                 if (_reconciliationService == null) return;
                 var targetRows = GetTargetRows(sender);
                 if (targetRows.Count == 0) return;
@@ -584,7 +576,6 @@ Do you want to apply these automatic rules?
         {
             try
             {
-                if (!await CheckMultiUserBeforeEditAsync()) return;
                 var dg = this.FindName("ResultsDataGrid") as DataGrid;
                 if (dg == null) return;
                 var targetRows = dg.Items.OfType<ReconciliationViewData>().ToList();
@@ -613,7 +604,6 @@ Do you want to apply these automatic rules?
         {
             try
             {
-                if (!await CheckMultiUserBeforeEditAsync()) return;
                 var targetRows = GetTargetRows(sender);
                 if (targetRows.Count == 0) return;
 
@@ -812,7 +802,6 @@ Do you want to apply these automatic rules?
         {
             try
             {
-                if (!await CheckMultiUserBeforeEditAsync()) return;
                 var targetRows = GetTargetRows(sender);
                 if (targetRows.Count == 0) return;
 
@@ -924,8 +913,6 @@ Do you want to apply these automatic rules?
         {
             try
             {
-                if (!await CheckMultiUserBeforeEditAsync()) return;
-
                 var country = CurrentCountryObject;
                 if (country == null) { ShowError("No country loaded."); return; }
                 var receivableId = country.CNT_AmbreReceivable;

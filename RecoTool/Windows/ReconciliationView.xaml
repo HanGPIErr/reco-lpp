@@ -285,52 +285,6 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- Multi-User Warning Banner (Discrete) -->
-        <Border x:Name="MultiUserWarningBanner" Grid.Row="0" Visibility="Collapsed" Padding="8,4" Margin="0">
-            <Border.Style>
-                <Style TargetType="Border">
-                    <Setter Property="Background" Value="#FFF9E6"/>
-                    <!-- Yellow for viewing -->
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding ElementName=MultiUserWarningBanner, Path=Tag}" Value="Editing">
-                            <Setter Property="Background" Value="#FFE6E6"/>
-                            <!-- Red for editing -->
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </Border.Style>
-            <StackPanel Orientation="Horizontal">
-                <TextBlock Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="Foreground" Value="#CC8800"/>
-                            <!-- Dark yellow -->
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding ElementName=MultiUserWarningBanner, Path=Tag}" Value="Editing">
-                                    <Setter Property="Foreground" Value="#CC0000"/>
-                                    <!-- Dark red -->
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
-                <TextBlock x:Name="MultiUserWarningText" FontSize="11" VerticalAlignment="Center">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="Foreground" Value="#CC8800"/>
-                            <!-- Dark yellow -->
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding ElementName=MultiUserWarningBanner, Path=Tag}" Value="Editing">
-                                    <Setter Property="Foreground" Value="#CC0000"/>
-                                    <!-- Dark red -->
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
-            </StackPanel>
-        </Border>
-
         <!-- Compact Modern Header with Integrated KPIs -->
         <Border x:Name="HeaderBorder" Grid.Row="1" Background="White" Padding="12,8" Effect="{StaticResource StandardShadow}" BorderBrush="#E0E0E0" BorderThickness="0,0,0,1">
             <Grid>
