@@ -114,12 +114,73 @@ namespace RecoTool.Windows
             catch { }
         }
 
+        /// <summary>Resolves a USR_ID to display name via AssigneeOptions. Returns original value if not found.</summary>
+        private string ResolveUserDisplayName(string userIdOrName)
+        {
+            if (string.IsNullOrWhiteSpace(userIdOrName)) return userIdOrName;
+            try
+            {
+                var match = AssigneeOptions?.FirstOrDefault(u =>
+                    string.Equals(u.Id, userIdOrName, StringComparison.OrdinalIgnoreCase));
+                if (match != null && !string.IsNullOrWhiteSpace(match.Name))
+                    return match.Name;
+            }
+            catch { }
+            return userIdOrName;
+        }
+
+        /// <summary>Resolves all USR_IDs in a full comment block: header authors and @mentions become display names.</summary>
+        private string ResolveCommentsForDisplay(string comments)
+        {
+            if (string.IsNullOrWhiteSpace(comments) || AssigneeOptions == null || AssigneeOptions.Count == 0) return comments;
+            try
+            {
+                // Replace header authors: [2024-01-01 12:00] USR_ID: → [2024-01-01 12:00] DisplayName:
+                var resolved = Regex.Replace(comments, @"(\[\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\])\s*([^:\r\n]+):", m =>
+                {
+                    var datePart = m.Groups[1].Value;
+                    var authorRaw = m.Groups[2].Value.Trim();
+                    var authorDisplay = ResolveUserDisplayName(authorRaw);
+                    return $"{datePart} {authorDisplay}:";
+                });
+                // Also resolve @USR_ID tokens
+                resolved = ResolveAtMentionsForDisplay(resolved);
+                return resolved;
+            }
+            catch { return comments; }
+        }
+
+        /// <summary>Replaces @USR_ID tokens in a text with @DisplayName for human-friendly display.</summary>
+        private string ResolveAtMentionsForDisplay(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text) || AssigneeOptions == null || AssigneeOptions.Count == 0) return text;
+            try
+            {
+                return Regex.Replace(text, @"@(\S+)", m =>
+                {
+                    var id = m.Groups[1].Value;
+                    var user = AssigneeOptions.FirstOrDefault(u =>
+                        string.Equals(u.Id, id, StringComparison.OrdinalIgnoreCase));
+                    if (user != null && !string.IsNullOrWhiteSpace(user.Name) &&
+                        !string.Equals(user.Id, user.Name, StringComparison.OrdinalIgnoreCase))
+                        return $"@{user.Name}";
+                    return m.Value;
+                });
+            }
+            catch { return text; }
+        }
+
         private List<MentionItem> ScanMentions(string currentUser)
         {
             var source = _filteredData ?? _allViewData;
             if (source == null || source.Count == 0) return new List<MentionItem>();
 
-            var mentionPattern = $@"@{Regex.Escape(currentUser)}";
+            // Build regex that matches both @USR_ID and @DisplayName
+            var patterns = new List<string> { Regex.Escape(currentUser) };
+            var displayName = ResolveUserDisplayName(currentUser);
+            if (!string.Equals(displayName, currentUser, StringComparison.OrdinalIgnoreCase))
+                patterns.Add(Regex.Escape(displayName));
+            var mentionPattern = $@"@({string.Join("|", patterns)})";
             var regex = new Regex(mentionPattern, RegexOptions.IgnoreCase);
 
             var results = new List<MentionItem>();
@@ -145,15 +206,24 @@ namespace RecoTool.Windows
                         author = headerMatch.Groups[2].Value.Trim();
                     }
 
+                    // Resolve author USR_ID to display name
+                    var authorDisplay = ResolveUserDisplayName(author);
+
                     var rowId = row.ID ?? row.Reconciliation_Num ?? "";
                     var key = BuildMentionKey(rowId, ts, author);
 
+                    // Build a display-friendly snippet: resolve header author and @mentions to names
+                    var snippet = line.Trim();
+                    if (headerMatch.Success && !string.Equals(author, authorDisplay, StringComparison.Ordinal))
+                        snippet = snippet.Replace(headerMatch.Groups[2].Value.Trim(), authorDisplay);
+                    snippet = ResolveAtMentionsForDisplay(snippet);
+
                     results.Add(new MentionItem
                     {
-                        MentionedBy = author,
+                        MentionedBy = authorDisplay,
                         Timestamp = ts,
                         TimeAgo = FormatTimeAgo(ts),
-                        CommentSnippet = Truncate(line.Trim(), 120),
+                        CommentSnippet = Truncate(snippet, 120),
                         RecordRef = row.Reconciliation_Num ?? row.ID,
                         SourceRow = row,
                         Key = key,

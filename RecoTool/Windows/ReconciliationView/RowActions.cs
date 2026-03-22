@@ -114,11 +114,11 @@ namespace RecoTool.Windows
                     Owner = Window.GetWindow(this)
                 };
                 dlg.SetUsers(AssigneeOptions);
-                dlg.SetConversationText(row.Comments ?? string.Empty);
+                dlg.SetConversationText(ResolveCommentsForDisplay(row.Comments ?? string.Empty));
                 var res = dlg.ShowDialog();
                 if (res == true)
                 {
-                    var user = _reconciliationService.CurrentUser;
+                    var user = ResolveUserDisplayName(_reconciliationService.CurrentUser);
                     var newLine = dlg.GetNewCommentText()?.Trim();
                     if (!string.IsNullOrWhiteSpace(newLine))
                     {
@@ -395,7 +395,7 @@ Do you want to apply these automatic rules?
                                 // Commentaire généré par la règle
                                 if (!string.IsNullOrWhiteSpace(preview.UserMessage))
                                 {
-                                    var curUser = Environment.UserName;
+                                    var curUser = ResolveUserDisplayName(_reconciliationService?.CurrentUser ?? Environment.UserName);
                                     var prefix = $"[{DateTime.Now:yyyy-MM-dd HH:mm}] {curUser}: ";
                                     var msg = prefix + $"[Rule {preview.Rule.RuleId ?? "(unnamed)"}] {preview.UserMessage}";
 
@@ -513,7 +513,7 @@ Do you want to apply these automatic rules?
                 var text = ShowTextInputDialog($"Set Comment for {selected.Count} row(s)", multiLine: true);
                 if (text == null) return;
 
-                var user = _reconciliationService.CurrentUser ?? Environment.UserName;
+                var user = ResolveUserDisplayName(_reconciliationService.CurrentUser ?? Environment.UserName);
                 string prefix = $"[{DateTime.Now:yyyy-MM-dd HH:mm}] {user}: ";
                 var updates = new List<Reconciliation>();
                 foreach (var r in selected)

@@ -660,7 +660,7 @@ namespace RecoTool.Windows
                     {
                         try
                         {
-                            var currentUser = Environment.UserName;
+                            var currentUser = ResolveUserDisplayName(_reconciliationService?.CurrentUser ?? Environment.UserName);
                             var prefix = $"[{DateTime.Now:yyyy-MM-dd HH:mm}] {currentUser}: ";
                             var msg = prefix + $"[Rule {res.Rule.RuleId ?? "(unnamed)"}] {res.UserMessage}";
                             if (string.IsNullOrWhiteSpace(row.Comments))

@@ -1356,6 +1356,23 @@ namespace RecoTool.Windows
 
                 await LoadDataAsync(token).ConfigureAwait(false);
 
+                // Start multi-user badge refresh (lazy re-init tracker if needed)
+                try
+                {
+                    if (_todoSessionTracker == null)
+                        InitializeTodoSessionTracker();
+                    var todo = SelectedTodoItem;
+                    if (todo != null && todo.TDL_id > 0)
+                    {
+                        await Dispatcher.InvokeAsync(async () =>
+                        {
+                            await RefreshTodoMultiUserBadgeAsync(todo.TDL_id);
+                            StartTodoMultiUserBadgeTimer();
+                        });
+                    }
+                }
+                catch { }
+
                 // Ne pas ouvrir de vue par défaut. Laisser l'utilisateur en sélectionner/ajouter une.
             }
             catch (Exception ex)
@@ -1390,6 +1407,10 @@ namespace RecoTool.Windows
             _currentFilter = null;
             _currentFilterName = null;
             OnPropertyChanged(nameof(AddViewModeIndicator));
+
+            // Re-initialize session tracker for new country
+            try { CleanupTodoSessionTracker(); } catch { }
+            InitializeTodoSessionTracker();
 
             // Assurer la fin d'une synchro éventuelle avant de recharger les listes/combos
             try

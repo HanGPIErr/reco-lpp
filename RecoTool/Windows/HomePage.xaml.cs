@@ -2454,10 +2454,17 @@ namespace RecoTool.Windows
         /// </summary>
         private async Task RefreshTodoCardSessionsAsync()
         {
-            if (_todoSessionTracker == null || TodoCards == null) return;
+            // Lazy re-init: tracker may be null if country wasn't set during constructor
+            if (_todoSessionTracker == null)
+            {
+                InitializeTodoSessionTracker();
+                if (_todoSessionTracker == null) return; // still null → no country yet
+            }
+            if (TodoCards == null || TodoCards.Count == 0) return;
 
             try
             {
+                System.Diagnostics.Debug.WriteLine("Refreshing TodoCard sessions...");
                 foreach (var card in TodoCards)
                 {
                     if (card?.Item == null || card.Item.TDL_id <= 0) continue;
