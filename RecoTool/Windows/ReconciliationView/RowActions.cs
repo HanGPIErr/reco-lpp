@@ -135,6 +135,7 @@ namespace RecoTool.Windows
                         var reco = await _reconciliationService.GetOrCreateReconciliationAsync(row.ID);
                         reco.Comments = appended;
                         await _reconciliationService.SaveReconciliationAsync(reco);
+                        StampRowsModified(new[] { row });
                         
                         // Refresh KPIs to reflect changes immediately
                         UpdateKpis(_filteredData);
@@ -441,6 +442,10 @@ Do you want to apply these automatic rules?
                 // Synchronisation en arrière‑plan (dé‑bouncèe)
                 try { ScheduleBulkPushDebounced(); } catch { }
 
+                // Stamp rows + refresh activity log
+                StampRowsModified(targetRows);
+                try { RefreshActivityLog(); } catch { }
+
                 // -----------------------------------------------------------------
                 //  Construction du texte qui sera affiché dans le toast final
                 // -----------------------------------------------------------------
@@ -521,6 +526,7 @@ Do you want to apply these automatic rules?
                     updates.Add(reco);
                 }
                 await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
+                StampRowsModified(selected);
                 AfterSave();
                 try { RefreshMentionBadge(); } catch { }
             }
@@ -563,15 +569,15 @@ Do you want to apply these automatic rules?
                 }
                 if (updates.Count == 0) return;
                 await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
+                StampRowsModified(targetRows);
                 AfterSave();
             }
             catch (Exception ex)
             {
-                ShowError($"Failed to mark action as {statusLabel}: {ex.Message}");
+                ShowError($"Failed to update status: {ex.Message}");
             }
         }
 
-        // Quick take ownership (assigns ALL visible rows, not just selection)
         private async void QuickTakeMenuItem_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -591,6 +597,7 @@ Do you want to apply these automatic rules?
                     updates.Add(reco);
                 }
                 await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
+                StampRowsModified(targetRows);
                 AfterSave();
             }
             catch (Exception ex)
@@ -627,6 +634,7 @@ Do you want to apply these automatic rules?
                     updates.Add(reco);
                 }
                 await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
+                StampRowsModified(targetRows);
                 AfterSave();
             }
             catch (Exception ex)
@@ -730,6 +738,7 @@ Do you want to apply these automatic rules?
         {
             UpdateKpis(_filteredData);
             try { ScheduleBulkPushDebounced(); } catch { }
+            try { RefreshActivityLog(); } catch { }
             if (raiseDataChanged) DataChanged?.Invoke();
         }
 
@@ -830,6 +839,7 @@ Do you want to apply these automatic rules?
                     updates.Add(reco);
                 }
                 await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
+                StampRowsModified(targetRows);
                 AfterSave();
             }
             catch (Exception ex)

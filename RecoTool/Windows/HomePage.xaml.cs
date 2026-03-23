@@ -596,7 +596,7 @@ namespace RecoTool.Windows
             SetupDwingsCheckTimer();
 
             // Initialize TodoList session tracker
-            InitializeTodoSessionTracker();
+            _ = InitializeTodoSessionTrackerAsync();
 
             // Setup TodoCard session refresh timer
             SetupTodoSessionRefreshTimer();
@@ -617,7 +617,7 @@ namespace RecoTool.Windows
 
             // Reinitialize TodoList session tracker for new country
             CleanupTodoSessionTracker();
-            InitializeTodoSessionTracker();
+            _ = InitializeTodoSessionTrackerAsync();
         }
 
         /// <summary>
@@ -1628,7 +1628,6 @@ namespace RecoTool.Windows
                     _reconciliationViewData = new List<ReconciliationViewData>();
                     return;
                 }
-
                 // OPTIMIZED: Prefer in-memory cached view if available (no await, no re-enrichment)
                 var cid = _offlineFirstService.CurrentCountryId;
                 var cachedLive = _reconciliationService.TryGetCachedReconciliationView(cid, null, includeDeleted: false);
@@ -1641,7 +1640,6 @@ namespace RecoTool.Windows
                     var reconciliationViewData = await _reconciliationService.GetReconciliationViewAsync(cid, null);
                     _reconciliationViewData = reconciliationViewData ?? new List<ReconciliationViewData>();
                 }
-
                 // CRITICAL: Load historical data (includeDeleted=true) for Deletion Delay and New vs Deleted charts
                 // These charts need DeleteDate to calculate reconciliation duration and daily trends
                 var cachedHist = _reconciliationService.TryGetCachedReconciliationView(cid, null, includeDeleted: true);
@@ -1654,13 +1652,10 @@ namespace RecoTool.Windows
                     var historicalData = await _reconciliationService.GetReconciliationViewAsync(cid, null, includeDeleted: true);
                     _reconciliationHistoricalData = historicalData ?? new List<ReconciliationViewData>();
                 }
-
                 // Analyser la répartition des comptes pour diagnostic
                 AnalyzeAccountDistribution();
-
                 StatusMessage = $"Data loaded: {_reconciliationViewData.Count} rows (Live), {_reconciliationHistoricalData.Count} rows (Historical)";
                 LastUpdateTime = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
-
                 System.Diagnostics.Debug.WriteLine($"Data loaded via ReconciliationService: {_reconciliationViewData.Count} rows (Live), {_reconciliationHistoricalData.Count} rows (Historical) for {_offlineFirstService.CurrentCountryId}");
             }
             catch (Exception ex)
@@ -1703,7 +1698,6 @@ namespace RecoTool.Windows
         private bool? ConvertToNullableBool(object value)
         {
             if (value == null || value == DBNull.Value) return null;
-            if (value is bool b) return b;
             var s = value.ToString();
             if (bool.TryParse(s, out var parsed)) return parsed;
             if (int.TryParse(s, out var i)) return i != 0;
@@ -1904,7 +1898,7 @@ namespace RecoTool.Windows
         }
 
         /// <summary>
-        /// Met à  jour le graphique des devises
+        /// Met à  jour le graphique des devises
         /// </summary>
         private void UpdateCurrencyChart()
         {
@@ -1952,7 +1946,7 @@ namespace RecoTool.Windows
         }
 
         /// <summary>
-        /// Met à  jour le graphique des actions
+        /// Met à  jour le graphique des actions
         /// </summary>
         private void UpdateActionChart()
         {
@@ -2473,7 +2467,7 @@ namespace RecoTool.Windows
                 // Lazy re-init: tracker may be null if country wasn't set during constructor
                 if (_todoSessionTracker == null)
                 {
-                    InitializeTodoSessionTracker();
+                    await InitializeTodoSessionTrackerAsync();
                     if (_todoSessionTracker == null) return;
                 }
                 if (TodoCards == null || TodoCards.Count == 0) return;
@@ -2504,7 +2498,7 @@ namespace RecoTool.Windows
                             var ago = dur.TotalMinutes < 1 ? "just now"
                                     : dur.TotalMinutes < 60 ? $"{(int)dur.TotalMinutes}m ago"
                                     : $"{(int)dur.TotalHours}h ago";
-                            return $"{name} — viewing ({ago})";
+                            return $"{name} — last active {ago}";
                         }));
                     }
                     else
@@ -2513,7 +2507,6 @@ namespace RecoTool.Windows
                         card.ActiveUsersTooltip = "";
                     }
                 }
-
             }
             catch
             {
@@ -2532,7 +2525,7 @@ namespace RecoTool.Windows
         /// <summary>
         /// Initializes the TodoList session tracker for multi-user awareness
         /// </summary>
-        private void InitializeTodoSessionTracker()
+        private async Task InitializeTodoSessionTrackerAsync()
         {
             try
             {
@@ -2546,17 +2539,18 @@ namespace RecoTool.Windows
 
                 // Derive file-based session folder from the lock DB connection string
                 var lockDbConnString = _offlineFirstService?.GetControlConnectionString(country.CNT_Id);
-                var sessionFolder = TodoListSessionTracker.DeriveSessionFolder(lockDbConnString);
+                var sessionFolder = TodoListSessionTracker.DeriveSessionFolder(lockDbConnString, country.CNT_Id);
                 if (string.IsNullOrEmpty(sessionFolder)) return;
 
-                // Get current user ID (Windows username)
+                // Get current user ID and resolve display name from T_User
                 var currentUserId = Environment.UserName;
+                var displayName = await TodoListSessionTracker.ResolveDisplayNameAsync(_offlineFirstService, currentUserId);
 
                 // Create file-based tracker (no OleDb — uses lightweight .session files)
-                _todoSessionTracker = new TodoListSessionTracker(sessionFolder, currentUserId, _offlineFirstService);
+                _todoSessionTracker = new TodoListSessionTracker(sessionFolder, currentUserId, _offlineFirstService, displayName);
 
                 // Ensure session folder exists (cheap mkdir, no DB)
-                _ = _todoSessionTracker.EnsureTableAsync();
+                await _todoSessionTracker.EnsureTableAsync();
             }
             catch (Exception ex)
             {
@@ -2586,6 +2580,7 @@ namespace RecoTool.Windows
             }
             catch { /* best effort */ }
         }
+
         #endregion
     }
 }

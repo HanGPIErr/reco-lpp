@@ -1140,6 +1140,9 @@ namespace RecoTool.Windows
                 {
                     try { OpenSingleReconciliationPopup(e.ReconciliationId); } catch { }
                 });
+
+                // Touch session file so other users see fresh activity
+                try { _todoSessionTracker?.TouchSession(); } catch { }
             }
             catch { }
         }

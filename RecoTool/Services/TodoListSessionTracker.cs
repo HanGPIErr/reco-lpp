@@ -28,7 +28,7 @@ namespace RecoTool.Services
         private bool _disposed;
         private int _heartbeatRunning;
 
-        private const int HEARTBEAT_INTERVAL_MS = 60_000;
+        private const int HEARTBEAT_INTERVAL_MS = 15_000;
         private const int SESSION_TIMEOUT_SECONDS = 180;
 
         /// <summary>
@@ -144,6 +144,27 @@ namespace RecoTool.Services
                 }).ConfigureAwait(false);
             }
             catch { }
+        }
+
+        /// <summary>
+        /// Immediately touches all tracked session files to update LastWriteTimeUtc.
+        /// Call after user actions (save, edit) so other users see fresh activity.
+        /// </summary>
+        public void TouchSession()
+        {
+            if (!FeatureFlags.ENABLE_MULTI_USER) return;
+            HashSet<int> ids;
+            lock (_lock) { ids = new HashSet<int>(_trackedTodoIds); }
+            foreach (var todoId in ids)
+            {
+                try
+                {
+                    var filePath = GetSessionFilePath(todoId, _currentUserId);
+                    if (File.Exists(filePath))
+                        File.SetLastWriteTimeUtc(filePath, DateTime.UtcNow);
+                }
+                catch { }
+            }
         }
 
         /// <summary>
@@ -380,10 +401,52 @@ namespace RecoTool.Services
         }
 
         /// <summary>
-        /// Helper: derives the _Sessions folder path from a lock DB connection string.
-        /// Use this when constructing the tracker from existing code that has the conn string.
+        /// Resolves a Windows userId (e.g. "gjohn") to the display name from T_User.USR_Name.
+        /// Returns userId as fallback if lookup fails. Safe to call from any thread.
         /// </summary>
-        public static string DeriveSessionFolder(string lockDbConnectionString)
+        public static async Task<string> ResolveDisplayNameAsync(OfflineFirstService offlineFirstService, string userId)
+        {
+            if (string.IsNullOrWhiteSpace(userId)) return userId;
+            if (offlineFirstService == null) return userId;
+            try
+            {
+                return await Task.Run(() =>
+                {
+                    try
+                    {
+                        var connStr = offlineFirstService.ReferentialConnectionString;
+                        if (string.IsNullOrWhiteSpace(connStr)) return userId;
+
+                        using (var conn = new System.Data.OleDb.OleDbConnection(connStr))
+                        {
+                            conn.Open();
+                            using (var cmd = new System.Data.OleDb.OleDbCommand(
+                                "SELECT USR_Name FROM T_User WHERE USR_ID = ?", conn))
+                            {
+                                cmd.Parameters.AddWithValue("@p1", userId);
+                                var result = cmd.ExecuteScalar();
+                                if (result != null && result != DBNull.Value)
+                                {
+                                    var name = result.ToString()?.Trim();
+                                    if (!string.IsNullOrWhiteSpace(name))
+                                        return name;
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+                    return userId;
+                }).ConfigureAwait(false);
+            }
+            catch { return userId; }
+        }
+
+        /// <summary>
+        /// Helper: derives the _Sessions folder path from a lock DB connection string.
+        /// When countryId is provided, creates a country-specific subfolder (_Sessions\FR)
+        /// to prevent cross-country session collisions.
+        /// </summary>
+        public static string DeriveSessionFolder(string lockDbConnectionString, string countryId = null)
         {
             if (string.IsNullOrWhiteSpace(lockDbConnectionString))
                 return null;
@@ -401,7 +464,12 @@ namespace RecoTool.Services
                         var dbPath = trimmed.Substring("Data Source=".Length).Trim();
                         var dir = Path.GetDirectoryName(dbPath);
                         if (!string.IsNullOrWhiteSpace(dir))
-                            return Path.Combine(dir, "_Sessions");
+                        {
+                            var sessionsRoot = Path.Combine(dir, "_Sessions");
+                            if (!string.IsNullOrWhiteSpace(countryId))
+                                return Path.Combine(sessionsRoot, countryId);
+                            return sessionsRoot;
+                        }
                     }
                 }
             }
@@ -420,7 +488,8 @@ namespace RecoTool.Services
         public DateTime SessionStart { get; set; }
         public DateTime LastHeartbeat { get; set; }
 
-        public TimeSpan Duration => DateTime.Now - SessionStart;
+        public TimeSpan Duration => DateTime.Now - LastHeartbeat;
+        public TimeSpan SessionDuration => DateTime.Now - SessionStart;
         public bool IsActive => (DateTime.Now - LastHeartbeat).TotalSeconds < SESSION_TIMEOUT_SECONDS;
         private const int SESSION_TIMEOUT_SECONDS = 180;
     }

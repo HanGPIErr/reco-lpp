@@ -209,8 +209,8 @@ namespace RecoTool.Windows
             {
                 var duration = _session.Duration;
                 if (duration.TotalMinutes < 1) return "(just now)";
-                if (duration.TotalMinutes < 60) return $"({(int)duration.TotalMinutes}m)";
-                return $"({(int)duration.TotalHours}h)";
+                if (duration.TotalMinutes < 60) return $"({(int)duration.TotalMinutes}m ago)";
+                return $"({(int)duration.TotalHours}h ago)";
             }
         }
     }

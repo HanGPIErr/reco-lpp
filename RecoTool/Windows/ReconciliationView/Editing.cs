@@ -168,6 +168,7 @@ namespace RecoTool.Windows
                 {
                     await _reconciliationService.SaveReconciliationAsync(reco, applyRulesOnEdit: false);
                 }
+                StampRowsModified(new[] { row });
                 
                 // Refresh KPIs to reflect changes immediately
                 UpdateKpis(_filteredData);
@@ -178,6 +179,7 @@ namespace RecoTool.Windows
                     ScheduleBulkPushDebounced();
                 }
                 catch { /* ignore any scheduling errors */ }
+                try { RefreshActivityLog(); } catch { }
             }
             catch (Exception ex)
             {
@@ -388,6 +390,8 @@ namespace RecoTool.Windows
             }
             catch { }
 
+            StampRowsModified(new[] { row });
+
             // Refresh KPIs to reflect changes immediately
             UpdateKpis(_filteredData);
 
@@ -397,6 +401,7 @@ namespace RecoTool.Windows
                 ScheduleBulkPushDebounced();
             }
             catch { }
+            try { RefreshActivityLog(); } catch { }
             finally { _ruleConfirmBusy = false; }
         }
         

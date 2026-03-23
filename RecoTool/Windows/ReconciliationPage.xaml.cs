@@ -2488,6 +2488,9 @@ namespace RecoTool.Windows
 
                 ShowInfo($"✅ {linked} lines linked with reference {groupRef}");
 
+                // Touch session so other users see fresh activity
+                try { _todoSessionTracker?.TouchSession(); } catch { }
+
                 // Refresh all open views to show the new grouping
                 RefreshAllOpenViews();
             }
@@ -2596,11 +2599,12 @@ namespace RecoTool.Windows
                 if (country == null) return;
 
                 var lockDbConnString = _offlineFirstService?.GetControlConnectionString(country.CNT_Id);
-                var sessionFolder = TodoListSessionTracker.DeriveSessionFolder(lockDbConnString);
+                var sessionFolder = TodoListSessionTracker.DeriveSessionFolder(lockDbConnString, country.CNT_Id);
                 if (string.IsNullOrEmpty(sessionFolder)) return;
 
                 var currentUserId = Environment.UserName;
-                _todoSessionTracker = new TodoListSessionTracker(sessionFolder, currentUserId, _offlineFirstService);
+                var displayName = await TodoListSessionTracker.ResolveDisplayNameAsync(_offlineFirstService, currentUserId);
+                _todoSessionTracker = new TodoListSessionTracker(sessionFolder, currentUserId, _offlineFirstService, displayName);
                 await _todoSessionTracker.EnsureTableAsync();
             }
             catch { }
@@ -2661,8 +2665,7 @@ namespace RecoTool.Windows
                 if (_todoSessionTracker == null) return;
                 if (todoId <= 0) return;
 
-                var userName = _offlineFirstService?.CurrentUser ?? Environment.UserName;
-                await _todoSessionTracker.RegisterViewingAsync(todoId, userName, isEditing: false);
+                await _todoSessionTracker.RegisterViewingAsync(todoId);
             }
             catch { }
         }

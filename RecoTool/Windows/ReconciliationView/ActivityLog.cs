@@ -74,6 +74,39 @@ namespace RecoTool.Windows
             return s.Length <= maxLen ? s : s.Substring(0, maxLen - 1) + "…";
         }
 
+        /// <summary>
+        /// Stamps the affected in-memory rows with current timestamp and user after a save,
+        /// so the Activity Log reflects recent edits without requiring a full data reload.
+        /// </summary>
+        private void StampRowsModified(IEnumerable<ReconciliationViewData> rows)
+        {
+            if (rows == null) return;
+            var now = DateTime.Now;
+            var user = _reconciliationService?.CurrentUser ?? Environment.UserName;
+            foreach (var r in rows)
+            {
+                if (r == null) continue;
+                r.Reco_LastModified = now;
+                r.Reco_ModifiedBy = user;
+            }
+        }
+
+        /// <summary>
+        /// Refreshes the Activity Log panel if it is currently visible.
+        /// Call after any data modification to keep the log up-to-date.
+        /// </summary>
+        private void RefreshActivityLog()
+        {
+            if (!_activityLogVisible) return;
+            try
+            {
+                var listBox = this.FindName("ActivityLogListBox") as ListBox;
+                if (listBox != null)
+                    listBox.ItemsSource = BuildActivityLog();
+            }
+            catch { }
+        }
+
         private void ToggleActivityLog_Click(object sender, RoutedEventArgs e)
         {
             _activityLogVisible = !_activityLogVisible;
