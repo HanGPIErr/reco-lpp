@@ -199,6 +199,17 @@ namespace RecoTool.Windows
                 swEnrich.Stop();
                 System.Diagnostics.Debug.WriteLine($"[ViewDataEnricher] Enriched {totalRows} rows in {swEnrich.ElapsedMilliseconds}ms");
 
+                // Resolve UIDs in comments to display names for DataGrid display
+                try
+                {
+                    foreach (var r in _allViewData)
+                    {
+                        if (!string.IsNullOrWhiteSpace(r.Comments))
+                            r.Comments = ResolveCommentsForDisplay(r.Comments);
+                    }
+                }
+                catch { }
+
                 // Populate Category filter ComboBox with distinct values from data
                 try
                 {

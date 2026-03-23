@@ -678,12 +678,22 @@ namespace RecoTool.Windows
                 Populate(incRoot, "Incident Type");
                 Populate(riskyRoot, "Risky");
 
+                // Disable editing submenus on archived rows
+                if (rowData.IsDeleted)
+                {
+                    if (actionRoot != null) actionRoot.IsEnabled = false;
+                    if (kpiRoot != null) kpiRoot.IsEnabled = false;
+                    if (incRoot != null) incRoot.IsEnabled = false;
+                    if (riskyRoot != null) riskyRoot.IsEnabled = false;
+                }
+
                 // Wire "Add to Linking Basket" click handler dynamically (can't use Click= in Style ContextMenu)
                 var linkingItem = cm.Items.OfType<MenuItem>().FirstOrDefault(mi => (mi.Tag as string) == "LinkingBasket");
                 if (linkingItem != null)
                 {
                     linkingItem.Click -= AddToLinkingBasket_Click;
                     linkingItem.Click += AddToLinkingBasket_Click;
+                    linkingItem.IsEnabled = !rowData.IsDeleted;
                 }
 
                 // Add Set Comment action applicable to multi-selection
@@ -733,13 +743,15 @@ namespace RecoTool.Windows
                         cm.Items.Add(openGroupedItem);
                     }
                     
-                    var takeItem = new MenuItem { Header = "Take (Assign to me)", Tag = "__Take__", DataContext = rowData };
+                    bool isArchived = rowData.IsDeleted;
+
+                    var takeItem = new MenuItem { Header = "Take (Assign to me)", Tag = "__Take__", DataContext = rowData, IsEnabled = !isArchived };
                     takeItem.Click += QuickTakeMenuItem_Click;
                     cm.Items.Add(takeItem);
-                    var reminderItem = new MenuItem { Header = "Set Reminder Date…", Tag = "__SetReminder__", DataContext = rowData };
+                    var reminderItem = new MenuItem { Header = "Set Reminder Date…", Tag = "__SetReminder__", DataContext = rowData, IsEnabled = !isArchived };
                     reminderItem.Click += QuickSetReminderMenuItem_Click;
                     cm.Items.Add(reminderItem);
-                    var actionStatusMenu = new MenuItem { Header = "Set Action Status", Tag = "__ActionStatusMenu__" };
+                    var actionStatusMenu = new MenuItem { Header = "Set Action Status", Tag = "__ActionStatusMenu__", IsEnabled = !isArchived };
                     var doneItem = new MenuItem { Header = "DONE", Tag = "__MarkActionDone__", DataContext = rowData };
                     doneItem.Click += QuickMarkActionDoneMenuItem_Click;
                     var pendingItem = new MenuItem { Header = "PENDING", Tag = "__MarkActionPending__", DataContext = rowData };
@@ -748,8 +760,8 @@ namespace RecoTool.Windows
                     actionStatusMenu.Items.Add(pendingItem);
                     cm.Items.Add(actionStatusMenu);
 
-                    // Process DWINGS Blue Button – visible when the row is grouped (both P+R sides exist)
-                    if (rowData.IsMatchedAcrossAccounts
+                    // Process DWINGS Blue Button – visible when the row is grouped (both P+R sides exist) and NOT archived
+                    if (rowData.IsMatchedAcrossAccounts && !isArchived
                         && (!string.IsNullOrWhiteSpace(rowData.DWINGS_BGPMT) || !string.IsNullOrWhiteSpace(rowData.InternalInvoiceReference)))
                     {
                         var dwingsItem = new MenuItem
@@ -764,16 +776,16 @@ namespace RecoTool.Windows
                         cm.Items.Add(dwingsItem);
                     }
 
-                    var firstClaimDate = new MenuItem { Header = "Set First Claim Date = ?", Tag = "__SetFirstClaimToday__", DataContext = rowData };
+                    var firstClaimDate = new MenuItem { Header = "Set First Claim Date = ?", Tag = "__SetFirstClaimToday__", DataContext = rowData, IsEnabled = !isArchived };
                     firstClaimDate.Click += QuickSetFirstClaimTodayMenuItem_Click;
                     cm.Items.Add(firstClaimDate);
-                    var lastClaimDate = new MenuItem { Header = "Set Last Claim Date = ?", Tag = "__SetLastClaimToday__", DataContext = rowData };
+                    var lastClaimDate = new MenuItem { Header = "Set Last Claim Date = ?", Tag = "__SetLastClaimToday__", DataContext = rowData, IsEnabled = !isArchived };
                     lastClaimDate.Click += QuickSetLastClaimTodayMenuItem_Click;
                     cm.Items.Add(lastClaimDate);
-                    var addRuleItem = new MenuItem { Header = "Add Rule based on this line…", Tag = "__AddRuleFromLine__", DataContext = rowData };
+                    var addRuleItem = new MenuItem { Header = "Add Rule based on this line…", Tag = "__AddRuleFromLine__", DataContext = rowData, IsEnabled = !isArchived };
                     addRuleItem.Click += QuickAddRuleFromLineMenuItem_Click;
                     cm.Items.Add(addRuleItem);
-                    var commentItem = new MenuItem { Header = "Set Comment…", Tag = "__SetComment__" };
+                    var commentItem = new MenuItem { Header = "Set Comment…", Tag = "__SetComment__", IsEnabled = !isArchived };
                     commentItem.Click += QuickSetCommentMenuItem_Click;
                     cm.Items.Add(commentItem);
 

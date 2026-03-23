@@ -140,10 +140,14 @@ namespace RecoTool.Windows
                 ReconciliationView targetView = targetIsPivot ? _pivotPopupView : targetIsReceivable ? _receivablePopupView : _groupPopupView;
                 string titlePrefix = targetIsPivot ? "Group (PIVOT)" : targetIsReceivable ? "Group (RECEIVABLE)" : "Group";
 
+                // Propagate parent's Status filter so popup shows same status (Live/Archived/All)
+                var parentStatus = this.FilterStatus;
+
                 // Reuse if already open
                 if (targetWindow != null && targetWindow.IsVisible && targetView != null)
                 {
                     try { targetView.SyncCountryFromService(refresh: false); } catch { }
+                    try { targetView.FilterStatus = parentStatus; } catch { }
                     try { targetView.ApplySavedFilterSql(where); } catch { }
                     try
                     {
@@ -172,6 +176,7 @@ namespace RecoTool.Windows
                 // Mark the created view with its dedicated side for future reuse detection
                 try { targetView._popupDedicatedSide = targetIsPivot ? 'P' : targetIsReceivable ? 'R' : (char?)null; } catch { }
                 try { targetView.SyncCountryFromService(refresh: false); } catch { }
+                try { targetView.FilterStatus = parentStatus; } catch { }
                 try { targetView.ApplySavedFilterSql(where); } catch { }
                 try
                 {

@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
 using System.Windows.Data;
+using RecoTool.Services.Helpers;
 
 namespace RecoTool.Windows
 {
@@ -29,6 +30,41 @@ namespace RecoTool.Windows
             {
                 filteredList = filteredList.Where(row => MatchesStatusFilter(row)).ToList();
             }
+
+            // Recalculate grouping flags and MissingAmount on filtered data so they are
+            // coherent with visible rows. Without this, Archived mode shows values computed
+            // from ALL rows (live+archived), which is misleading.
+            try
+            {
+                var country = CurrentCountryObject;
+                if (country != null)
+                {
+                    // Reset grouping + MissingAmount for all filtered rows first
+                    foreach (var r in filteredList)
+                    {
+                        r.IsMatchedAcrossAccounts = false;
+                        r.MissingAmount = null;
+                        r.CounterpartTotalAmount = null;
+                        r.CounterpartCount = null;
+                    }
+
+                    // Recompute IsMatchedAcrossAccounts on visible rows only
+                    AccountSideCalculator.ComputeMatchedAcrossAccounts(filteredList,
+                        r => r.AccountSide,
+                        r => r.DWINGS_InvoiceID,
+                        r => r.InternalInvoiceReference,
+                        (r, matched) => r.IsMatchedAcrossAccounts = matched,
+                        r => AccountSideCalculator.ExtractFallbackBgiKey(
+                            r.DWINGS_InvoiceID, r.Receivable_InvoiceFromAmbre,
+                            r.Reconciliation_Num, r.Comments, r.RawLabel,
+                            r.Receivable_DWRefFromAmbre, r.InternalInvoiceReference));
+
+                    // Recompute MissingAmount on visible rows only
+                    ReconciliationViewEnricher.CalculateMissingAmounts(
+                        filteredList, country.CNT_AmbreReceivable, country.CNT_AmbrePivot);
+                }
+            }
+            catch { }
 
             // Update display with pagination (first N lines) but totals on full filtered set
             _filteredData = filteredList;
