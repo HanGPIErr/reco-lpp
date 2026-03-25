@@ -744,34 +744,6 @@ namespace RecoTool.Windows
         #region Data Loading
 
         /// <summary>
-        /// Charge la liste des pays disponibles depuis OfflineFirstService
-        /// </summary>
-        private async void LoadAvailableCountries()
-        {
-            try
-            {
-                using var _ = BeginWaitCursor();
-                if (_offlineFirstService != null)
-                {
-                    var countries = await _offlineFirstService.GetCountries();
-                    AvailableCountries = countries.ToList();
-                    
-                    // Sélectionner automatiquement la country courante
-                    var currentCountry = _offlineFirstService.CurrentCountry;
-                }
-                else
-                {
-                    // Fallback: liste vide si pas de service
-                    AvailableCountries = new List<Country>();
-                }
-            }
-            catch (Exception ex)
-            {
-                ShowError($"Error loading countries: {ex.Message}");
-            }
-        }
-
-        /// <summary>
         /// Charge les données de réconciliation
         /// </summary>
         public async Task LoadDataAsync(CancellationToken cancellationToken = default)
@@ -780,15 +752,16 @@ namespace RecoTool.Windows
             {
                 using var _ = BeginWaitCursor();
                 IsLoading = true;
-                // Toujours charger/rafraîchir les filtres/vues sauf si la recharge est déclenchée par une sélection
+                // OPTIMIZED: Parallelize filter/view/todo loading instead of sequential awaits
                 if (!_skipReloadSavedLists)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    await LoadSavedFiltersAsync(cancellationToken).ConfigureAwait(false);
-                    cancellationToken.ThrowIfCancellationRequested();
-                    await LoadSavedViewsAsync(cancellationToken).ConfigureAwait(false);
-                    cancellationToken.ThrowIfCancellationRequested();
-                    await LoadTodoListAsync(cancellationToken).ConfigureAwait(false);
+                    // Load all referentials in parallel - they are independent operations
+                    await Task.WhenAll(
+                        LoadSavedFiltersAsync(cancellationToken),
+                        LoadSavedViewsAsync(cancellationToken),
+                        LoadTodoListAsync(cancellationToken)
+                    ).ConfigureAwait(false);
                 }
                 // Mettre à jour les filtres de haut de page à partir du référentiel pays
                 cancellationToken.ThrowIfCancellationRequested();
@@ -819,6 +792,34 @@ namespace RecoTool.Windows
             finally
             {
                 IsLoading = false;
+            }
+        }
+
+        /// <summary>
+        /// Charge la liste des pays disponibles depuis OfflineFirstService
+        /// </summary>
+        private async void LoadAvailableCountries()
+        {
+            try
+            {
+                using var _ = BeginWaitCursor();
+                if (_offlineFirstService != null)
+                {
+                    var countries = await _offlineFirstService.GetCountries();
+                    AvailableCountries = countries.ToList();
+                    
+                    // Sélectionner automatiquement la country courante
+                    var currentCountry = _offlineFirstService.CurrentCountry;
+                }
+                else
+                {
+                    // Fallback: liste vide si pas de service
+                    AvailableCountries = new List<Country>();
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error loading countries: {ex.Message}");
             }
         }
 
@@ -1339,14 +1340,13 @@ namespace RecoTool.Windows
                 _pageCts = new CancellationTokenSource();
                 var token = _pageCts.Token;
 
-                // Assurer la fin d'une synchro éventuelle avant de recharger les listes/combos
+                // OPTIMIZED: Only wait for sync, don't do full RefreshConfigurationAsync
+                // (referentials are already loaded at app startup via OfflineFirstService constructor)
                 try
                 {
                     var cid = _offlineFirstService?.CurrentCountryId ?? _offlineFirstService?.CurrentCountry?.CNT_Id;
                     if (!string.IsNullOrWhiteSpace(cid))
                         await _offlineFirstService.WaitForSynchronizationAsync(cid, token).ConfigureAwait(false);
-                    // Recharger les référentiels (inclut UserFilters) pour refléter le nouveau contexte pays
-                    try { await _offlineFirstService.RefreshConfigurationAsync().ConfigureAwait(false); } catch { }
                 }
                 catch { }
 
@@ -1399,22 +1399,25 @@ namespace RecoTool.Windows
             try { CleanupTodoSessionTracker(); } catch { }
             InitializeTodoSessionTracker();
 
-            // Assurer la fin d'une synchro éventuelle avant de recharger les listes/combos
+            // OPTIMIZED: Only wait for sync, don't do full RefreshConfigurationAsync
+            // (which reloads ALL referentials - countries, user fields, params etc.)
+            // UserFilters are refreshed via LoadSavedFiltersAsync below
             try
             {
                 var cid = _offlineFirstService?.CurrentCountryId ?? _offlineFirstService?.CurrentCountry?.CNT_Id;
                 if (!string.IsNullOrWhiteSpace(cid))
                     await _offlineFirstService.WaitForSynchronizationAsync(cid, token).ConfigureAwait(false);
-                // Recharger les référentiels (inclut UserFilters) pour refléter le nouveau contexte pays
-                try { await _offlineFirstService.RefreshConfigurationAsync().ConfigureAwait(false); } catch { }
             }
             catch { }
 
-            // Recharger explicitement les listes de filtres/vues et MAJ des comptes (Pivot/Receivable)
+            // OPTIMIZED: Parallelize filter/view loading and UI update
             try
             {
-                await LoadSavedFiltersAsync(token).ConfigureAwait(false);
-                await LoadSavedViewsAsync(token).ConfigureAwait(false);
+                await Task.WhenAll(
+                    LoadSavedFiltersAsync(token),
+                    LoadSavedViewsAsync(token)
+                ).ConfigureAwait(false);
+                
                 if (Dispatcher != null)
                     await Dispatcher.InvokeAsync(UpdateTopFiltersFromData);
                 else

@@ -38,7 +38,7 @@ namespace RecoTool.Services.Ambre
             progressCallback?.Invoke("Synchronizing with database...", 80);
             
             var syncResult = await SynchronizeWithDatabaseAsync(
-                validData, countryId, performNetworkSync: true, assumeGlobalLockHeld: true);
+                validData, countryId, performNetworkSync: true, assumeGlobalLockHeld: true, progressCallback: progressCallback);
                 
             result.NewRecords = syncResult.newCount;
             result.UpdatedRecords = syncResult.updatedCount;
@@ -50,7 +50,8 @@ namespace RecoTool.Services.Ambre
             List<DataAmbre> newData, 
             string countryId, 
             bool performNetworkSync, 
-            bool assumeGlobalLockHeld = false)
+            bool assumeGlobalLockHeld = false,
+            Action<string, int> progressCallback = null)
         {
             try
             {
@@ -61,7 +62,7 @@ namespace RecoTool.Services.Ambre
                 LogManager.Info($"Calculated changes for {countryId} - New: {changes.ToAdd.Count}, Updated: {changes.ToUpdate.Count}, Deleted: {changes.ToArchive.Count}");
 
                 // 2. Appliquer les changements
-                await ExecuteChangesAsync(changes, countryId, assumeGlobalLockHeld);
+                await ExecuteChangesAsync(changes, countryId, assumeGlobalLockHeld, progressCallback);
 
                 // 3. Synchronisation réseau si nécessaire
                 if (performNetworkSync && !assumeGlobalLockHeld)
@@ -78,7 +79,7 @@ namespace RecoTool.Services.Ambre
             }
         }
 
-        private async Task ExecuteChangesAsync(ImportChanges changes, string countryId, bool assumeGlobalLockHeld)
+        private async Task ExecuteChangesAsync(ImportChanges changes, string countryId, bool assumeGlobalLockHeld, Action<string, int> progressCallback = null)
         {
             async Task ApplyChangesInternalAsync()
             {
@@ -100,7 +101,7 @@ namespace RecoTool.Services.Ambre
                     // Update reconciliation
                     try { await _offlineFirstService.SetSyncStatusAsync("Reconciling"); } catch { }
                     var recoTimer = System.Diagnostics.Stopwatch.StartNew();
-                    await UpdateReconciliationTableAsync(changes, countryId);
+                    await UpdateReconciliationTableAsync(changes, countryId, progressCallback);
                     recoTimer.Stop();
                     LogManager.Info($"[PERF] UpdateReconciliationTable completed in {recoTimer.ElapsedMilliseconds}ms");
 
@@ -507,7 +508,7 @@ namespace RecoTool.Services.Ambre
             }
         }
 
-        private async Task UpdateReconciliationTableAsync(ImportChanges changes, string countryId)
+        private async Task UpdateReconciliationTableAsync(ImportChanges changes, string countryId, Action<string, int> progressCallback = null)
         {
             // Branch to the dedicated updater that mirrors AMBRE changes into T_Reconciliation
             LogManager.Info($"Updating T_Reconciliation for {countryId}");
@@ -532,7 +533,7 @@ namespace RecoTool.Services.Ambre
 
             // Execute reconciliation table updates (insert/unarchive/archive) using the dedicated updater
             var updater = new AmbreReconciliationUpdater(_offlineFirstService, _currentUser, _reconciliationService);
-            await updater.UpdateReconciliationTableAsync(changes, countryId, country).ConfigureAwait(false);
+            await updater.UpdateReconciliationTableAsync(changes, countryId, country, progressCallback).ConfigureAwait(false);
         }
     }
 

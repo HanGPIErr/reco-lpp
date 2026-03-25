@@ -580,6 +580,79 @@ namespace RecoTool.Services.Rules
             }
         }
 
+        /// <summary>
+        /// TEMPORARY: Seed specific rules from screenshot. Call this once then remove.
+        /// Returns the number of rules successfully upserted.
+        /// </summary>
+        public async Task<int> SeedSpecificRulesAsync(CancellationToken token = default)
+        {
+            try
+            {
+                var tableOk = await EnsureRulesTableAsync(token).ConfigureAwait(false);
+                if (!tableOk) return 0;
+
+                var rules = new List<TruthRule>
+                {
+                    // Pivot - Collection Credit
+                    new TruthRule { RuleId = "P-COLL-C", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "P", TransactionType = "COLLECTION", Sign = "C", OutputActionId = 4, OutputKpiId = 18, ApplyTo = ApplyTarget.Both, AutoApply = true },
+                    
+                    // Pivot - Collection Debit
+                    new TruthRule { RuleId = "P-COLL-D", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "P", TransactionType = "COLLECTION", Sign = "D", OutputActionId = 1, OutputKpiId = 19, ApplyTo = ApplyTarget.Self, AutoApply = true },
+                    
+                    // Pivot - Payment Credit
+                    new TruthRule { RuleId = "P-PAY-C", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "P", TransactionType = "PAYMENT", Sign = "C", OutputActionId = 7, OutputKpiId = 22, ApplyTo = ApplyTarget.Self, AutoApply = true },
+                    
+                    // Pivot - Payment Debit
+                    new TruthRule { RuleId = "P-PAY-D", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "P", TransactionType = "PAYMENT", Sign = "D", OutputActionId = 13, OutputKpiId = 21, ApplyTo = ApplyTarget.Self, AutoApply = true },
+                    
+                    // Pivot - Adjustment
+                    new TruthRule { RuleId = "P-ADJ", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "P", TransactionType = "ADJUSTMENT", OutputActionId = 1, OutputKpiId = 18, ApplyTo = ApplyTarget.Self, AutoApply = true },
+                    
+                    // Pivot - XCL Loader & Trigger
+                    new TruthRule { RuleId = "P-XCL", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "P", TransactionType = "XCL_LOADER;TRIGGER", OutputActionId = 6, OutputKpiId = 18, ApplyTo = ApplyTarget.Self, AutoApply = true },
+                    
+                    // Pivot - Manual Outgoing
+                    new TruthRule { RuleId = "P-MANOUT", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "P", TransactionType = "MANUAL_OUTGOING", OutputActionId = 4, OutputKpiId = 15, ApplyTo = ApplyTarget.Self, AutoApply = true },
+                    
+                    // Receivable - Incoming Payment Issuance with Email
+                    new TruthRule { RuleId = "R-INCPAY-ISSU-EMAIL", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "R", TransactionType = "INCOMING_PAYMENT", GuaranteeType = "ISSUANCE", CommIdEmail = true, IsFirstRequest = true, OutputActionId = 1, OutputKpiId = 16, OutputFirstClaimToday = 1, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "First claim email sent - awaiting response" },
+                    
+                    // Receivable - Incoming Payment Issuance without Email
+                    new TruthRule { RuleId = "R-INCPAY-ISSU-NOEMAIL", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "R", TransactionType = "INCOMING_PAYMENT", GuaranteeType = "ISSUANCE", CommIdEmail = false, IsFirstRequest = true, OutputActionId = 2, OutputKpiId = 17, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "⚠️ No email communication ID - manual claim required" },
+                    
+                    // Receivable - Incoming Payment Reissuance/Advising MT791 Acked
+                    new TruthRule { RuleId = "R-INCPAY-REISSU-ACK", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "R", TransactionType = "INCOMING_PAYMENT", GuaranteeType = "REISSUANCE;ADVISING", MTStatus = MtStatusCondition.Acked, IsFirstRequest = true, OutputActionId = 1, OutputKpiId = 16, OutputFirstClaimToday = 1, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "MT791 Sent automatically via Dwings" },
+                    
+                    // Receivable - Incoming Payment Reissuance/Advising MT791 Not Acked
+                    new TruthRule { RuleId = "R-INCPAY-REISSU-NACK", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "R", TransactionType = "INCOMING_PAYMENT", GuaranteeType = "REISSUANCE;ADVISING", MTStatus = MtStatusCondition.NotAcked, IsFirstRequest = true, OutputActionId = 2, OutputKpiId = 17, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "⚠️ MT791 not acknowledged - manual follow-up required" },
+                    
+                    // Receivable - Direct Debit
+                    new TruthRule { RuleId = "R-DIRDEB", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "R", TransactionType = "DIRECT_DEBIT", OutputActionId = 7, OutputKpiId = 19, ApplyTo = ApplyTarget.Self, AutoApply = true },
+                    
+                    // Receivable - Outgoing Payment Initiated
+                    new TruthRule { RuleId = "R-OUTPAY-INIT", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "R", TransactionType = "OUTGOING_PAYMENT", BgiStatusInitiated = true, OutputActionId = 5, OutputKpiId = 15, ApplyTo = ApplyTarget.Self, AutoApply = true },
+                    
+                    // Receivable - Outgoing Payment Not Initiated
+                    new TruthRule { RuleId = "R-OUTPAY-NINIT", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "R", TransactionType = "OUTGOING_PAYMENT", BgiStatusInitiated = false, OutputActionId = 7, OutputKpiId = 22, ApplyTo = ApplyTarget.Self, AutoApply = true },
+                    
+                    // Receivable - External Debit Payment
+                    new TruthRule { RuleId = "R-EXTDEB", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "R", TransactionType = "EXTERNAL_DEBIT_PAYMENT", OutputActionId = 10, OutputKpiId = 17, ApplyTo = ApplyTarget.Self, AutoApply = true },
+                };
+
+                int saved = 0;
+                foreach (var r in rules)
+                {
+                    var ok = await UpsertRuleAsync(r, token).ConfigureAwait(false);
+                    if (ok) saved++;
+                }
+                return saved;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
         private int? ResolveUserFieldId(string category, string name)
         {
             try

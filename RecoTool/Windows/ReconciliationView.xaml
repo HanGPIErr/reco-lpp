@@ -82,41 +82,6 @@
             <Setter Property="BorderBrush" Value="#90CAF9"/>
             <Setter Property="BorderThickness" Value="0,0,1,2"/>
             <Setter Property="ToolTip" Value="Source: AMBRE"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="DataGridColumnHeader">
-                        <Grid>
-                            <Border Background="{TemplateBinding Background}" 
-                                    BorderBrush="{TemplateBinding BorderBrush}" 
-                                    BorderThickness="{TemplateBinding BorderThickness}"
-                                    Padding="{TemplateBinding Padding}">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <ContentPresenter Grid.Column="0" VerticalAlignment="Center"/>
-                                    <Path x:Name="SortArrow" Grid.Column="1" Visibility="Collapsed" 
-                                          Fill="{TemplateBinding Foreground}" Margin="4,0,0,0" VerticalAlignment="Center"
-                                          Data="M 0,0 L 4,4 L 8,0 Z" Width="8" Height="4"/>
-                                </Grid>
-                            </Border>
-                            <Thumb x:Name="PART_LeftHeaderGripper" HorizontalAlignment="Left" Width="8" Opacity="0" Cursor="SizeWE"/>
-                            <Thumb x:Name="PART_RightHeaderGripper" HorizontalAlignment="Right" Width="8" Opacity="0" Cursor="SizeWE"/>
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="SortDirection" Value="Ascending">
-                                <Setter TargetName="SortArrow" Property="Visibility" Value="Visible"/>
-                                <Setter TargetName="SortArrow" Property="Data" Value="M 0,4 L 4,0 L 8,4 Z"/>
-                            </Trigger>
-                            <Trigger Property="SortDirection" Value="Descending">
-                                <Setter TargetName="SortArrow" Property="Visibility" Value="Visible"/>
-                                <Setter TargetName="SortArrow" Property="Data" Value="M 0,0 L 4,4 L 8,0 Z"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
         </Style>
 
         <!-- User/Reconciliation: Green gradient -->
@@ -135,41 +100,6 @@
             <Setter Property="BorderBrush" Value="#81C784"/>
             <Setter Property="BorderThickness" Value="0,0,1,2"/>
             <Setter Property="ToolTip" Value="Source: T_Reconciliation (User Data)"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="DataGridColumnHeader">
-                        <Grid>
-                            <Border Background="{TemplateBinding Background}" 
-                                    BorderBrush="{TemplateBinding BorderBrush}" 
-                                    BorderThickness="{TemplateBinding BorderThickness}"
-                                    Padding="{TemplateBinding Padding}">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <ContentPresenter Grid.Column="0" VerticalAlignment="Center"/>
-                                    <Path x:Name="SortArrow" Grid.Column="1" Visibility="Collapsed" 
-                                          Fill="{TemplateBinding Foreground}" Margin="4,0,0,0" VerticalAlignment="Center"
-                                          Data="M 0,0 L 4,4 L 8,0 Z" Width="8" Height="4"/>
-                                </Grid>
-                            </Border>
-                            <Thumb x:Name="PART_LeftHeaderGripper" HorizontalAlignment="Left" Width="8" Opacity="0" Cursor="SizeWE"/>
-                            <Thumb x:Name="PART_RightHeaderGripper" HorizontalAlignment="Right" Width="8" Opacity="0" Cursor="SizeWE"/>
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="SortDirection" Value="Ascending">
-                                <Setter TargetName="SortArrow" Property="Visibility" Value="Visible"/>
-                                <Setter TargetName="SortArrow" Property="Data" Value="M 0,4 L 4,0 L 8,4 Z"/>
-                            </Trigger>
-                            <Trigger Property="SortDirection" Value="Descending">
-                                <Setter TargetName="SortArrow" Property="Visibility" Value="Visible"/>
-                                <Setter TargetName="SortArrow" Property="Data" Value="M 0,0 L 4,4 L 8,0 Z"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
         </Style>
 
         <!-- DWINGS Invoice: Orange gradient -->
@@ -188,41 +118,6 @@
             <Setter Property="BorderBrush" Value="#FFB74D"/>
             <Setter Property="BorderThickness" Value="0,0,1,2"/>
             <Setter Property="ToolTip" Value="Source: DWINGS Invoice"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="DataGridColumnHeader">
-                        <Grid>
-                            <Border Background="{TemplateBinding Background}" 
-                                    BorderBrush="{TemplateBinding BorderBrush}" 
-                                    BorderThickness="{TemplateBinding BorderThickness}"
-                                    Padding="{TemplateBinding Padding}">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <ContentPresenter Grid.Column="0" VerticalAlignment="Center"/>
-                                    <Path x:Name="SortArrow" Grid.Column="1" Visibility="Collapsed" 
-                                          Fill="{TemplateBinding Foreground}" Margin="4,0,0,0" VerticalAlignment="Center"
-                                          Data="M 0,0 L 4,4 L 8,0 Z" Width="8" Height="4"/>
-                                </Grid>
-                            </Border>
-                            <Thumb x:Name="PART_LeftHeaderGripper" HorizontalAlignment="Left" Width="8" Opacity="0" Cursor="SizeWE"/>
-                            <Thumb x:Name="PART_RightHeaderGripper" HorizontalAlignment="Right" Width="8" Opacity="0" Cursor="SizeWE"/>
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="SortDirection" Value="Ascending">
-                                <Setter TargetName="SortArrow" Property="Visibility" Value="Visible"/>
-                                <Setter TargetName="SortArrow" Property="Data" Value="M 0,4 L 4,0 L 8,4 Z"/>
-                            </Trigger>
-                            <Trigger Property="SortDirection" Value="Descending">
-                                <Setter TargetName="SortArrow" Property="Visibility" Value="Visible"/>
-                                <Setter TargetName="SortArrow" Property="Data" Value="M 0,0 L 4,4 L 8,0 Z"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
         </Style>
 
         <!-- DWINGS Guarantee: Purple gradient -->
@@ -241,41 +136,6 @@
             <Setter Property="BorderBrush" Value="#BA68C8"/>
             <Setter Property="BorderThickness" Value="0,0,1,2"/>
             <Setter Property="ToolTip" Value="Source: DWINGS Guarantee"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="DataGridColumnHeader">
-                        <Grid>
-                            <Border Background="{TemplateBinding Background}" 
-                                    BorderBrush="{TemplateBinding BorderBrush}" 
-                                    BorderThickness="{TemplateBinding BorderThickness}"
-                                    Padding="{TemplateBinding Padding}">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <ContentPresenter Grid.Column="0" VerticalAlignment="Center"/>
-                                    <Path x:Name="SortArrow" Grid.Column="1" Visibility="Collapsed" 
-                                          Fill="{TemplateBinding Foreground}" Margin="4,0,0,0" VerticalAlignment="Center"
-                                          Data="M 0,0 L 4,4 L 8,0 Z" Width="8" Height="4"/>
-                                </Grid>
-                            </Border>
-                            <Thumb x:Name="PART_LeftHeaderGripper" HorizontalAlignment="Left" Width="8" Opacity="0" Cursor="SizeWE"/>
-                            <Thumb x:Name="PART_RightHeaderGripper" HorizontalAlignment="Right" Width="8" Opacity="0" Cursor="SizeWE"/>
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="SortDirection" Value="Ascending">
-                                <Setter TargetName="SortArrow" Property="Visibility" Value="Visible"/>
-                                <Setter TargetName="SortArrow" Property="Data" Value="M 0,4 L 4,0 L 8,4 Z"/>
-                            </Trigger>
-                            <Trigger Property="SortDirection" Value="Descending">
-                                <Setter TargetName="SortArrow" Property="Visibility" Value="Visible"/>
-                                <Setter TargetName="SortArrow" Property="Data" Value="M 0,0 L 4,4 L 8,0 Z"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
         </Style>
     </UserControl.Resources>
     <Grid Background="{DynamicResource BNPBackground}">
@@ -1296,29 +1156,20 @@
                                 <Setter Property="BorderBrush" Value="#DDDDDD"/>
                                 <Setter Property="BorderThickness" Value="0,0,0,1"/>
                                 <Setter Property="Foreground" Value="Black"/>
+                                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
                                 <!-- REMOVED: BitmapCache on every cell causes GPU memory saturation and stuttering -->
+                                <!-- REMOVED: Custom ControlTemplate - using default DataGrid cell template for better performance -->
                                 <EventSetter Event="PreviewMouseLeftButtonDown" Handler="DataGridCell_PreviewMouseLeftButtonDown"/>
-                                <!-- SIMPLIFIED: Removed custom template to use default DataGrid rendering (faster) -->
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="DataGridCell">
-                                            <Border x:Name="CellBorder" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}">
-                                                <ContentPresenter VerticalAlignment="Center"/>
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <!-- Minimal triggers for performance -->
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="CellBorder" Property="Background" Value="#F7FAFF"/>
-                                                </Trigger>
-                                                <Trigger Property="IsSelected" Value="True">
-                                                    <Setter TargetName="CellBorder" Property="Background" Value="#DCEBFF"/>
-                                                    <Setter Property="BorderBrush" Value="#A7C5FF"/>
-                                                    <Setter Property="Foreground" Value="Black"/>
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="#F7FAFF"/>
+                                    </Trigger>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter Property="Background" Value="#DCEBFF"/>
+                                        <Setter Property="BorderBrush" Value="#A7C5FF"/>
+                                        <Setter Property="Foreground" Value="Black"/>
+                                    </Trigger>
+                                </Style.Triggers>
                             </Style>
                         </DataGrid.CellStyle>
                         <DataGrid.RowStyle>
@@ -1361,22 +1212,28 @@
                                 </DataGridTemplateColumn.HeaderTemplate>
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                            <!-- New/Updated badge (left side) - OPTIMIZED: Direct Visibility binding -->
-                                            <Border x:Name="StatusBadge" Background="#2196F3" CornerRadius="2" Padding="3,1" Margin="0,0,4,0"
+                                        <!-- OPTIMIZED: Grid instead of StackPanel (lighter layout pass) -->
+                                        <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <!-- New/Updated badge -->
+                                            <Border Grid.Column="0" Background="#2196F3" CornerRadius="2" Padding="3,1" Margin="0,0,4,0"
                                                     Visibility="{Binding HasStatusIndicatorVisibility}">
                                                 <TextBlock Text="{Binding StatusIndicator}" FontWeight="Bold" FontSize="9" Foreground="White"/>
                                             </Border>
                                             <!-- Status color dot -->
-                                            <Ellipse Width="12" Height="12" Fill="{Binding StatusColorBrush}" 
+                                            <Ellipse Grid.Column="1" Width="12" Height="12" Fill="{Binding StatusColorBrush}" 
                                                      ToolTip="{Binding StatusTooltip}"/>
-                                            <!-- Group indicator (G) merged into first column -->
-                                            <TextBlock Text="G" Foreground="#2E7D32" FontWeight="Bold" FontSize="11" Margin="4,0,0,0"
+                                            <!-- Group indicator (G) -->
+                                            <TextBlock Grid.Column="2" Text="G" Foreground="#2E7D32" FontWeight="Bold" FontSize="11" Margin="4,0,0,0"
                                                        Cursor="Hand" VerticalAlignment="Center"
-                                                       ToolTip="Open related entries across accounts (appears only when a cross-account pair exists: same BGI or Internal Reference)"
+                                                       ToolTip="Open related entries across accounts"
                                                        Visibility="{Binding IsMatchedAcrossAccountsVisibility}"
                                                        MouseLeftButtonUp="MatchedIndicator_MouseLeftButtonUp"/>
-                                        </StackPanel>
+                                        </Grid>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
@@ -1398,15 +1255,15 @@
                             <DataGridTextColumn Header="Receiver" Binding="{Binding I_RECEIVER_NAME}" Width="180" IsReadOnly="True" HeaderStyle="{StaticResource DWInvoiceHeaderStyle}"/>
                             <DataGridTextColumn Header="MT Status" Binding="{Binding I_MT_STATUS}" Width="120" IsReadOnly="True" HeaderStyle="{StaticResource DWInvoiceHeaderStyle}"/>
                             <!-- HasEmail: COMM_ID_EMAIL flag from DWINGS invoice (used for rules) -->
-                            <DataGridTemplateColumn Header="HasEmail" Width="80" SortMemberPath="HasEmail" IsReadOnly="True" HeaderStyle="{StaticResource DWInvoiceHeaderStyle}">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <CheckBox IsChecked="{Binding HasEmail, Mode=OneWay}" 
-                                                  HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                  IsEnabled="False" IsHitTestVisible="False"/>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
+                            <DataGridCheckBoxColumn Header="HasEmail" Width="80" Binding="{Binding HasEmail, Mode=OneWay}" IsReadOnly="True" HeaderStyle="{StaticResource DWInvoiceHeaderStyle}">
+                                <DataGridCheckBoxColumn.ElementStyle>
+                                    <Style TargetType="CheckBox">
+                                        <Setter Property="HorizontalAlignment" Value="Center"/>
+                                        <Setter Property="VerticalAlignment" Value="Center"/>
+                                        <Setter Property="IsHitTestVisible" Value="False"/>
+                                    </Style>
+                                </DataGridCheckBoxColumn.ElementStyle>
+                            </DataGridCheckBoxColumn>
                             <DataGridTextColumn Header="MT Error message" Binding="{Binding I_ERROR_MESSAGE}" Width="220" IsReadOnly="True" HeaderStyle="{StaticResource DWInvoiceHeaderStyle}"/>
                             <DataGridTextColumn Header="Amount" Binding="{Binding LocalSignedAmount, StringFormat={}{0:N2}}" Width="150" IsReadOnly="True" ElementStyle="{StaticResource RightAlignedTextStyle}" HeaderStyle="{StaticResource AmbreHeaderStyle}"/>
                             <DataGridTextColumn Header="Operation Date" Binding="{Binding Operation_Date, StringFormat={}{0:dd/MM/yyyy}}" Width="110" IsReadOnly="True" ElementStyle="{StaticResource CenteredTextStyle}" HeaderStyle="{StaticResource AmbreHeaderStyle}"/>
@@ -1430,38 +1287,25 @@
                                                        HorizontalAlignment="Right" 
                                                        VerticalAlignment="Center"
                                                        Foreground="{Binding MissingAmountFgBrush}"
-                                                       FontWeight="SemiBold">
-                                                <TextBlock.ToolTip>
-                                                    <ToolTip>
-                                                        <StackPanel>
-                                                            <TextBlock FontWeight="Bold" Margin="0,0,0,4">Missing Amount</TextBlock>
-                                                            <TextBlock>
-                                                                <Run Text="• Positive: Waiting for more payments"/>
-                                                                <LineBreak/>
-                                                                <Run Text="• Negative: Overpayment"/>
-                                                                <LineBreak/>
-                                                                <Run Text="• Zero: Balanced"/>
-                                                            </TextBlock>
-                                                        </StackPanel>
-                                                    </ToolTip>
-                                                </TextBlock.ToolTip>
-                                            </TextBlock>
+                                                       FontWeight="SemiBold"
+                                                       ToolTip="Missing Amount&#x0a;• Positive: Waiting for more payments&#x0a;• Negative: Overpayment&#x0a;• Zero: Balanced"/>
                                         </Border>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
 
                             <!-- Counterpart Info: Total amount and count -->
-                            <DataGridTemplateColumn Header="Counterpart" Width="150" SortMemberPath="CounterpartTotalAmount" IsReadOnly="True">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding CounterpartDisplay}" 
-                                                   Foreground="#1976D2" FontWeight="SemiBold" 
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                   ToolTip="{Binding CounterpartTooltip}"/>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Counterpart" Width="150" Binding="{Binding CounterpartDisplay}" SortMemberPath="CounterpartTotalAmount" IsReadOnly="True">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="#1976D2"/>
+                                        <Setter Property="FontWeight" Value="SemiBold"/>
+                                        <Setter Property="HorizontalAlignment" Value="Center"/>
+                                        <Setter Property="VerticalAlignment" Value="Center"/>
+                                        <Setter Property="ToolTip" Value="{Binding CounterpartTooltip}"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
 
                             <DataGridTextColumn Header="Value Date" Binding="{Binding Value_Date, StringFormat={}{0:dd/MM/yyyy}}" Width="110" IsReadOnly="True" ElementStyle="{StaticResource CenteredTextStyle}" HeaderStyle="{StaticResource AmbreHeaderStyle}"/>
                             <DataGridTextColumn Header="Guarantee Type" Binding="{Binding GuaranteeTypeDisplay}"  Width="130" IsReadOnly="True" SortMemberPath="G_GUARANTEE_TYPE" HeaderStyle="{StaticResource DWGuaranteeHeaderStyle}"/>
@@ -1574,19 +1418,10 @@
                             <DataGridTemplateColumn Header="Comments" Width="220" SortMemberPath="LastComment" HeaderStyle="{StaticResource UserHeaderStyle}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <Border Background="Transparent"
-                                                Padding="0"
-                                                ToolTipService.InitialShowDelay="0"
-                                                ToolTipService.BetweenShowDelay="0"
-                                                ToolTipService.ShowDuration="300000"
-                                                PreviewMouseLeftButtonUp="CommentsCell_Click">
-                                            <Border.ToolTip>
-                                                <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="800" MaxWidth="800">
-                                                    <TextBlock Text="{Binding Comments}" TextWrapping="Wrap"/>
-                                                </ScrollViewer>
-                                            </Border.ToolTip>
-                                            <TextBlock Text="{Binding LastComment}" TextTrimming="CharacterEllipsis" />
-                                        </Border>
+                                        <!-- OPTIMIZED: Direct TextBlock with ToolTip, no Border wrapper -->
+                                        <TextBlock Text="{Binding LastComment}" TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding Comments}" ToolTipService.InitialShowDelay="0" ToolTipService.ShowDuration="300000"
+                                                   PreviewMouseLeftButtonUp="CommentsCell_Click"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
@@ -1596,19 +1431,10 @@
                             <DataGridTemplateColumn Header="Mbaw Data" Width="250" HeaderStyle="{StaticResource UserHeaderStyle}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <Border Background="Transparent"
-                                                Padding="0"
-                                                ToolTipService.InitialShowDelay="0"
-                                                ToolTipService.BetweenShowDelay="0"
-                                                ToolTipService.ShowDuration="300000"
-                                                PreviewMouseLeftButtonUp="MbawCell_Click">
-                                            <Border.ToolTip>
-                                                <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="800" MaxWidth="800">
-                                                    <TextBlock Text="{Binding MbawData}" TextWrapping="Wrap"/>
-                                                </ScrollViewer>
-                                            </Border.ToolTip>
-                                            <TextBlock Text="{Binding MbawData}" TextTrimming="CharacterEllipsis" />
-                                        </Border>
+                                        <!-- OPTIMIZED: Direct TextBlock with ToolTip, no Border wrapper -->
+                                        <TextBlock Text="{Binding MbawData}" TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding MbawData}" ToolTipService.InitialShowDelay="0" ToolTipService.ShowDuration="300000"
+                                                   PreviewMouseLeftButtonUp="MbawCell_Click"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
@@ -1711,13 +1537,7 @@
                             </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Swift Code" Binding="{Binding SwiftCode}" Width="100" HeaderStyle="{StaticResource UserHeaderStyle}"/>
                             <DataGridTextColumn Header="Payment Reference" Binding="{Binding PaymentReference}" Width="130" HeaderStyle="{StaticResource UserHeaderStyle}"/>
-                            <DataGridTemplateColumn Header="User" Width="120" IsReadOnly="True" SortMemberPath="Reco_ModifiedBy" HeaderStyle="{StaticResource UserHeaderStyle}">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding ModifiedByDisplayName}" HorizontalAlignment="Center" TextAlignment="Center"/>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="User" Width="120" IsReadOnly="True" Binding="{Binding ModifiedByDisplayName}" SortMemberPath="Reco_ModifiedBy" ElementStyle="{StaticResource CenteredTextStyle}" HeaderStyle="{StaticResource UserHeaderStyle}"/>
                             <!-- KPI: editable ComboBox -->
                             <DataGridTemplateColumn Header="KPI" Width="160" SortMemberPath="KPI" HeaderStyle="{StaticResource UserHeaderStyle}">
                                 <DataGridTemplateColumn.CellTemplate>

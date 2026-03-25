@@ -1706,7 +1706,6 @@ namespace RecoTool.Windows
 
         #endregion
 
-        #region KPI Updates
 
         /// <summary>
         /// Met à  jour le résumé des KPI avec les données réelles
@@ -1720,44 +1719,74 @@ namespace RecoTool.Windows
 
             var totalLines = _reconciliationViewData.Count;
 
-            // Séparer les comptes Receivable et Pivot selon la configuration de la country
-            var receivableData = _reconciliationViewData.Where(r => r.Account_ID == currentCountry.CNT_AmbreReceivable).ToList();
-            var pivotData = _reconciliationViewData.Where(r => r.Account_ID == currentCountry.CNT_AmbrePivot).ToList();
+            // OPTIMIZED: Single-pass calculation instead of multiple Count() iterations
+            // Separates Receivable/Pivot and counts KPIs in one iteration
+            var receivableAccountId = currentCountry.CNT_AmbreReceivable;
+            var pivotAccountId = currentCountry.CNT_AmbrePivot;
+            
+            decimal totalReceivableAmount = 0m;
+            decimal totalPivotAmount = 0m;
+            int receivableCount = 0;
+            int pivotCount = 0;
+            int paidButNotReconciled = 0;
+            int underInvestigation = 0;
+            int itIssues = 0;
+            int notClaimed = 0;
+            int matchedCount = 0;
+            int toReviewCount = 0;
+            int reviewedTodayCount = 0;
 
-            // Calcul des KPI réels
-            var paidButNotReconciled = _reconciliationViewData.Count(r => r.KPI == (int)KPIType.PaidButNotReconciled);
-            var underInvestigation = _reconciliationViewData.Count(r => r.KPI == (int)KPIType.UnderInvestigation);
-            var itIssues = _reconciliationViewData.Count(r => r.KPI == (int)KPIType.ITIssues);
-            var notClaimed = _reconciliationViewData.Count(r => r.KPI == (int)KPIType.NotClaimed);
+            foreach (var r in _reconciliationViewData)
+            {
+                // Account separation
+                if (r.Account_ID == receivableAccountId)
+                {
+                    totalReceivableAmount += r.SignedAmount;
+                    receivableCount++;
+                }
+                else if (r.Account_ID == pivotAccountId)
+                {
+                    totalPivotAmount += r.SignedAmount;
+                    pivotCount++;
+                }
 
-            // Mise à  jour des propriés de binding
+                // KPI counting
+                if (r.KPI == (int)KPIType.PaidButNotReconciled) paidButNotReconciled++;
+                else if (r.KPI == (int)KPIType.UnderInvestigation) underInvestigation++;
+                else if (r.KPI == (int)KPIType.ITIssues) itIssues++;
+                else if (r.KPI == (int)KPIType.NotClaimed) notClaimed++;
+
+                // Matched check
+                if (!string.IsNullOrWhiteSpace(r.DWINGS_GuaranteeID) 
+                    || !string.IsNullOrWhiteSpace(r.DWINGS_InvoiceID) 
+                    || !string.IsNullOrWhiteSpace(r.DWINGS_BGPMT))
+                    matchedCount++;
+
+                // ToReview/ReviewedToday
+                if (r.IsToReview) toReviewCount++;
+                if (r.IsReviewedToday) reviewedTodayCount++;
+            }
+
+            // Mise à jour des propriétés de binding
             MissingInvoicesCount = notClaimed;
             PaidButNotReconciledCount = paidButNotReconciled;
             UnderInvestigationCount = underInvestigation;
 
-            // Calcul des montants réels
-            // IMPORTANT: SignedAmount peut être positif ou nàgatif
-            // - Receivable: montants SIGNà‰S (+ = cràdit, - = dàbit)
-            // - Pivot: montants SIGNà‰S (+ = entràe, - = sortie)
-            // Pour le total, on garde le signe pour voir le solde net
-            TotalReceivableAmount = receivableData.Sum(r => r.SignedAmount);
-            ReceivableAccountsCount = receivableData.Count;
-            TotalPivotAmount = pivotData.Sum(r => r.SignedAmount);
-            PivotAccountsCount = pivotData.Count;
-            // Quick Stats computation
+            TotalReceivableAmount = totalReceivableAmount;
+            ReceivableAccountsCount = receivableCount;
+            TotalPivotAmount = totalPivotAmount;
+            PivotAccountsCount = pivotCount;
+
+            // Quick Stats
             TotalLiveCount = totalLines;
-            int matchedCount = _reconciliationViewData.Count(r => !string.IsNullOrWhiteSpace(r.DWINGS_GuaranteeID)
-                                                                || !string.IsNullOrWhiteSpace(r.DWINGS_InvoiceID)
-                                                                || !string.IsNullOrWhiteSpace(r.DWINGS_BGPMT));
             MatchedPercentage = totalLines > 0 ? (matchedCount * 100.0 / totalLines) : 0.0;
-            // ToReview = has Action but status is Pending (or null)
-            TotalToReviewCount = _reconciliationViewData.Count(r => r.IsToReview);
-            // Reviewed Today = ActionStatus Done today
-            ReviewedTodayCount = _reconciliationViewData.Count(r => r.IsReviewedToday);
-            UpdateTextBlock("ReconciledAmountText", $"{receivableData.Where(r => r.KPI == (int)KPIType.PaidButNotReconciled).Sum(r => r.SignedAmount):N2}");
+            TotalToReviewCount = toReviewCount;
+            ReviewedTodayCount = reviewedTodayCount;
+            
+            UpdateTextBlock("ReconciledAmountText", $"{_reconciliationViewData.Where(r => r.Account_ID == receivableAccountId && r.KPI == (int)KPIType.PaidButNotReconciled).Sum(r => r.SignedAmount):N2}");
         }
 
-        #endregion
+        
 
         #region Charts Updates
 

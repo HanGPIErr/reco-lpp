@@ -54,7 +54,8 @@ namespace RecoTool.Services.Ambre
         public async Task UpdateReconciliationTableAsync(
             ImportChanges changes,
             string countryId,
-            Country country)
+            Country country,
+            Action<string, int> progressCallback = null)
         {
             var totalTimer = System.Diagnostics.Stopwatch.StartNew();
             LogManager.Info($"[PERF] UpdateReconciliationTableAsync started for {countryId}");
@@ -71,7 +72,7 @@ namespace RecoTool.Services.Ambre
                 // Préparer les enregistrements de réconciliation
                 var prepareTimer = System.Diagnostics.Stopwatch.StartNew();
                 var reconciliations = await PrepareReconciliationsAsync(
-                    changes.ToAdd, country, countryId, dwInvoices, dwGuarantees);
+                    changes.ToAdd, country, countryId, dwInvoices, dwGuarantees, progressCallback);
                 prepareTimer.Stop();
                 LogManager.Info($"[PERF] PrepareReconciliations completed for {changes.ToAdd.Count} new records in {prepareTimer.ElapsedMilliseconds}ms");
 
@@ -281,7 +282,8 @@ namespace RecoTool.Services.Ambre
             Country country,
             string countryId,
             IReadOnlyList<DwingsInvoiceDto> dwInvoices,
-            IReadOnlyList<DwingsGuaranteeDto> dwGuarantees)
+            IReadOnlyList<DwingsGuaranteeDto> dwGuarantees,
+            Action<string, int> progressCallback = null)
         {
             // DWINGS data passed from caller to avoid reloading
             _transformationService = new TransformationService(new List<Country> { country });
@@ -290,7 +292,26 @@ namespace RecoTool.Services.Ambre
 
             GuaranteeCache.Initialise(dwGuarantees);
 
+            // Count how many lines will need Free API check (no DWINGS guarantee + FK/IPA reference)
+            int freeApiCandidates = 0;
+            try
+            {
+                freeApiCandidates = newRecords.Count(da =>
+                {
+                    var reference = da.Reconciliation_Num ?? da.RawLabel ?? string.Empty;
+                    return reference.Contains("FK") || reference.Contains("IPA");
+                });
+            }
+            catch { }
+
+            if (freeApiCandidates > 0)
+            {
+                progressCallback?.Invoke($"Checking {freeApiCandidates} lines with Free API (this may take a moment)...", 82);
+                LogManager.Info($"[PERF] Free API: {freeApiCandidates} candidate lines to check out of {newRecords.Count} new records");
+            }
+
             // OPTIMIZATION: Parallel processing of reconciliation creation
+            var freeApiTimer = System.Diagnostics.Stopwatch.StartNew();
             var tasks = newRecords.Select(async dataAmbre =>
             {
                 var reconciliation = await CreateReconciliationAsync(
@@ -306,6 +327,14 @@ namespace RecoTool.Services.Ambre
             });
             
             staged = (await Task.WhenAll(tasks)).ToList();
+            freeApiTimer.Stop();
+
+            if (freeApiCandidates > 0)
+            {
+                int freeApiHits = staged.Count(s => !string.IsNullOrWhiteSpace(s.Reconciliation.MbawData) && s.Reconciliation.MbawData != "Not found");
+                progressCallback?.Invoke($"Free API check complete: {freeApiHits}/{freeApiCandidates} matched in {freeApiTimer.ElapsedMilliseconds}ms", 85);
+                LogManager.Info($"[PERF] Free API check completed: {freeApiHits}/{freeApiCandidates} matched in {freeApiTimer.ElapsedMilliseconds}ms");
+            }
 
             // Calculate KPIs (IsGrouped, MissingAmount) before applying rules
             var kpiTimer = System.Diagnostics.Stopwatch.StartNew();
