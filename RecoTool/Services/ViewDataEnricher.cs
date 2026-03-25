@@ -37,6 +37,11 @@ namespace RecoTool.Services
                 row.AssigneeDisplayName = GetAssigneeName(row.Assignee);
                 row.GuaranteeTypeDisplay = GetGuaranteeTypeDisplay(row.G_GUARANTEE_TYPE);
                 row.ReasonNonRiskyDisplayName = GetUserFieldName(row.ReasonNonRisky);
+                row.ModifiedByDisplayName = GetAssigneeName(row.Reco_ModifiedBy);
+
+                // Pre-calculate ALL display properties (status colors, tooltips, visibility, etc.)
+                // This eliminates thousands of re-computations during DataGrid scroll
+                row.PreCalculateDisplayProperties();
             }
             catch { }
         }

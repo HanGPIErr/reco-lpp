@@ -514,8 +514,9 @@ namespace RecoTool.Windows
                     country.CNT_AmbrePivot
                 );
                 
-                // NO REFRESH NEEDED: ReconciliationViewData implements INotifyPropertyChanged
-                // The UI will update automatically when properties change
+                // Refresh pre-calculated display caches for all affected rows
+                foreach (var row in rowsToRecalculate)
+                    row.PreCalculateDisplayProperties();
             }
             catch (Exception ex)
             {

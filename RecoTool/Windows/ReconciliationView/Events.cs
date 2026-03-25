@@ -51,25 +51,25 @@ namespace RecoTool.Windows
         }
 
         // Sélection changée dans la grille
+        // PERF: No LINQ allocation — simple loop for sum
         private void ResultsDataGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             try
             {
-                // Avoid showing long reconciliation line IDs in the header to prevent layout shifts.
-                // Instead, show a compact selection count.
-                int count = 0;
-                try { count = ResultsDataGrid?.SelectedItems?.Count ?? 0; } catch { count = 0; }
+                var items = ResultsDataGrid?.SelectedItems;
+                int count = items?.Count ?? 0;
                 if (count > 0)
                 {
-                    var selected = ResultsDataGrid?.SelectedItems?.Cast<ReconciliationViewData>().ToList();
-                    var msg = $"Selected {count} rows, amount : {selected.Sum(x => x.SignedAmount)}";
-                    UpdateStatusInfo(msg);
+                    decimal sum = 0;
+                    foreach (var item in items)
+                    {
+                        if (item is ReconciliationViewData r)
+                            sum += r.SignedAmount;
+                    }
+                    UpdateStatusInfo($"Selected {count} rows, amount : {sum:N2}");
                 }
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Selection error: {ex.Message}");
-            }
+            catch { }
         }
 
         // Double-clic sur une ligne de la grille

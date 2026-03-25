@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Windows;
+using System.Windows.Media;
 using RecoTool.Models;
 using RecoTool.Services;
 
@@ -13,7 +15,34 @@ namespace RecoTool.Services.DTOs
     {
         public event PropertyChangedEventHandler PropertyChanged;
         protected void OnPropertyChanged(string propertyName) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-        
+
+        #region Static Brush Cache (eliminates string→Brush conversion during scroll)
+        private static readonly Dictionary<string, SolidColorBrush> _brushCache = new Dictionary<string, SolidColorBrush>(StringComparer.OrdinalIgnoreCase);
+        private static readonly SolidColorBrush _transparentBrush;
+        private static readonly SolidColorBrush _defaultBorderBrush;
+
+        static ReconciliationViewData()
+        {
+            _transparentBrush = new SolidColorBrush(Colors.Transparent); _transparentBrush.Freeze();
+            _defaultBorderBrush = GetCachedBrush("#DDDDDD");
+        }
+
+        private static SolidColorBrush GetCachedBrush(string hex)
+        {
+            if (string.IsNullOrEmpty(hex) || string.Equals(hex, "Transparent", StringComparison.OrdinalIgnoreCase))
+                return _transparentBrush;
+            if (_brushCache.TryGetValue(hex, out var cached)) return cached;
+            try
+            {
+                var c = (Color)ColorConverter.ConvertFromString(hex);
+                var b = new SolidColorBrush(c); b.Freeze();
+                _brushCache[hex] = b;
+                return b;
+            }
+            catch { return _transparentBrush; }
+        }
+        #endregion
+
         // Static cache for DWINGS data (shared across all instances)
         private static Dictionary<string, DwingsInvoiceDto> _dwingsInvoiceCache;
         private static Dictionary<string, DwingsGuaranteeDto> _dwingsGuaranteeCache;
@@ -262,7 +291,10 @@ namespace RecoTool.Services.DTOs
                     _dwingsInvoiceID = value;
                     OnPropertyChanged(nameof(DWINGS_InvoiceID));
                     InvalidateStatusCache();
+                    _cachedStatusColor = CalculateStatusColor();
+                    _statusColorBrush = GetCachedBrush(_cachedStatusColor);
                     OnPropertyChanged(nameof(StatusColor));
+                    OnPropertyChanged(nameof(StatusColorBrush));
                     OnPropertyChanged(nameof(StatusTooltip));
                 }
             }
@@ -308,6 +340,7 @@ namespace RecoTool.Services.DTOs
                 if (!string.Equals(_comments, value))
                 {
                     _comments = value;
+                    _cachedLastComment = ComputeLastComment();
                     OnPropertyChanged(nameof(Comments));
                     OnPropertyChanged(nameof(LastComment));
                 }
@@ -317,23 +350,10 @@ namespace RecoTool.Services.DTOs
         /// <summary>
         /// Derived view property: returns the last non-empty line from Comments, used for compact display.
         /// </summary>
+        private string _cachedLastComment;
         public string LastComment
         {
-            get
-            {
-                try
-                {
-                    if (string.IsNullOrWhiteSpace(Comments)) return string.Empty;
-                    var lines = Comments.Replace("\r\n", "\n").Split('\n');
-                    for (int i = lines.Length - 1; i >= 0; i--)
-                    {
-                        var s = lines[i]?.Trim();
-                        if (!string.IsNullOrEmpty(s)) return s;
-                    }
-                }
-                catch { }
-                return string.Empty;
-            }
+            get => _cachedLastComment ?? string.Empty;
         }
         
         private string _internalInvoiceReference;
@@ -347,7 +367,10 @@ namespace RecoTool.Services.DTOs
                     _internalInvoiceReference = value;
                     OnPropertyChanged(nameof(InternalInvoiceReference));
                     InvalidateStatusCache();
+                    _cachedStatusColor = CalculateStatusColor();
+                    _statusColorBrush = GetCachedBrush(_cachedStatusColor);
                     OnPropertyChanged(nameof(StatusColor));
+                    OnPropertyChanged(nameof(StatusColorBrush));
                     OnPropertyChanged(nameof(StatusTooltip));
                 }
             }
@@ -438,13 +461,19 @@ namespace RecoTool.Services.DTOs
                     _cachedIsReviewedToday = null;
                     _cachedIsToReview = null;
                     _cachedIsReviewed = null;
+                    _actionStatusDisplay = value == true ? "DONE" : (value == false ? "PENDING" : "");
+                    RecalcCellColors();
+                    _cellBackgroundBrush = GetCachedBrush(_cachedCellBackgroundColor);
+                    _cellBorderBrushValue = _cachedCellBorderBrush == "#DDDDDD" ? _defaultBorderBrush : GetCachedBrush(_cachedCellBorderBrush);
                     OnPropertyChanged(nameof(ActionStatus));
-                    // Notify dependent properties
+                    OnPropertyChanged(nameof(ActionStatusDisplay));
                     OnPropertyChanged(nameof(IsReviewedToday));
                     OnPropertyChanged(nameof(IsToReview));
                     OnPropertyChanged(nameof(IsReviewed));
                     OnPropertyChanged(nameof(CellBackgroundColor));
+                    OnPropertyChanged(nameof(CellBackgroundBrush));
                     OnPropertyChanged(nameof(CellBorderBrush));
+                    OnPropertyChanged(nameof(CellBorderBrushValue));
                 }
             }
         }
@@ -458,11 +487,15 @@ namespace RecoTool.Services.DTOs
                 {
                     _actionDate = value;
                     _cachedIsReviewedToday = null;
+                    RecalcCellColors();
+                    _cellBackgroundBrush = GetCachedBrush(_cachedCellBackgroundColor);
+                    _cellBorderBrushValue = _cachedCellBorderBrush == "#DDDDDD" ? _defaultBorderBrush : GetCachedBrush(_cachedCellBorderBrush);
                     OnPropertyChanged(nameof(ActionDate));
-                    // Notify dependent properties
                     OnPropertyChanged(nameof(IsReviewedToday));
                     OnPropertyChanged(nameof(CellBackgroundColor));
+                    OnPropertyChanged(nameof(CellBackgroundBrush));
                     OnPropertyChanged(nameof(CellBorderBrush));
+                    OnPropertyChanged(nameof(CellBorderBrushValue));
                 }
             }
         }
@@ -565,10 +598,14 @@ namespace RecoTool.Services.DTOs
                 if (_isMatchedAcrossAccounts != value)
                 {
                     _isMatchedAcrossAccounts = value;
+                    _cachedIsMatchedAcrossAccountsVisibility = value ? Visibility.Visible : Visibility.Collapsed;
+                    InvalidateStatusCache();
+                    _cachedStatusColor = CalculateStatusColor();
+                    _statusColorBrush = GetCachedBrush(_cachedStatusColor);
                     OnPropertyChanged(nameof(IsMatchedAcrossAccounts));
                     OnPropertyChanged(nameof(IsMatchedAcrossAccountsVisibility));
-                    InvalidateStatusCache();
                     OnPropertyChanged(nameof(StatusColor));
+                    OnPropertyChanged(nameof(StatusColorBrush));
                     OnPropertyChanged(nameof(StatusTooltip));
                 }
             }
@@ -689,11 +726,14 @@ namespace RecoTool.Services.DTOs
                 if (_isNewlyAdded != value)
                 {
                     _isNewlyAdded = value;
+                    _cachedStatusIndicator = _isNewlyAdded ? "N" : (_isUpdated ? "U" : string.Empty);
+                    _cachedHasStatusIndicator = _isNewlyAdded || _isUpdated;
+                    _cachedHasStatusIndicatorVisibility = _cachedHasStatusIndicator ? Visibility.Visible : Visibility.Collapsed;
+                    InvalidateStatusCache();
                     OnPropertyChanged(nameof(IsNewlyAdded));
                     OnPropertyChanged(nameof(StatusIndicator));
                     OnPropertyChanged(nameof(HasStatusIndicator));
                     OnPropertyChanged(nameof(HasStatusIndicatorVisibility));
-                    InvalidateStatusCache();
                     OnPropertyChanged(nameof(StatusTooltip));
                 }
             }
@@ -711,6 +751,7 @@ namespace RecoTool.Services.DTOs
                 if (_isUpdatedBySync != value)
                 {
                     _isUpdatedBySync = value;
+                    _cachedSyncHighlightBackground = value ? "#FFF9C4" : null;
                     OnPropertyChanged(nameof(IsUpdatedBySync));
                     OnPropertyChanged(nameof(SyncHighlightBackground));
                 }
@@ -719,8 +760,13 @@ namespace RecoTool.Services.DTOs
 
         /// <summary>
         /// Background color for rows modified by other users via sync (temporary highlight).
+        /// PRE-CALCULATED: avoids re-evaluation on every scroll
         /// </summary>
-        public string SyncHighlightBackground => _isUpdatedBySync ? "#FFF9C4" : null;
+        private string _cachedSyncHighlightBackground;
+        public string SyncHighlightBackground
+        {
+            get => _cachedSyncHighlightBackground;
+        }
 
         private bool _isUpdated;
         public bool IsUpdated
@@ -731,48 +777,45 @@ namespace RecoTool.Services.DTOs
                 if (_isUpdated != value)
                 {
                     _isUpdated = value;
+                    _cachedStatusIndicator = _isNewlyAdded ? "N" : (_isUpdated ? "U" : string.Empty);
+                    _cachedHasStatusIndicator = _isNewlyAdded || _isUpdated;
+                    _cachedHasStatusIndicatorVisibility = _cachedHasStatusIndicator ? Visibility.Visible : Visibility.Collapsed;
+                    InvalidateStatusCache();
                     OnPropertyChanged(nameof(IsUpdated));
                     OnPropertyChanged(nameof(StatusIndicator));
                     OnPropertyChanged(nameof(HasStatusIndicator));
                     OnPropertyChanged(nameof(HasStatusIndicatorVisibility));
-                    InvalidateStatusCache();
                     OnPropertyChanged(nameof(StatusTooltip));
                 }
             }
         }
 
         /// <summary>
-        /// Computed property for status indicator text
-        /// New takes precedence over Updated (if new, it's inherently updated)
+        /// Status indicator text. PRE-CALCULATED at load, updated on edit.
         /// </summary>
+        private string _cachedStatusIndicator;
         public string StatusIndicator
         {
-            get
-            {
-                if (_isNewlyAdded) return "N";
-                if (_isUpdated) return "U";
-                return string.Empty;
-            }
+            get => _cachedStatusIndicator ?? string.Empty;
         }
 
         /// <summary>
-        /// Returns true if there's any status indicator to show
+        /// Returns true if there's any status indicator to show. PRE-CALCULATED.
         /// </summary>
-        public bool HasStatusIndicator => _isNewlyAdded || _isUpdated;
+        private bool _cachedHasStatusIndicator;
+        public bool HasStatusIndicator => _cachedHasStatusIndicator;
         
         /// <summary>
-        /// Visibility for HasStatusIndicator (replaces BoolToVisibilityConverter)
-        /// OPTIMIZED: Pre-calculated to avoid converter overhead on every scroll
+        /// Visibility for HasStatusIndicator. PRE-CALCULATED to avoid re-evaluation on every scroll.
         /// </summary>
-        public System.Windows.Visibility HasStatusIndicatorVisibility => 
-            HasStatusIndicator ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+        private Visibility _cachedHasStatusIndicatorVisibility = Visibility.Collapsed;
+        public Visibility HasStatusIndicatorVisibility => _cachedHasStatusIndicatorVisibility;
         
         /// <summary>
-        /// Visibility for IsMatchedAcrossAccounts (replaces BoolToVisibilityConverter)
-        /// OPTIMIZED: Pre-calculated to avoid converter overhead on every scroll
+        /// Visibility for IsMatchedAcrossAccounts. PRE-CALCULATED to avoid re-evaluation on every scroll.
         /// </summary>
-        public System.Windows.Visibility IsMatchedAcrossAccountsVisibility => 
-            _isMatchedAcrossAccounts ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+        private Visibility _cachedIsMatchedAcrossAccountsVisibility = Visibility.Collapsed;
+        public Visibility IsMatchedAcrossAccountsVisibility => _cachedIsMatchedAcrossAccountsVisibility;
 
         /// <summary>
         /// Computed property for status color based on reconciliation completeness
@@ -874,6 +917,132 @@ namespace RecoTool.Services.DTOs
             _cachedStatusTooltip = null;
         }
 
+        /// <summary>
+        /// Pre-calculate ALL display properties once at load time.
+        /// This eliminates thousands of re-computations during DataGrid scroll.
+        /// Call this once after data load/enrichment, and again for individual rows after edits.
+        /// </summary>
+        public void PreCalculateDisplayProperties()
+        {
+            // LastComment (avoids String.Split on every scroll)
+            _cachedLastComment = ComputeLastComment();
+
+            // Status indicator (N/U badge)
+            _cachedStatusIndicator = _isNewlyAdded ? "N" : (_isUpdated ? "U" : string.Empty);
+            _cachedHasStatusIndicator = _isNewlyAdded || _isUpdated;
+            _cachedHasStatusIndicatorVisibility = _cachedHasStatusIndicator
+                ? Visibility.Visible : Visibility.Collapsed;
+
+            // Matched across accounts visibility (G indicator)
+            _cachedIsMatchedAcrossAccountsVisibility = _isMatchedAcrossAccounts
+                ? Visibility.Visible : Visibility.Collapsed;
+
+            // Cell background/border (ReviewedToday highlight)
+            _cachedIsReviewedToday = null; // force recalc
+            RecalcCellColors();
+
+            // Sync highlight
+            _cachedSyncHighlightBackground = _isUpdatedBySync ? "#FFF9C4" : null;
+
+            // Status color + tooltip
+            InvalidateStatusCache();
+            _cachedStatusColor = CalculateStatusColor();
+            _cachedStatusTooltip = CalculateStatusTooltip();
+
+            // MissingAmount colors
+            _cachedMissingAmountBackgroundColor = null;
+            _cachedMissingAmountForegroundColor = null;
+            _cachedMissingAmountFontWeight = null;
+            _ = MissingAmountBackgroundColor;
+            _ = MissingAmountForegroundColor;
+            _ = MissingAmountFontWeight;
+
+            // Counterpart display strings
+            RecalcCounterpartDisplay();
+
+            // ActionStatus display (replaces BoolToPendingDoneConverter)
+            _actionStatusDisplay = _actionStatus == true ? "DONE" : (_actionStatus == false ? "PENDING" : "");
+
+            // === Brush properties (eliminates string→Brush conversion during scroll) ===
+            _statusColorBrush = GetCachedBrush(_cachedStatusColor);
+            _cellBackgroundBrush = GetCachedBrush(_cachedCellBackgroundColor);
+            _cellBorderBrushValue = _cachedCellBorderBrush == "#DDDDDD" ? _defaultBorderBrush : GetCachedBrush(_cachedCellBorderBrush);
+            _missingAmountBgBrush = GetCachedBrush(_cachedMissingAmountBackgroundColor);
+            _missingAmountFgBrush = GetCachedBrush(_cachedMissingAmountForegroundColor);
+            _actionBgBrush = GetCachedBrush(_actionBackgroundColor);
+        }
+
+        private string ComputeLastComment()
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(_comments)) return string.Empty;
+                var lines = _comments.Replace("\r\n", "\n").Split('\n');
+                for (int i = lines.Length - 1; i >= 0; i--)
+                {
+                    var s = lines[i]?.Trim();
+                    if (!string.IsNullOrEmpty(s)) return s;
+                }
+            }
+            catch { }
+            return string.Empty;
+        }
+
+        private void RecalcCellColors()
+        {
+            var reviewed = IsReviewedToday;
+            _cachedCellBackgroundColor = reviewed ? "#E8F5E9" : "Transparent";
+            _cachedCellBorderBrush = reviewed ? "#A5D6A7" : "#DDDDDD";
+        }
+
+        #region Brush properties (zero-cost during scroll — no string→Brush conversion)
+        private SolidColorBrush _statusColorBrush;
+        public SolidColorBrush StatusColorBrush => _statusColorBrush ?? _transparentBrush;
+
+        private SolidColorBrush _cellBackgroundBrush;
+        public SolidColorBrush CellBackgroundBrush => _cellBackgroundBrush ?? _transparentBrush;
+
+        private SolidColorBrush _cellBorderBrushValue;
+        public SolidColorBrush CellBorderBrushValue => _cellBorderBrushValue ?? _defaultBorderBrush;
+
+        private SolidColorBrush _missingAmountBgBrush;
+        public SolidColorBrush MissingAmountBgBrush => _missingAmountBgBrush ?? _transparentBrush;
+
+        private SolidColorBrush _missingAmountFgBrush;
+        public SolidColorBrush MissingAmountFgBrush => _missingAmountFgBrush ?? _transparentBrush;
+
+        private SolidColorBrush _actionBgBrush;
+        public SolidColorBrush ActionBgBrush => _actionBgBrush ?? _transparentBrush;
+        #endregion
+
+        #region Pre-calculated display strings (replaces converters in hot path)
+        private string _actionStatusDisplay;
+        public string ActionStatusDisplay => _actionStatusDisplay ?? string.Empty;
+
+        private string _modifiedByDisplayName;
+        public string ModifiedByDisplayName
+        {
+            get => _modifiedByDisplayName ?? string.Empty;
+            set { if (_modifiedByDisplayName != value) { _modifiedByDisplayName = value; OnPropertyChanged(nameof(ModifiedByDisplayName)); } }
+        }
+        #endregion
+
+        private void RecalcCounterpartDisplay()
+        {
+            if (!_counterpartCount.HasValue || _counterpartCount.Value == 0)
+            {
+                _cachedCounterpartDisplay = string.Empty;
+                _cachedCounterpartTooltip = null;
+            }
+            else
+            {
+                var amt = _counterpartTotalAmount.HasValue ? _counterpartTotalAmount.Value.ToString("N2") : "0.00";
+                var suffix = _counterpartCount.Value == 1 ? "line" : "lines";
+                _cachedCounterpartDisplay = $"{amt} ({_counterpartCount.Value} {suffix})";
+                _cachedCounterpartTooltip = $"Total amount: {_counterpartTotalAmount:N2}\nNumber of lines: {_counterpartCount}";
+            }
+        }
+
         private bool _isHighlighted;
         public bool IsHighlighted
         {
@@ -928,15 +1097,23 @@ namespace RecoTool.Services.DTOs
         
         /// <summary>
         /// Background color for cells when reviewed today (replaces DataTrigger)
-        /// OPTIMIZED: Pre-calculated to eliminate 200+ DataTrigger evaluations per scroll frame
+        /// PRE-CALCULATED: Set once at load, avoids 800+ re-evaluations per scroll frame
         /// </summary>
-        public string CellBackgroundColor => IsReviewedToday ? "#E8F5E9" : "Transparent";
+        private string _cachedCellBackgroundColor;
+        public string CellBackgroundColor
+        {
+            get => _cachedCellBackgroundColor ?? "Transparent";
+        }
         
         /// <summary>
         /// Border brush for cells when reviewed today (replaces DataTrigger)
-        /// OPTIMIZED: Pre-calculated to eliminate DataTrigger overhead
+        /// PRE-CALCULATED: Set once at load, avoids 800+ re-evaluations per scroll frame
         /// </summary>
-        public string CellBorderBrush => IsReviewedToday ? "#A5D6A7" : "#DDDDDD";
+        private string _cachedCellBorderBrush;
+        public string CellBorderBrush
+        {
+            get => _cachedCellBorderBrush ?? "#DDDDDD";
+        }
 
         /// <summary>
         /// Indicates if this row is "To Review" (has an action AND status is Pending)
@@ -1001,12 +1178,21 @@ namespace RecoTool.Services.DTOs
                     _cachedMissingAmountBackgroundColor = null;
                     _cachedMissingAmountForegroundColor = null;
                     _cachedMissingAmountFontWeight = null;
+                    _ = MissingAmountBackgroundColor; // repopulate
+                    _ = MissingAmountForegroundColor;
+                    _missingAmountBgBrush = GetCachedBrush(_cachedMissingAmountBackgroundColor);
+                    _missingAmountFgBrush = GetCachedBrush(_cachedMissingAmountForegroundColor);
+                    InvalidateStatusCache();
+                    _cachedStatusColor = CalculateStatusColor();
+                    _statusColorBrush = GetCachedBrush(_cachedStatusColor);
                     OnPropertyChanged(nameof(MissingAmount));
                     OnPropertyChanged(nameof(MissingAmountBackgroundColor));
                     OnPropertyChanged(nameof(MissingAmountForegroundColor));
                     OnPropertyChanged(nameof(MissingAmountFontWeight));
-                    InvalidateStatusCache();
+                    OnPropertyChanged(nameof(MissingAmountBgBrush));
+                    OnPropertyChanged(nameof(MissingAmountFgBrush));
                     OnPropertyChanged(nameof(StatusColor));
+                    OnPropertyChanged(nameof(StatusColorBrush));
                     OnPropertyChanged(nameof(StatusTooltip));
                 }
             }
@@ -1078,6 +1264,7 @@ namespace RecoTool.Services.DTOs
                 if (_counterpartTotalAmount != value)
                 {
                     _counterpartTotalAmount = value;
+                    RecalcCounterpartDisplay();
                     OnPropertyChanged(nameof(CounterpartTotalAmount));
                     OnPropertyChanged(nameof(CounterpartDisplay));
                     OnPropertyChanged(nameof(CounterpartTooltip));
@@ -1097,6 +1284,7 @@ namespace RecoTool.Services.DTOs
                 if (_counterpartCount != value)
                 {
                     _counterpartCount = value;
+                    RecalcCounterpartDisplay();
                     OnPropertyChanged(nameof(CounterpartCount));
                     OnPropertyChanged(nameof(CounterpartDisplay));
                     OnPropertyChanged(nameof(CounterpartTooltip));
@@ -1104,26 +1292,18 @@ namespace RecoTool.Services.DTOs
             }
         }
         /// <summary>
-        /// Pre-calculated display string for Counterpart column (avoids MultiBinding + StackPanel per row).
+        /// Pre-calculated display string for Counterpart column. Set once at load, updated on edit.
         /// </summary>
+        private string _cachedCounterpartDisplay;
         public string CounterpartDisplay
         {
-            get
-            {
-                if (!_counterpartCount.HasValue || _counterpartCount.Value == 0) return string.Empty;
-                var amt = _counterpartTotalAmount.HasValue ? _counterpartTotalAmount.Value.ToString("N2") : "0.00";
-                var suffix = _counterpartCount.Value == 1 ? "line" : "lines";
-                return $"{amt} ({_counterpartCount.Value} {suffix})";
-            }
+            get => _cachedCounterpartDisplay ?? string.Empty;
         }
 
+        private string _cachedCounterpartTooltip;
         public string CounterpartTooltip
         {
-            get
-            {
-                if (!_counterpartCount.HasValue || _counterpartCount.Value == 0) return null;
-                return $"Total amount: {_counterpartTotalAmount:N2}\nNumber of lines: {_counterpartCount}";
-            }
+            get => _cachedCounterpartTooltip;
         }
 
         #region Pre-calculated Display Properties (ViewDataEnricher)
@@ -1139,7 +1319,7 @@ namespace RecoTool.Services.DTOs
         public string ActionBackgroundColor
         {
             get => _actionBackgroundColor ?? "Transparent";
-            set { if (_actionBackgroundColor != value) { _actionBackgroundColor = value; OnPropertyChanged(nameof(ActionBackgroundColor)); } }
+            set { if (_actionBackgroundColor != value) { _actionBackgroundColor = value; _actionBgBrush = GetCachedBrush(value); OnPropertyChanged(nameof(ActionBackgroundColor)); OnPropertyChanged(nameof(ActionBgBrush)); } }
         }
 
         private string _kpiDisplayName;

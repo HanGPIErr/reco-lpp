@@ -98,9 +98,6 @@ namespace RecoTool.Windows
             {
                 if (!IsLoading) IsLoading = true; // Set only if not already loading;
 
-                // CRITICAL: Clear preloaded data so Refresh always fetches fresh from the service
-                _preloadedAllData = null;
-
                 UpdateCountryPivotReceivableInfo();
                 RefreshStarted?.Invoke(this, EventArgs.Empty);
                 var sw = Stopwatch.StartNew();
@@ -189,6 +186,7 @@ namespace RecoTool.Windows
                     catch { /* best-effort */ }
                 }
                 int totalRows = viewList?.Count ?? 0;
+                _preloadedAllData = null;
 
                 // Stocker toutes les données pour le filtrage
                 _allViewData = viewList ?? new List<ReconciliationViewData>();

@@ -37,6 +37,7 @@ namespace RecoTool.Windows
         private bool _isCountryInitializing;
         private bool _closingPushHandled; // guard to avoid re-entrancy on Closing
         private HomePage _homePage; // cached instance to avoid reloading referentials on each navigation
+        private ReconciliationPage _reconciliationPage; // cached instance to avoid recreating the heavy reconciliation page
         private IFreeApiClient _freeApi;
         private bool _showFreeAuthButton;
 
@@ -787,7 +788,6 @@ namespace RecoTool.Windows
                     progressWindow = new ProgressWindow("Initializing country...");
                     progressWindow.Owner = this;
                     progressWindow.Show();
-                    progressWindow.UpdateProgress("Preparing...", 5);
 
                     // Créer un callback de progression pour relayer les mises à jour vers la ProgressWindow
                     Action<int, string> onProgress = (progress, message) =>
@@ -1363,7 +1363,11 @@ private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
                 }
 
                 Mouse.OverrideCursor = Cursors.Wait;
-                var reconciliationPage = App.ServiceProvider.GetRequiredService<ReconciliationPage>();
+                if (_reconciliationPage == null)
+                {
+                    _reconciliationPage = App.ServiceProvider.GetRequiredService<ReconciliationPage>();
+                }
+                var reconciliationPage = _reconciliationPage;
                 // Ensure the page's loading indicator is visible immediately while data loads
                 try { reconciliationPage.IsLoading = true; } catch { }
                 NavigateToPage(reconciliationPage);
@@ -1452,7 +1456,11 @@ private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
                 }
 
                 Mouse.OverrideCursor = Cursors.Wait;
-                var reconciliationPage = App.ServiceProvider.GetRequiredService<ReconciliationPage>();
+                if (_reconciliationPage == null)
+                {
+                    _reconciliationPage = App.ServiceProvider.GetRequiredService<ReconciliationPage>();
+                }
+                var reconciliationPage = _reconciliationPage;
                 try { reconciliationPage.IsLoading = true; } catch { }
                 NavigateToPage(reconciliationPage);
                 UpdateNavigationButtons("Reconciliation");

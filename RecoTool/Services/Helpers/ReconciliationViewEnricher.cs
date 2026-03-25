@@ -284,6 +284,10 @@ namespace RecoTool.Services.Helpers
                     row.CounterpartCount = null;
                 }
             }
+
+            // Refresh pre-calculated display caches for all affected rows
+            foreach (var row in affectedRows)
+                row.PreCalculateDisplayProperties();
         }
     }
 }

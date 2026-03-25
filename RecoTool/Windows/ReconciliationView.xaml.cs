@@ -76,10 +76,6 @@ namespace RecoTool.Windows
         // Données préchargées par la page parente (si présentes, on évite un fetch service)
         private IReadOnlyList<ReconciliationViewData> _preloadedAllData;
 
-        // Perf: throttled logging for scroll handling (avoid log spam)
-        private DateTime _lastScrollPerfLog = DateTime.MinValue;
-        private const int ScrollLogThrottleMs = 500;
-
         // Propriétés de filtrage (legacy display-only field kept)
         private string _filterCountry;
 
@@ -541,6 +537,9 @@ namespace RecoTool.Windows
 
 
         // Ensure inner DataGrid scroll consumes the mouse wheel instead of the container page
+        // PERF: Single ScrollToVerticalOffset instead of LineUp/LineDown loop
+        // Each LineUp/LineDown triggers a separate ScrollChanged event + layout pass.
+        // A single offset change triggers only ONE layout pass regardless of delta.
         private void ResultsDataGrid_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
         {
             try
@@ -553,13 +552,13 @@ namespace RecoTool.Windows
                 }
                 if (_resultsScrollViewer != null)
                 {
-                    // Route wheel to inner ScrollViewer and prevent bubbling
                     e.Handled = true;
-                    int steps = Math.Max(1, Math.Abs(e.Delta) / 120);
-                    for (int i = 0; i < steps; i++)
-                    {
-                        if (e.Delta > 0) _resultsScrollViewer.LineUp(); else _resultsScrollViewer.LineDown();
-                    }
+                    // RowHeight=28; scroll ~3 rows per notch (e.Delta typically ±120)
+                    double rowsPerNotch = 3.0;
+                    double pixelDelta = (e.Delta / 120.0) * rowsPerNotch * 28.0;
+                    double newOffset = _resultsScrollViewer.VerticalOffset - pixelDelta;
+                    newOffset = Math.Max(0, Math.Min(newOffset, _resultsScrollViewer.ScrollableHeight));
+                    _resultsScrollViewer.ScrollToVerticalOffset(newOffset);
                 }
             }
             catch { }

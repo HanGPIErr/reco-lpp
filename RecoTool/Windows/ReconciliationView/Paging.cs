@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
-using System.Diagnostics;
 using RecoTool.UI.Helpers;
 
 namespace RecoTool.Windows
@@ -37,43 +36,26 @@ namespace RecoTool.Windows
         {
             try
             {
-                var sw = Stopwatch.StartNew();
-                var pagedSource = GetEffectivePagedData();
-                if (pagedSource == null || pagedSource.Count == 0) return;
+                // PERF: Early-exit for horizontal-only scroll BEFORE any work
+                if (e != null && Math.Abs(e.VerticalChange) < double.Epsilon
+                             && Math.Abs(e.ExtentHeightChange) < double.Epsilon
+                             && Math.Abs(e.ViewportHeightChange) < double.Epsilon)
+                    return;
+
                 var sv = sender as ScrollViewer;
                 if (sv == null) return;
-                // Ignore horizontal-only scroll changes to avoid unnecessary UI work
-                if (e != null && Math.Abs(e.VerticalChange) < double.Epsilon && Math.Abs(e.ExtentHeightChange) < double.Epsilon && Math.Abs(e.ViewportHeightChange) < double.Epsilon)
-                {
-                    return;
-                }
-                // Show footer button when user reaches bottom (android-like behavior)
+
+                // Show/hide footer button when near bottom (zero-allocation path)
+                var pagedSource = GetEffectivePagedData();
+                if (pagedSource == null || pagedSource.Count == 0) return;
+
                 bool atBottom = sv.ScrollableHeight > 0 && sv.VerticalOffset >= (sv.ScrollableHeight * 0.9);
-                int remaining = Math.Max(0, pagedSource.Count - _loadedCount);
-                if (_loadMoreFooterButton == null)
-                {
-                    _loadMoreFooterButton = this.FindName("LoadMoreFooterButton") as Button;
-                }
+                int remaining = pagedSource.Count - _loadedCount;
                 if (_loadMoreFooterButton != null)
                 {
                     var desired = (atBottom && remaining > 0) ? Visibility.Visible : Visibility.Collapsed;
                     if (_loadMoreFooterButton.Visibility != desired)
-                    {
                         _loadMoreFooterButton.Visibility = desired;
-                    }
-                }
-
-                sw.Stop();
-                // Throttle perf log to once every ScrollLogThrottleMs
-                var now = DateTime.Now;
-                if ((now - _lastScrollPerfLog).TotalMilliseconds >= ScrollLogThrottleMs)
-                {
-                    try
-                    {
-                        // place for perf diagnostics if needed
-                    }
-                    catch { }
-                    _lastScrollPerfLog = now;
                 }
             }
             catch { }

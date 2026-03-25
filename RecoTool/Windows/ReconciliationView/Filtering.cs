@@ -31,16 +31,19 @@ namespace RecoTool.Windows
                 filteredList = filteredList.Where(row => MatchesStatusFilter(row)).ToList();
             }
 
-            // Recalculate grouping flags and MissingAmount on filtered data so they are
-            // coherent with visible rows. Without this, Archived mode shows values computed
-            // from ALL rows (live+archived), which is misleading.
+            // Recalculate grouping flags and MissingAmount on ALL data (both account sides)
+            // so that IsMatchedAcrossAccounts and MissingAmount are always correct.
+            // CRITICAL: Must use _allViewData, NOT filteredList, because filteredList may
+            // contain only one account side (e.g. Pivot only) and ComputeMatchedAcrossAccounts
+            // needs both P and R rows to detect cross-account matches.
+            // Since filteredList items are the same object references, computed values propagate.
             try
             {
                 var country = CurrentCountryObject;
                 if (country != null)
                 {
-                    // Reset grouping + MissingAmount for all filtered rows first
-                    foreach (var r in filteredList)
+                    // Reset grouping + MissingAmount for ALL rows first
+                    foreach (var r in _allViewData)
                     {
                         r.IsMatchedAcrossAccounts = false;
                         r.MissingAmount = null;
@@ -48,8 +51,8 @@ namespace RecoTool.Windows
                         r.CounterpartCount = null;
                     }
 
-                    // Recompute IsMatchedAcrossAccounts on visible rows only
-                    AccountSideCalculator.ComputeMatchedAcrossAccounts(filteredList,
+                    // Recompute IsMatchedAcrossAccounts on ALL rows (both account sides)
+                    AccountSideCalculator.ComputeMatchedAcrossAccounts(_allViewData,
                         r => r.AccountSide,
                         r => r.DWINGS_InvoiceID,
                         r => r.InternalInvoiceReference,
@@ -59,17 +62,17 @@ namespace RecoTool.Windows
                             r.Reconciliation_Num, r.Comments, r.RawLabel,
                             r.Receivable_DWRefFromAmbre, r.InternalInvoiceReference));
 
-                    // Recompute MissingAmount on visible rows only
+                    // Recompute MissingAmount on ALL rows (needs both sides for correct calculation)
                     ReconciliationViewEnricher.CalculateMissingAmounts(
-                        filteredList, country.CNT_AmbreReceivable, country.CNT_AmbrePivot);
+                        _allViewData, country.CNT_AmbreReceivable, country.CNT_AmbrePivot);
+
+                    // Refresh all pre-calculated display caches (StatusColor, MissingAmount colors,
+                    // G visibility, etc.) so the grid reads final values without re-computing on scroll
+                    foreach (var r in _allViewData)
+                        r.PreCalculateDisplayProperties();
                 }
             }
             catch { }
-
-            // Update display with pagination (first N lines) but totals on full filtered set
-            _filteredData = filteredList;
-            _loadedCount = Math.Min(InitialPageSize, _filteredData.Count);
-            RefreshViewData(_filteredData.Take(_loadedCount));
 
             // 1️⃣  Sauvegarde du tri actuel
             var view = CollectionViewSource.GetDefaultView(_viewData);
