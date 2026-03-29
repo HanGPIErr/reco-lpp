@@ -287,7 +287,7 @@ namespace RecoTool.Services
             var query = @"SELECT * FROM T_Data_Ambre";
             if (!includeDeleted)
                 query += " WHERE DeleteDate IS NULL";
-            query += " ORDER BY Operation_Date DESC";
+            query += " ORDER BY Operation_Date ASC";
 
             return await _queryExecutor.QueryAsync<DataAmbre>(query, ambreCs);
         }
@@ -521,7 +521,7 @@ namespace RecoTool.Services
                 query += $" AND ({predicate})";
             }
 
-            query += " ORDER BY a.Operation_Date DESC";
+            query += " ORDER BY a.Operation_Date ASC";
 
             swBuild.Stop();
             var swExec = Stopwatch.StartNew();

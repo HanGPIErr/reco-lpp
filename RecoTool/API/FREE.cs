@@ -220,7 +220,7 @@ namespace RecoTool.API
                 if (!string.IsNullOrWhiteSpace(payload))
                     return payload;                     // payload (Ustrd) found – stop here
 
-                //return null;
+                return null;
 
                 char[] leadingChars = new[]
                     {
