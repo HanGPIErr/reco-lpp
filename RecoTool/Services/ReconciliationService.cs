@@ -585,6 +585,9 @@ namespace RecoTool.Services
                         r.DWINGS_InvoiceID, r.Receivable_InvoiceFromAmbre,
                         r.Reconciliation_Num, r.Comments, r.RawLabel,
                         r.Receivable_DWRefFromAmbre, r.InternalInvoiceReference));
+
+                // Assign alternating colors to rows sharing the same InternalInvoiceReference
+                ReconciliationViewEnricher.AssignInvoiceGroupColors(list);
             }
             catch { }
 
@@ -785,7 +788,7 @@ namespace RecoTool.Services
         /// Preview rules for a single reconciliation ID (Edit scope) without applying them.
         /// Used by UI to show what rules would apply before saving.
         /// </summary>
-        public async Task<RuleEvaluationResult> PreviewRulesForEditAsync(string id)
+        public async Task<RuleEvaluationResult> PreviewRulesForEditAsync(string id, string editedField = null)
         {
             try
             {
@@ -806,6 +809,7 @@ namespace RecoTool.Services
 
                 bool isPivot = amb.IsPivotAccount(country.CNT_AmbrePivot);
                 var ctx = await BuildRuleContextAsync(amb, reconciliation, country, currentCountryId, isPivot).ConfigureAwait(false);
+                ctx.EditedField = editedField;
                 var res = await _rulesEngine.EvaluateAsync(ctx, RuleScope.Edit).ConfigureAwait(false);
 
                 return res;

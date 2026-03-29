@@ -163,7 +163,7 @@ namespace RecoTool.Windows
                 // 2️⃣ Filtrage des lignes receivable (on garde toutes)
                 // ------------------------------------------------------------
                 var receivableLines = viewData
-                    .Where(r => r.Account_ID == receivableId
+                    .Where(r => string.Equals(r.Account_ID, receivableId, StringComparison.OrdinalIgnoreCase)
                              && r.Action == (int)ActionType.Trigger
                              && r.ActionStatus == false
                              && !r.IsDeleted
@@ -184,14 +184,13 @@ namespace RecoTool.Windows
                                                         : r.DWINGS_BGPMT.Trim();
 
                 // ---- recherche des pivots correspondants ----
+                // Pivots only need to exist and share the same key — they don't need Action==Trigger
                 var pivotItems = viewData
-                            .Where(p => p.Account_ID != receivableId
-                                     && p.Action == (int)ActionType.Trigger
-                                     && p.ActionStatus == false
+                            .Where(p => !string.Equals(p.Account_ID, receivableId, StringComparison.OrdinalIgnoreCase)
                                      && !p.IsDeleted
                                      && (keyType == "INV"
-                                         ? p.InternalInvoiceReference == keyValue
-                                         : p.DWINGS_BGPMT == keyValue))
+                                         ? string.Equals(p.InternalInvoiceReference?.Trim(), keyValue, StringComparison.OrdinalIgnoreCase)
+                                         : string.Equals(p.DWINGS_BGPMT?.Trim(), keyValue, StringComparison.OrdinalIgnoreCase)))
                             .ToList();               // 0, 1 ou plusieurs pivots
 
                 // ---- on ne garde la receivable que s’il y a au moins un pivot ----
@@ -205,37 +204,30 @@ namespace RecoTool.Windows
                 // ---- création de l’objet affichable ----
                 return new DwingsTriggerItem
                         {
-                    // IDs séparés par virgule (ex. "12,45,78")
                     ID = string.Join(",", allIds),
-
-                    // ----- colonnes « maîtres » proviennent du receivable -----
                     DWINGS_GuaranteeID = r.DWINGS_GuaranteeID,
-                            DWINGS_InvoiceID = r.DWINGS_InvoiceID,
-                            DWINGS_BGPMT = r.DWINGS_BGPMT,          // toujours affiché, même vide
-                    Amount = r.SignedAmount,         // montant du receivable
+                    DWINGS_InvoiceID = r.DWINGS_InvoiceID,
+                    DWINGS_BGPMT = r.DWINGS_BGPMT,
+                    Amount = r.SignedAmount,
                     RequestedAmount = r.I_REQUESTED_INVOICE_AMOUNT,
-                            Currency = r.I_BILLING_CURRENCY,
-                            Comments = r.Comments,
+                    Currency = r.I_BILLING_CURRENCY,
+                    Comments = r.Comments,
 
-                    // ----- PaymentReference : on ne regarde que les pivots -----
-                    PaymentReference = GetFirstNonEmpty(
+                    // InternalInvoiceReference grouping → use InternalInvoiceReference as PaymentRef
+                    // BGPMT grouping → use pivot's Reconciliation_Num > PaymentReference > Pivot_TRNFromLabel
+                    PaymentReference = hasInvoiceRef
+                        ? r.InternalInvoiceReference.Trim()
+                        : GetFirstNonEmpty(
                                 pivotItems
                                     .Where(i => i.Reconciliation_Num?.Length > 3)
                                     .Select(i => i.Reconciliation_Num),
-
                                 pivotItems.Select(i => i.PaymentReference),
-
-                                // nom réel du champ : Pivot_TRNFromLabel
                                 pivotItems.Select(i => i.Pivot_TRNFromLabel)),
 
-                            IsGrouped = pivotItems.Any(x => x.IsMatchedAcrossAccounts),
-
-                    // ----- ValueDate : premier pivot non‑vide (ou default) -----
+                    IsGrouped = pivotItems.Any(x => x.IsMatchedAcrossAccounts),
                     ValueDate = pivotItems
-                                        .Select(i => i.Value_Date)
-                                        .FirstOrDefault(),   // ← parenthèses indispensables
-
-                    // Nombre total d’enregistrements associés (receivable + pivots)
+                                    .Select(i => i.Value_Date)
+                                    .FirstOrDefault(),
                     LineCount = allIds.Count
                         };
                     })

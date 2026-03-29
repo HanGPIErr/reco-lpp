@@ -2412,6 +2412,9 @@ namespace RecoTool.Services
                 }
                 catch { }
 
+                // Fermer la connexion réseau persistante de l'ancien pays
+                CloseNetworkConnection();
+
                 // Changer le pays courant
                 _currentCountryId = countryId;
 
@@ -3879,6 +3882,9 @@ namespace RecoTool.Services
                     }
 
                     // Rien à libérer concernant l'ancien service de base de données (supprimé)
+
+                    // Fermer la connexion réseau persistante
+                    try { CloseNetworkConnection(); } catch { }
                 }
 
                 _disposed = true;

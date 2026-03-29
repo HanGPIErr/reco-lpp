@@ -53,10 +53,10 @@ namespace RecoTool.Services.Rules
             bool? isFirstRequest = r?.FirstClaimDate.HasValue == true ? (bool?)false : (r != null ? (bool?)true : null);
             int? daysSinceReminder = r?.LastClaimDate.HasValue == true ? (int?)(today - r.LastClaimDate.Value.Date).TotalDays : null;
 
-            var (mtStatus, hasCommEmail, bgiInitiated) = await ResolveDwingsInvoiceFieldsAsync(r).ConfigureAwait(false);
+            var (mtStatus, hasCommEmail, bgiInitiated, invoiceStatus) = await ResolveDwingsInvoiceFieldsAsync(r).ConfigureAwait(false);
 
             bool? isNewLineFlag = null;
-            try { if (r != null && r.CreationDate.HasValue) isNewLineFlag = r.CreationDate.Value.Date == today; } catch { }
+            try { if (a != null && a.CreationDate.HasValue) isNewLineFlag = a.CreationDate.Value.Date == today; } catch { }
 
             return new RuleContext
             {
@@ -79,9 +79,11 @@ namespace RecoTool.Services.Rules
                 IsNewLine = isNewLineFlag,
                 DaysSinceReminder = daysSinceReminder,
                 CurrentActionId = r?.Action,
+                IsActionDone = r?.ActionStatus,
                 MtStatus = mtStatus,
                 HasCommIdEmail = hasCommEmail,
-                IsBgiInitiated = bgiInitiated
+                IsBgiInitiated = bgiInitiated,
+                InvoiceStatus = invoiceStatus
             };
         }
 
@@ -124,7 +126,7 @@ namespace RecoTool.Services.Rules
             catch { return null; }
         }
 
-        private async Task<(string mtStatus, bool? hasCommEmail, bool? bgiInitiated)> ResolveDwingsInvoiceFieldsAsync(Reconciliation r)
+        private async Task<(string mtStatus, bool? hasCommEmail, bool? bgiInitiated, string invoiceStatus)> ResolveDwingsInvoiceFieldsAsync(Reconciliation r)
         {
             try
             {
@@ -137,12 +139,12 @@ namespace RecoTool.Services.Rules
                         bool? bgiInit = !string.IsNullOrWhiteSpace(inv.T_INVOICE_STATUS)
                             ? (bool?)string.Equals(inv.T_INVOICE_STATUS, "INITIATED", StringComparison.OrdinalIgnoreCase)
                             : null;
-                        return (inv.MT_STATUS, inv.COMM_ID_EMAIL, bgiInit);
+                        return (inv.MT_STATUS, inv.COMM_ID_EMAIL, bgiInit, inv.T_INVOICE_STATUS);
                     }
                 }
             }
             catch { }
-            return (null, null, null);
+            return (null, null, null, null);
         }
 
         #region Grouping Flags

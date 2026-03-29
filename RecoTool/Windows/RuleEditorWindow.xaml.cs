@@ -167,7 +167,8 @@ namespace RecoTool.Windows
                 OutputFirstClaimToday = r.OutputFirstClaimToday,
                 ApplyTo = r.ApplyTo,
                 AutoApply = r.AutoApply,
-                Message = r.Message
+                Message = r.Message,
+                TriggerOnField = r.TriggerOnField
             };
         }
 

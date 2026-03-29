@@ -289,5 +289,44 @@ namespace RecoTool.Services.Helpers
             foreach (var row in affectedRows)
                 row.PreCalculateDisplayProperties();
         }
+
+        /// <summary>
+        /// Assigns alternating InvoiceGroupBrush to rows that share the same InternalInvoiceReference.
+        /// Groups with only one row (or no ref) get transparent. Others cycle through the palette.
+        /// </summary>
+        public static void AssignInvoiceGroupColors(IList<ReconciliationViewData> rows)
+        {
+            if (rows == null || rows.Count == 0) return;
+
+            var palette = ReconciliationViewData.InvoiceGroupPalette;
+            int colorIdx = 0;
+
+            // Group by InternalInvoiceReference (only non-empty)
+            var groups = rows
+                .Where(r => !string.IsNullOrWhiteSpace(r.InternalInvoiceReference))
+                .GroupBy(r => r.InternalInvoiceReference.Trim(), StringComparer.OrdinalIgnoreCase)
+                .Where(g => g.Count() > 1); // only color groups with 2+ rows
+
+            var assignedKeys = new Dictionary<string, System.Windows.Media.SolidColorBrush>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var g in groups)
+            {
+                var brush = palette[colorIdx % palette.Length];
+                colorIdx++;
+                foreach (var row in g)
+                    row.InvoiceGroupBrush = brush;
+                assignedKeys[g.Key] = brush;
+            }
+
+            // Clear brush for rows not in a multi-row group
+            foreach (var row in rows)
+            {
+                if (string.IsNullOrWhiteSpace(row.InternalInvoiceReference)
+                    || !assignedKeys.ContainsKey(row.InternalInvoiceReference.Trim()))
+                {
+                    row.InvoiceGroupBrush = null;
+                }
+            }
+        }
     }
 }

@@ -8,6 +8,14 @@
             <Setter Property="FontSize" Value="13"/>
         </Style>
 
+        <!-- Fix WPF FindAncestor binding error on ComboBoxItem inside popups/DataGrid templates.
+             App-level implicit style is the only level that crosses all visual tree boundaries.
+             Stretch allows items to respect parent HorizontalContentAlignment (e.g. Center). -->
+        <Style TargetType="{x:Type ComboBoxItem}">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+
         <!-- BNP Colors - Base Colors -->
         <Color x:Key="BNPMainGreen">#00785A</Color>
         <Color x:Key="BNPLightGreen">#00985A</Color>

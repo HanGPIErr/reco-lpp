@@ -76,6 +76,8 @@ namespace RecoTool.Services.Rules
         // Current state conditions
         // Semi-colon or comma separated action IDs (e.g., "1;3;7"). '*' for any or null to not filter.
         public string CurrentActionId { get; set; }
+        // null => don't care; true => action must be DONE; false => action must be PENDING
+        public bool? IsActionDone { get; set; }
 
         // Outputs
         public int? OutputActionId { get; set; }
@@ -88,10 +90,13 @@ namespace RecoTool.Services.Rules
         // New: set ActionStatus (true = DONE, false = PENDING). Null => leave as-is (defaults apply)
         public bool? OutputActionDone { get; set; }
         // New: set FirstClaimDate to today when true (self only)
-        public int? OutputFirstClaimToday { get; set; }
+        public bool? OutputFirstClaimToday { get; set; }
         public ApplyTarget ApplyTo { get; set; } = ApplyTarget.Self;
         public bool AutoApply { get; set; } = true;
         public string Message { get; set; }
+        // If set, this Edit-scope rule only fires when the edited field matches (e.g. "Linking", "ActionStatus").
+        // Null or empty => fires on any edit (legacy behaviour).
+        public string TriggerOnField { get; set; }
     }
 
     /// <summary>
@@ -125,10 +130,15 @@ namespace RecoTool.Services.Rules
         public bool? IsNewLine { get; set; }
         public int? DaysSinceReminder { get; set; }
         public int? CurrentActionId { get; set; }
+        public bool? IsActionDone { get; set; }
 
         public string InvoiceStatus { get; set; }      
 
         public string PaymentRequestStatus { get; set; } // T_PAYMENT_REQUEST_STATUS from DWINGS invoice
+
+        // Set by the UI to indicate which field was just edited (e.g. "Action", "ActionStatus", "Linking").
+        // Used by TriggerOnField filtering in the engine.
+        public string EditedField { get; set; }
     }
 
     public class RuleEvaluationResult
@@ -150,7 +160,7 @@ namespace RecoTool.Services.Rules
         // 0 = PENDING, 1 = DONE (colonne OutputActionDone)
         public int? NewActionDoneSelf { get; set; }
 
-        // 0 = ignore, 1 = today (colonne OutputFirstClaimToday)
-        public int? NewFirstClaimTodaySelf { get; set; }
+        // false = ignore, true = today (colonne OutputFirstClaimToday)
+        public bool? NewFirstClaimTodaySelf { get; set; }
     }
 }

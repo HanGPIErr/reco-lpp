@@ -66,6 +66,9 @@ namespace RecoTool.Windows
                     ReconciliationViewEnricher.CalculateMissingAmounts(
                         _allViewData, country.CNT_AmbreReceivable, country.CNT_AmbrePivot);
 
+                    // Assign alternating colors to rows sharing the same InternalInvoiceReference
+                    ReconciliationViewEnricher.AssignInvoiceGroupColors(_allViewData);
+
                     // Refresh all pre-calculated display caches (StatusColor, MissingAmount colors,
                     // G visibility, etc.) so the grid reads final values without re-computing on scroll
                     foreach (var r in _allViewData)

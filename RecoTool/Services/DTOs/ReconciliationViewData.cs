@@ -379,6 +379,39 @@ namespace RecoTool.Services.DTOs
             }
         }
         
+        // ── Invoice group visual indicator (alternating colors per InternalInvoiceReference group) ──
+        private SolidColorBrush _invoiceGroupBrush;
+        public SolidColorBrush InvoiceGroupBrush
+        {
+            get => _invoiceGroupBrush ?? _transparentBrush;
+            set { if (_invoiceGroupBrush != value) { _invoiceGroupBrush = value; OnPropertyChanged(nameof(InvoiceGroupBrush)); } }
+        }
+
+        // Palette of soft alternating colors for invoice groups (frozen for perf)
+        internal static readonly SolidColorBrush[] InvoiceGroupPalette = CreateInvoiceGroupPalette();
+        private static SolidColorBrush[] CreateInvoiceGroupPalette()
+        {
+            var hexColors = new[]
+            {
+                "#E3F2FD", // light blue
+                "#FFF3E0", // light orange
+                "#E8F5E9", // light green
+                "#F3E5F5", // light purple
+                "#FFF9C4", // light yellow
+                "#E0F7FA", // light cyan
+                "#FCE4EC", // light pink
+                "#F1F8E9", // light lime
+            };
+            var brushes = new SolidColorBrush[hexColors.Length];
+            for (int i = 0; i < hexColors.Length; i++)
+            {
+                var b = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hexColors[i]));
+                b.Freeze();
+                brushes[i] = b;
+            }
+            return brushes;
+        }
+
         private DateTime? _firstClaimDate;
         public DateTime? FirstClaimDate
         {

@@ -28,12 +28,6 @@
                 </TextBlock.Text>
             </TextBlock>
         </DataTemplate>
-        <!-- Force ComboBoxItem alignment to avoid theme templates using ancestor bindings that may fail during dynamic updates -->
-        <Style TargetType="ComboBoxItem">
-            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/>
-        </Style>
-
         <!-- Centered Text Style for DataGrid Columns -->
         <Style x:Key="CenteredTextStyle" TargetType="TextBlock">
             <Setter Property="HorizontalAlignment" Value="Center"/>
@@ -1431,7 +1425,23 @@
                                     </DataTemplate>
                                 </syncfusion:GridTemplateColumn.CellTemplate>
                             </syncfusion:GridTemplateColumn>
-                            <syncfusion:GridTextColumn HeaderText="Internal Invoice Ref" MappingName="InternalInvoiceReference" Width="140" HeaderStyle="{StaticResource UserHeaderStyle}"/>
+                            <syncfusion:GridTemplateColumn HeaderText="Internal Invoice Ref" MappingName="InternalInvoiceReference" Width="140" HeaderStyle="{StaticResource UserHeaderStyle}">
+                                <syncfusion:GridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{Binding InvoiceGroupBrush}" CornerRadius="3" Padding="4,2" Margin="1">
+                                            <TextBlock Text="{Binding InternalInvoiceReference}" VerticalAlignment="Center"
+                                                       FontFamily="Segoe UI" FontSize="11" TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding InternalInvoiceReference}"/>
+                                        </Border>
+                                    </DataTemplate>
+                                </syncfusion:GridTemplateColumn.CellTemplate>
+                                <syncfusion:GridTemplateColumn.EditTemplate>
+                                    <DataTemplate>
+                                        <TextBox Text="{Binding InternalInvoiceReference, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                 VerticalAlignment="Center" FontFamily="Segoe UI" FontSize="11"/>
+                                    </DataTemplate>
+                                </syncfusion:GridTemplateColumn.EditTemplate>
+                            </syncfusion:GridTemplateColumn>
 
                             <!-- MbawData (read-only, user-visible) -->
                             <syncfusion:GridTemplateColumn HeaderText="Mbaw Data" Width="250" HeaderStyle="{StaticResource UserHeaderStyle}">

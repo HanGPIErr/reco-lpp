@@ -964,49 +964,58 @@ Do you want to apply these automatic rules?
                     foreach (var g in groupRows)
                         allGroupIds.Add(g.ID);
 
-                    // Extract distinct BGPMTs from the full group — one API call per BGPMT
-                    var distinctBgpmts = groupRows
+                    // Identify receivable + pivot sides from the GROUP (not re-searched by BGPMT)
+                    var recvLines = groupRows.Where(r => string.Equals(r.Account_ID, receivableId, StringComparison.OrdinalIgnoreCase)).ToList();
+                    var pivotLines = groupRows.Where(r => !string.Equals(r.Account_ID, receivableId, StringComparison.OrdinalIgnoreCase)).ToList();
+
+                    if (recvLines.Count == 0 || pivotLines.Count == 0) continue;
+
+                    // When grouped by InternalInvoiceReference: BGPMT comes from receivable only,
+                    // and PaymentRef = InternalInvoiceReference (the pivot's ref).
+                    // When grouped by BGPMT only: BGPMT from group, PaymentRef from pivot fields.
+                    var distinctBgpmts = (hasInvRef ? recvLines : groupRows)
                         .Where(r => !string.IsNullOrWhiteSpace(r.DWINGS_BGPMT))
                         .Select(r => r.DWINGS_BGPMT.Trim())
-                        .Distinct(StringComparer.OrdinalIgnoreCase);
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+
+                    if (distinctBgpmts.Count == 0) continue; // BGPMT is required for the DWINGS API
 
                     foreach (var bgpmt in distinctBgpmts)
                     {
                         if (processedBgpmts.Contains(bgpmt)) continue;
                         processedBgpmts.Add(bgpmt);
 
-                        // Find receivable + pivot rows for THIS specific BGPMT
-                        var bgpmtRows = allData.Where(r =>
-                            !r.IsDeleted
-                            && string.Equals(r.DWINGS_BGPMT?.Trim(), bgpmt, StringComparison.OrdinalIgnoreCase)
-                        ).ToList();
+                        var groupIds = recvLines.Select(r => r.ID).Concat(pivotLines.Select(r => r.ID)).ToList();
 
-                        var recvLines = bgpmtRows.Where(r => string.Equals(r.Account_ID, receivableId, StringComparison.OrdinalIgnoreCase)).ToList();
-                        var pivotLines = bgpmtRows.Where(r => !string.Equals(r.Account_ID, receivableId, StringComparison.OrdinalIgnoreCase)).ToList();
-
-                        if (recvLines.Count == 0 || pivotLines.Count == 0) continue;
-
-                        // Build IDs for this BGPMT (receivable + pivots)
-                        var bgpmtIds = recvLines.Select(r => r.ID).Concat(pivotLines.Select(r => r.ID)).ToList();
-
-                        // PaymentReference: prefer pivot's Reconciliation_Num > PaymentReference > Pivot_TRNFromLabel
-                        string payRef = pivotLines
-                            .Where(p => p.Reconciliation_Num?.Length > 3)
-                            .Select(p => p.Reconciliation_Num)
-                            .FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
-                            ?? pivotLines.Select(p => p.PaymentReference).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
-                            ?? pivotLines.Select(p => p.Pivot_TRNFromLabel).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
-                            ?? string.Empty;
+                        // PaymentReference depends on grouping strategy:
+                        // - InternalInvoiceReference grouping → use InternalInvoiceReference as PaymentRef
+                        // - BGPMT grouping → use pivot's Reconciliation_Num > PaymentReference > Pivot_TRNFromLabel
+                        string payRef;
+                        if (hasInvRef)
+                        {
+                            payRef = row.InternalInvoiceReference.Trim();
+                        }
+                        else
+                        {
+                            payRef = pivotLines
+                                .Where(p => p.Reconciliation_Num?.Length > 3)
+                                .Select(p => p.Reconciliation_Num)
+                                .FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
+                                ?? pivotLines.Select(p => p.PaymentReference).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
+                                ?? pivotLines.Select(p => p.Pivot_TRNFromLabel).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
+                                ?? string.Empty;
+                        }
 
                         var recvFirst = recvLines.First();
                         triggerItems.Add((
-                            AllIds: string.Join(",", bgpmtIds),
+                            AllIds: string.Join(",", groupIds),
                             PaymentRef: payRef,
                             ValueDate: pivotLines.Select(p => p.Value_Date).FirstOrDefault(),
                             RequestedAmount: recvFirst.I_REQUESTED_INVOICE_AMOUNT,
                             Currency: recvFirst.I_BILLING_CURRENCY,
                             Bgpmt: bgpmt,
-                            IsGrouped: bgpmtRows.Any(r => r.IsMatchedAcrossAccounts),
+                            IsGrouped: groupRows.Any(r => r.IsMatchedAcrossAccounts),
                             SourceRow: recvFirst
                         ));
                     }

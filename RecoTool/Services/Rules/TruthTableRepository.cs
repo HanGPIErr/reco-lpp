@@ -119,7 +119,9 @@ namespace RecoTool.Services.Rules
                                     DaysSinceReminderMin = GetNullableInt(row, table, "DaysSinceReminderMin"),
                                     DaysSinceReminderMax = GetNullableInt(row, table, "DaysSinceReminderMax"),
                                     CurrentActionId = NormalizeWildcard(GetString(row, table, "CurrentActionId")),
+                                    IsActionDone = GetNullableBool(row, table, "IsActionDone"),
                                     PaymentRequestStatus = NormalizeWildcard(GetString(row, table, "PaymentRequestStatus")),
+                                    InvoiceStatus = NormalizeWildcard(GetString(row, table, "InvoiceStatus")),
                                     OutputActionId = GetNullableInt(row, table, "OutputActionId"),
                                     OutputKpiId = GetNullableInt(row, table, "OutputKpiId"),
                                     OutputIncidentTypeId = GetNullableInt(row, table, "OutputIncidentTypeId"),
@@ -128,10 +130,11 @@ namespace RecoTool.Services.Rules
                                     OutputToRemind = GetNullableBool(row, table, "OutputToRemind"),
                                     OutputToRemindDays = GetNullableInt(row, table, "OutputToRemindDays"),
                                     OutputActionDone = GetNullableBool(row, table, "OutputActionDone"),
-                                    OutputFirstClaimToday = GetNullableInt(row, table, "OutputFirstClaimToday"),
+                                    OutputFirstClaimToday = GetNullableBool(row, table, "OutputFirstClaimToday"),
                                     ApplyTo = ParseApplyTo(GetString(row, table, "ApplyTo") ?? "Self"),
                                     AutoApply = table.Columns.Contains("AutoApply") && row["AutoApply"] != DBNull.Value ? Convert.ToBoolean(row["AutoApply"]) : true,
-                                    Message = GetString(row, table, "Message")
+                                    Message = GetString(row, table, "Message"),
+                                    TriggerOnField = GetString(row, table, "TriggerOnField")
                                 };
                                 list.Add(rule);
                             }
@@ -270,12 +273,14 @@ namespace RecoTool.Services.Rules
                 ("DaysSinceReminderMin", "INTEGER"),
                 ("DaysSinceReminderMax", "INTEGER"),
                 ("CurrentActionId", "TEXT(255)"),
+                ("IsActionDone", "INTEGER"),
                 ("PaymentRequestStatus", "TEXT(255)"),
                 ("MTStatus", "TEXT(20)"),
                 ("CommIdEmail", "INTEGER"),
                 ("BgiStatusInitiated", "INTEGER"),
                 ("OutputActionDone", "INTEGER"),
-                ("OutputFirstClaimToday", "INTEGER")
+                ("OutputFirstClaimToday", "INTEGER"),
+                ("TriggerOnField", "TEXT(100)")
             };
             foreach (var (name, ddl) in need)
             {
@@ -300,7 +305,7 @@ namespace RecoTool.Services.Rules
                 {
                     "HasDwingsLink", "IsGrouped", "IsAmountMatch",
                     "TriggerDateIsNull", "IsMatched",
-                    "HasManualMatch", "IsFirstRequest", "IsNewLine", "OutputRiskyItem", "OutputToRemind",
+                    "HasManualMatch", "IsFirstRequest", "IsNewLine", "IsActionDone", "OutputRiskyItem", "OutputToRemind",
                     "CommIdEmail", "BgiStatusInitiated", "OutputFirstClaimToday"
                 };
 
@@ -353,9 +358,9 @@ namespace RecoTool.Services.Rules
                         MTStatus=?, CommIdEmail=?, BgiStatusInitiated=?,
                         TriggerDateIsNull=?, DaysSinceTriggerMin=?, DaysSinceTriggerMax=?,
                         OperationDaysAgoMin=?, OperationDaysAgoMax=?,
-                        IsMatched=?, HasManualMatch=?, IsFirstRequest=?, IsNewLine=?, DaysSinceReminderMin=?, DaysSinceReminderMax=?, CurrentActionId=?, PaymentRequestStatus=?,
+                        IsMatched=?, HasManualMatch=?, IsFirstRequest=?, IsNewLine=?, DaysSinceReminderMin=?, DaysSinceReminderMax=?, CurrentActionId=?, IsActionDone=?, PaymentRequestStatus=?,
                         OutputActionId=?, OutputKpiId=?, OutputIncidentTypeId=?, OutputRiskyItem=?, OutputReasonNonRiskyId=?,
-                        OutputToRemind=?, OutputToRemindDays=?, OutputActionDone=?, OutputFirstClaimToday=?, ApplyTo=?, AutoApply=?, Message=?
+                        OutputToRemind=?, OutputToRemindDays=?, OutputActionDone=?, OutputFirstClaimToday=?, ApplyTo=?, AutoApply=?, Message=?, TriggerOnField=?
                         WHERE RuleId=?";
                     using (var cmd = new OleDbCommand(sql, conn))
                     {
@@ -374,9 +379,9 @@ namespace RecoTool.Services.Rules
                         MTStatus, CommIdEmail, BgiStatusInitiated,
                         TriggerDateIsNull, DaysSinceTriggerMin, DaysSinceTriggerMax,
                         OperationDaysAgoMin, OperationDaysAgoMax,
-                        IsMatched, HasManualMatch, IsFirstRequest, IsNewLine, DaysSinceReminderMin, DaysSinceReminderMax, CurrentActionId, PaymentRequestStatus,
+                        IsMatched, HasManualMatch, IsFirstRequest, IsNewLine, DaysSinceReminderMin, DaysSinceReminderMax, CurrentActionId, IsActionDone, PaymentRequestStatus,
                         OutputActionId, OutputKpiId, OutputIncidentTypeId, OutputRiskyItem, OutputReasonNonRiskyId,
-                        OutputToRemind, OutputToRemindDays, OutputActionDone, OutputFirstClaimToday, ApplyTo, AutoApply, Message)
+                        OutputToRemind, OutputToRemindDays, OutputActionDone, OutputFirstClaimToday, ApplyTo, AutoApply, Message, TriggerOnField)
                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
                     using (var cmd = new OleDbCommand(sql, conn))
                     {
@@ -446,6 +451,7 @@ namespace RecoTool.Services.Rules
             cmd.Parameters.Add("@DaysSinceReminderMin", OleDbType.Integer).Value = (object)(r.DaysSinceReminderMin.HasValue ? r.DaysSinceReminderMin.Value : (int?)null) ?? DBNull.Value;
             cmd.Parameters.Add("@DaysSinceReminderMax", OleDbType.Integer).Value = (object)(r.DaysSinceReminderMax.HasValue ? r.DaysSinceReminderMax.Value : (int?)null) ?? DBNull.Value;
             cmd.Parameters.AddWithValue("@CurrentActionId", (object)r.CurrentActionId ?? DBNull.Value);
+            cmd.Parameters.Add("@IsActionDone", OleDbType.Integer).Value = (object)(r.IsActionDone.HasValue ? (r.IsActionDone.Value ? -1 : 0) : (int?)null) ?? DBNull.Value;
             cmd.Parameters.AddWithValue("@PaymentRequestStatus", (object)r.PaymentRequestStatus ?? DBNull.Value);
             cmd.Parameters.Add("@OutputActionId", OleDbType.Integer).Value = (object)(r.OutputActionId.HasValue ? r.OutputActionId.Value : (int?)null) ?? DBNull.Value;
             cmd.Parameters.Add("@OutputKpiId", OleDbType.Integer).Value = (object)(r.OutputKpiId.HasValue ? r.OutputKpiId.Value : (int?)null) ?? DBNull.Value;
@@ -455,10 +461,11 @@ namespace RecoTool.Services.Rules
             cmd.Parameters.Add("@OutputToRemind", OleDbType.Integer).Value = (object)(r.OutputToRemind.HasValue ? (r.OutputToRemind.Value ? -1 : 0) : (int?)null) ?? DBNull.Value;
             cmd.Parameters.Add("@OutputToRemindDays", OleDbType.Integer).Value = (object)(r.OutputToRemindDays.HasValue ? r.OutputToRemindDays.Value : (int?)null) ?? DBNull.Value;
             cmd.Parameters.Add("@OutputActionDone", OleDbType.Integer).Value = (object)(r.OutputActionDone.HasValue ? (r.OutputActionDone.Value ? -1 : 0) : (int?)null) ?? DBNull.Value;
-            cmd.Parameters.Add("@OutputFirstClaimToday", OleDbType.Integer).Value = (object)(r.OutputFirstClaimToday.HasValue ? (r.OutputFirstClaimToday.Value) : (int?)null) ?? DBNull.Value;
+            cmd.Parameters.Add("@OutputFirstClaimToday", OleDbType.Integer).Value = (object)(r.OutputFirstClaimToday.HasValue ? (r.OutputFirstClaimToday.Value ? -1 : 0) : (int?)null) ?? DBNull.Value;
             cmd.Parameters.AddWithValue("@ApplyTo", (object)r.ApplyTo.ToString() ?? DBNull.Value);
             cmd.Parameters.Add("@AutoApply", OleDbType.Boolean).Value = (object)r.AutoApply;
             cmd.Parameters.AddWithValue("@Message", (object)r.Message ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@TriggerOnField", (object)r.TriggerOnField ?? DBNull.Value);
             if (includeRuleIdAtEnd) cmd.Parameters.AddWithValue("@RuleId", (object)r.RuleId ?? DBNull.Value);
         }
 
@@ -523,6 +530,7 @@ namespace RecoTool.Services.Rules
 
                 var rules = new List<TruthRule>
                 {
+                    /*
                     // Heuristic rules with new DWINGS inputs
                     // NOTE: Scope=Import to prevent infinite loops during manual edits
                     new TruthRule { RuleId = "Receivable - First Incoming Payment Request", Scope = RuleScope.Import, AccountSide = "R", TransactionType = "INCOMING_PAYMENT", IsFirstRequest = true, OutputActionId = 1, OutputKpiId = 16, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "First claim request - automatic action assigned" },
@@ -531,36 +539,38 @@ namespace RecoTool.Services.Rules
                     new TruthRule { RuleId = "Receivable - Reissuance Reminder Not Acknowledged", Scope = RuleScope.Import, AccountSide = "R", GuaranteeType = "REISSUANCE", TransactionType = "INCOMING_PAYMENT", MTStatus = MtStatusCondition.NotAcked, DaysSinceReminderMin = 30, OutputActionId = 7, OutputKpiId = 17, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "⚠️ Reminder required - MT791 not acknowledged (30+ days)" },
 
                     // Pivot side - COLLECTION
-                    // NOTE: Scope=Import + CurrentActionId=null to prevent re-applying on daily imports
                     new TruthRule { RuleId = "Pivot - Collection Credit (Grouped)", Scope = RuleScope.Import, AccountSide = "P", TransactionType = "COLLECTION", IsAmountMatch = true, Sign = "C", OutputActionId = 4, OutputKpiId = 18, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Both, AutoApply = true },
                     new TruthRule { RuleId = "Pivot - Collection Credit (Not Grouped)", Scope = RuleScope.Import, AccountSide = "P", TransactionType = "COLLECTION", Sign = "C", CurrentActionId = null, OutputActionId = 7, OutputKpiId = 18, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "⚠️ Collection Credit without amount match - investigation required" },
                     new TruthRule { RuleId = "Pivot - Collection Debit", Scope = RuleScope.Import, AccountSide = "P", TransactionType = "COLLECTION", Sign = "D", CurrentActionId = null, OutputActionId = 1, OutputKpiId = 19, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true },
 
                     // Pivot side - PAYMENT
-                    // NOTE: Scope=Import + CurrentActionId=null to prevent re-applying on daily imports
                     new TruthRule { RuleId = "Pivot - Payment Debit", Scope = RuleScope.Import, AccountSide = "P", TransactionType = "PAYMENT", Sign = "D", CurrentActionId = null, OutputActionId = 13, OutputKpiId = 21, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true },
                     new TruthRule { RuleId = "Pivot - Payment Credit", Scope = RuleScope.Import, AccountSide = "P", TransactionType = "PAYMENT", Sign = "C", CurrentActionId = null, OutputActionId = 7, OutputKpiId = 22, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true },
                      
                     // Pivot side - Other transaction types
-                    // NOTE: Scope=Import + CurrentActionId=null to prevent re-applying on daily imports
                     new TruthRule { RuleId = "Pivot - Adjustment", Scope = RuleScope.Import, AccountSide = "P", TransactionType = "ADJUSTMENT", CurrentActionId = null, OutputActionId = 1, OutputKpiId = 18, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true },
                     new TruthRule { RuleId = "Pivot - XCL Loader & Trigger", Scope = RuleScope.Import, AccountSide = "P", TransactionType = "XCL_LOADER;TRIGGER", CurrentActionId = null, OutputActionId = 6, OutputKpiId = 18, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true },
                     new TruthRule { RuleId = "Pivot - Manual Outgoing", Scope = RuleScope.Import, AccountSide = "P", TransactionType = "MANUAL_OUTGOING", CurrentActionId = null, OutputActionId = 4, OutputKpiId = 15, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true },
 
                     // Receivable side - INCOMING_PAYMENT with DWINGS conditions
-                    // NOTE: Scope=Import + IsFirstRequest=true to apply only on first appearance
-                    new TruthRule { RuleId = "Receivable - Reissuance/Advising MT791 Acknowledged", Scope = RuleScope.Import, AccountSide = "R", GuaranteeType = "REISSUANCE;ADVISING", TransactionType = "INCOMING_PAYMENT", MTStatus = MtStatusCondition.Acked, IsFirstRequest = true, OutputActionId = 1, OutputKpiId = 16, OutputFirstClaimToday = 1, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "MT791 Sent automatically via Dwings" },
-                    new TruthRule { RuleId = "Receivable - Issuance with Email", Scope = RuleScope.Import, AccountSide = "R", GuaranteeType = "ISSUANCE", TransactionType = "INCOMING_PAYMENT", CommIdEmail = true, IsFirstRequest = true, OutputActionId = 1, OutputKpiId = 16, OutputFirstClaimToday = 1, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "First claim email sent - awaiting response" },
+                    new TruthRule { RuleId = "Receivable - Reissuance/Advising MT791 Acknowledged", Scope = RuleScope.Import, AccountSide = "R", GuaranteeType = "REISSUANCE;ADVISING", TransactionType = "INCOMING_PAYMENT", MTStatus = MtStatusCondition.Acked, IsFirstRequest = true, OutputActionId = 1, OutputKpiId = 16, OutputFirstClaimToday = true, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "MT791 Sent automatically via Dwings" },
+                    new TruthRule { RuleId = "Receivable - Issuance with Email", Scope = RuleScope.Import, AccountSide = "R", GuaranteeType = "ISSUANCE", TransactionType = "INCOMING_PAYMENT", CommIdEmail = true, IsFirstRequest = true, OutputActionId = 1, OutputKpiId = 16, OutputFirstClaimToday = true, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "First claim email sent - awaiting response" },
                     new TruthRule { RuleId = "Receivable - Incoming Payment (Other)", Scope = RuleScope.Import, AccountSide = "R", TransactionType = "INCOMING_PAYMENT", Enabled = true, Priority = 120, ApplyTo = ApplyTarget.Self, AutoApply = true },
                     new TruthRule { RuleId = "Receivable - Reissuance/Advising MT791 Not Acknowledged", Scope = RuleScope.Import, AccountSide = "R", GuaranteeType = "REISSUANCE;ADVISING", TransactionType = "INCOMING_PAYMENT", MTStatus = MtStatusCondition.NotAcked, IsFirstRequest = true, OutputActionId = 2, OutputKpiId = 17, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "⚠️ MT791 not acknowledged - manual follow-up required" },
                     new TruthRule { RuleId = "Receivable - Issuance without Email", Scope = RuleScope.Import, AccountSide = "R", GuaranteeType = "ISSUANCE", TransactionType = "INCOMING_PAYMENT", CommIdEmail = false, IsFirstRequest = true, OutputActionId = 2, OutputKpiId = 17, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "⚠️ No email communication ID - manual claim required" },
 
                     // Receivable side - Other transaction types
-                    // NOTE: Scope=Import + CurrentActionId=null to prevent re-applying on daily imports
                     new TruthRule { RuleId = "Receivable - Direct Debit", Scope = RuleScope.Import, AccountSide = "R", TransactionType = "DIRECT_DEBIT", CurrentActionId = null, OutputActionId = 7, OutputKpiId = 19, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true },
                     new TruthRule { RuleId = "Receivable - Outgoing Payment (Not Initiated)", Scope = RuleScope.Import, AccountSide = "R", TransactionType = "OUTGOING_PAYMENT", BgiStatusInitiated = false, CurrentActionId = null, OutputActionId = 7, OutputKpiId = 22, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true },
                     new TruthRule { RuleId = "Receivable - External Debit Payment", Scope = RuleScope.Import, AccountSide = "R", TransactionType = "EXTERNAL_DEBIT_PAYMENT", CurrentActionId = null, OutputActionId = 10, OutputKpiId = 17, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true },
-                    new TruthRule { RuleId = "Receivable - Outgoing Payment (Initiated)", Scope = RuleScope.Import, AccountSide = "R", TransactionType = "OUTGOING_PAYMENT", BgiStatusInitiated = true, CurrentActionId = null, OutputActionId = 5, OutputKpiId = 15, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true }
+                    new TruthRule { RuleId = "Receivable - Outgoing Payment (Initiated)", Scope = RuleScope.Import, AccountSide = "R", TransactionType = "OUTGOING_PAYMENT", BgiStatusInitiated = true, CurrentActionId = null, OutputActionId = 5, OutputKpiId = 15, Enabled = true, Priority = 100, ApplyTo = ApplyTarget.Self, AutoApply = true },
+                    */
+
+                    // ── Cross-account linking rules ──
+                    // When lines are linked (grouped) and the balance is zero → Action = Trigger, Status = Pending
+                    new TruthRule { RuleId = "Linking - Grouped Balance Zero", Scope = RuleScope.Edit, IsGrouped = true, IsAmountMatch = true, OutputActionId = 4, OutputActionDone = false, Enabled = true, Priority = 10, ApplyTo = ApplyTarget.Both, AutoApply = true, Message = "Linked lines with zero balance - Trigger pending", TriggerOnField = "Linking" },
+                    // When Action = Trigger (4) and status changes to Done → KPI = Paid But Not Reconciled (18), ReasonNonRisky = Commissions already collected (30)
+                    new TruthRule { RuleId = "Trigger Done - Paid Not Reconciled", Scope = RuleScope.Edit, CurrentActionId = "4", IsActionDone = true, OutputKpiId = 18, OutputReasonNonRiskyId = 30, OutputRiskyItem = false, Enabled = true, Priority = 20, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "Trigger done - KPI set to Paid But Not Reconciled", TriggerOnField = "ActionStatus" }
                 };
 
                 // Only keep rules that have at least one output to apply
@@ -615,13 +625,13 @@ namespace RecoTool.Services.Rules
                     new TruthRule { RuleId = "P-MANOUT", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "P", TransactionType = "MANUAL_OUTGOING", OutputActionId = 4, OutputKpiId = 15, ApplyTo = ApplyTarget.Self, AutoApply = true },
                     
                     // Receivable - Incoming Payment Issuance with Email
-                    new TruthRule { RuleId = "R-INCPAY-ISSU-EMAIL", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "R", TransactionType = "INCOMING_PAYMENT", GuaranteeType = "ISSUANCE", CommIdEmail = true, IsFirstRequest = true, OutputActionId = 1, OutputKpiId = 16, OutputFirstClaimToday = 1, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "First claim email sent - awaiting response" },
+                    new TruthRule { RuleId = "R-INCPAY-ISSU-EMAIL", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "R", TransactionType = "INCOMING_PAYMENT", GuaranteeType = "ISSUANCE", CommIdEmail = true, IsFirstRequest = true, OutputActionId = 1, OutputKpiId = 16, OutputFirstClaimToday = true, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "First claim email sent - awaiting response" },
                     
                     // Receivable - Incoming Payment Issuance without Email
                     new TruthRule { RuleId = "R-INCPAY-ISSU-NOEMAIL", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "R", TransactionType = "INCOMING_PAYMENT", GuaranteeType = "ISSUANCE", CommIdEmail = false, IsFirstRequest = true, OutputActionId = 2, OutputKpiId = 17, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "⚠️ No email communication ID - manual claim required" },
                     
                     // Receivable - Incoming Payment Reissuance/Advising MT791 Acked
-                    new TruthRule { RuleId = "R-INCPAY-REISSU-ACK", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "R", TransactionType = "INCOMING_PAYMENT", GuaranteeType = "REISSUANCE;ADVISING", MTStatus = MtStatusCondition.Acked, IsFirstRequest = true, OutputActionId = 1, OutputKpiId = 16, OutputFirstClaimToday = 1, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "MT791 Sent automatically via Dwings" },
+                    new TruthRule { RuleId = "R-INCPAY-REISSU-ACK", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "R", TransactionType = "INCOMING_PAYMENT", GuaranteeType = "REISSUANCE;ADVISING", MTStatus = MtStatusCondition.Acked, IsFirstRequest = true, OutputActionId = 1, OutputKpiId = 16, OutputFirstClaimToday = true, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "MT791 Sent automatically via Dwings" },
                     
                     // Receivable - Incoming Payment Reissuance/Advising MT791 Not Acked
                     new TruthRule { RuleId = "R-INCPAY-REISSU-NACK", Enabled = true, Priority = 100, Scope = RuleScope.Import, AccountSide = "R", TransactionType = "INCOMING_PAYMENT", GuaranteeType = "REISSUANCE;ADVISING", MTStatus = MtStatusCondition.NotAcked, IsFirstRequest = true, OutputActionId = 2, OutputKpiId = 17, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "⚠️ MT791 not acknowledged - manual follow-up required" },

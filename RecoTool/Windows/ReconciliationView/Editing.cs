@@ -78,6 +78,16 @@ namespace RecoTool.Windows
             {
                 var cb = sender as ComboBox;
                 if (cb == null) return;
+
+                // Ignore events fired during ComboBox initialization (no added items)
+                // or when the same item is re-selected (added == removed)
+                if (e.AddedItems.Count == 0) return;
+                if (e.AddedItems.Count == 1 && e.RemovedItems.Count == 1
+                    && Equals(e.AddedItems[0], e.RemovedItems[0])) return;
+
+                // Ignore programmatic / virtualization events: only react when dropdown was open
+                if (!cb.IsDropDownOpen && !cb.IsKeyboardFocusWithin) return;
+
                 var row = cb.DataContext as ReconciliationViewData;
                 if (row == null) return;
 
@@ -157,7 +167,7 @@ namespace RecoTool.Windows
                 }
 
                 // Preview rules for edit and ask confirmation if self outputs are proposed
-                var ruleApplied = await ConfirmAndApplyRuleOutputsAsync(row, reco);
+                var ruleApplied = await ConfirmAndApplyRuleOutputsAsync(row, reco, tag);
 
                 // Save without applying rules again (we already applied selected outputs above)
                 // Only save if user confirmed rule application or if no rule was proposed
@@ -329,7 +339,8 @@ namespace RecoTool.Windows
             await _reconciliationService.SaveReconciliationAsync(reco, applyRulesOnEdit: false);
 
             // Then preview rules and apply rule-proposed outputs on top if confirmed
-            var ruleApplied = await ConfirmAndApplyRuleOutputsAsync(row, reco);
+            var editField = linkingFieldsChanged ? "Linking" : (string)null;
+            var ruleApplied = await ConfirmAndApplyRuleOutputsAsync(row, reco, editField);
             if (ruleApplied)
             {
                 // Save again only if rule outputs were applied on top of the manual edit
@@ -405,7 +416,6 @@ namespace RecoTool.Windows
             }
             catch { }
             try { RefreshActivityLog(); } catch { }
-            finally { _ruleConfirmBusy = false; }
         }
         
         /// <summary>
@@ -546,7 +556,7 @@ namespace RecoTool.Windows
 
         // Display rule outputs and apply to current row upon confirmation; notify counterpart outputs via toast
         // Returns true if changes were applied and should be saved, false otherwise
-        private async Task<bool> ConfirmAndApplyRuleOutputsAsync(ReconciliationViewData row, RecoTool.Models.Reconciliation reco)
+        private async Task<bool> ConfirmAndApplyRuleOutputsAsync(ReconciliationViewData row, RecoTool.Models.Reconciliation reco, string editedField = null)
         {
             try
             {
@@ -555,7 +565,7 @@ namespace RecoTool.Windows
                 
                 try
                 {
-                    var res = await _reconciliationService.PreviewRulesForEditAsync(row.ID);
+                    var res = await _reconciliationService.PreviewRulesForEditAsync(row.ID, editedField);
                     if (res == null || res.Rule == null) return true; // No rule, allow save
                     
                     // DEBUG: Log rule evaluation
@@ -572,7 +582,7 @@ namespace RecoTool.Windows
                     if (res.NewReasonNonRiskyIdSelf.HasValue) selfChanges.Add($"✅ Reason Non Risky: {GetUserFieldName(res.NewReasonNonRiskyIdSelf.Value, "Reason Non Risky")}");
                     if (res.NewToRemindSelf.HasValue) selfChanges.Add($"🔔 To Remind: {(res.NewToRemindSelf.Value ? "Yes" : "No")}");
                     if (res.NewToRemindDaysSelf.HasValue) selfChanges.Add($"📅 To Remind Days: {res.NewToRemindDaysSelf.Value}");
-                    if (res.NewFirstClaimTodaySelf == 1) selfChanges.Add("📅 First Claim Date: Today");
+                    if (res.NewFirstClaimTodaySelf == true) selfChanges.Add("📅 First Claim Date: Today");
 
                     // Show counterpart toast if rule applies to counterpart
                     if (res.Rule.ApplyTo == ApplyTarget.Counterpart || res.Rule.ApplyTo == ApplyTarget.Both)
@@ -640,11 +650,11 @@ namespace RecoTool.Windows
                     {
                         try { var d = DateTime.Today.AddDays(res.NewToRemindDaysSelf.Value); row.ToRemindDate = d; reco.ToRemindDate = d; } catch { }
                     }
-                    if (res.NewFirstClaimTodaySelf == 1)
+                    if (res.NewFirstClaimTodaySelf == true)
                     {
                         try
                         {
-                            if (row.FirstClaimDate.HasValue)
+                            if (reco.FirstClaimDate.HasValue)
                             {
                                 row.LastClaimDate = DateTime.Today; reco.LastClaimDate = DateTime.Today;
                             }
@@ -690,7 +700,7 @@ namespace RecoTool.Windows
                         if (res.NewReasonNonRiskyIdSelf.HasValue) outs.Add($"ReasonNonRisky={res.NewReasonNonRiskyIdSelf.Value}");
                         if (res.NewToRemindSelf.HasValue) outs.Add($"ToRemind={res.NewToRemindSelf.Value}");
                         if (res.NewToRemindDaysSelf.HasValue) outs.Add($"ToRemindDays={res.NewToRemindDaysSelf.Value}");
-                        if (res.NewFirstClaimTodaySelf == 1) outs.Add("FirstClaimDate=Today");
+                        if (res.NewFirstClaimTodaySelf == true) outs.Add("FirstClaimDate=Today");
                         var outsStr = string.Join("; ", outs);
                         var countryId = _offlineFirstService?.CurrentCountryId;
                         LogHelper.WriteRuleApplied("edit", countryId, row.ID, res.Rule.RuleId, outsStr, res.UserMessage);

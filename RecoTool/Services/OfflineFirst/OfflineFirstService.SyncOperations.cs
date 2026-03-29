@@ -94,51 +94,46 @@ namespace RecoTool.Services
 
                 try { await RaiseSyncStateAsync(cid, SyncStateKind.SyncInProgress, pendingOverride: recoUnsynced.Count); } catch { }
 
-                // Appel du push granulaire (T_Reconciliation uniquement) AVEC verrou global court pour éviter la course avec import
+                // Push granulaire (T_Reconciliation uniquement) SANS verrou global.
+                // Access/OleDb gère les écritures concurrentes via son propre .ldb file locking.
+                // Le GlobalLock ajoutait 2 allers-retours réseau inutiles (INSERT+DELETE SyncLocks) sur réseau lent.
+                // On garde seulement le check passif IsGlobalLockActiveByOthersAsync (ci-dessus) pour éviter de pusher pendant un import.
                 if (diag)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[PUSH][{cid}] Attempting short global lock for Lite push...");
-                    try { LogManager.Info($"[PUSH][{cid}] Attempting short global lock for Lite push"); } catch { }
+                    System.Diagnostics.Debug.WriteLine($"[PUSH][{cid}] Invoking PushPendingChangesToNetworkAsync (Lite/T_Reconciliation, no global lock)...");
+                    try { LogManager.Info($"[PUSH][{cid}] Invoking PushPendingChangesToNetworkAsync (Lite/T_Reconciliation, no global lock)"); } catch { }
                 }
-                using (var gl = await AcquireGlobalLockAsync(cid, "LitePush-Reconciliation", TimeSpan.FromSeconds(30)))
+                await PushPendingChangesToNetworkAsync(cid, assumeLockHeld: true, source: nameof(PushReconciliationIfPendingAsync) + "/Lite", preloadedUnsynced: recoUnsynced);
+                // Two-way: pull network changes back to local (LastModified first, then Version)
+                try
                 {
                     if (diag)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[PUSH][{cid}] Global lock acquired. Invoking PushPendingChangesToNetworkAsync (Lite/T_Reconciliation)...");
-                        try { LogManager.Info($"[PUSH][{cid}] Global lock acquired. Invoking PushPendingChangesToNetworkAsync (Lite/T_Reconciliation)"); } catch { }
+                        System.Diagnostics.Debug.WriteLine($"[PULL][{cid}] Starting PullReconciliationFromNetworkAsync after push...");
+                        try { LogManager.Info($"[PULL][{cid}] Starting PullReconciliationFromNetworkAsync after push"); } catch { }
                     }
-                    await PushPendingChangesToNetworkAsync(cid, assumeLockHeld: true, source: nameof(PushReconciliationIfPendingAsync) + "/Lite", preloadedUnsynced: recoUnsynced);
-                    // Two-way: pull network changes back to local (LastModified first, then Version)
-                    try
+                    var pulled = await PullReconciliationFromNetworkAsync(cid);
+                    if (pulled > 0)
                     {
-                        if (diag)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[PULL][{cid}] Starting PullReconciliationFromNetworkAsync after push...");
-                            try { LogManager.Info($"[PULL][{cid}] Starting PullReconciliationFromNetworkAsync after push"); } catch { }
-                        }
-                        var pulled = await PullReconciliationFromNetworkAsync(cid);
-                        if (pulled > 0)
-                        {
-                            try { ReconciliationService.InvalidateReconciliationViewCache(cid); } catch { }
-                            // Do NOT fire SyncPulledChanges here — this pull runs right after OUR OWN push,
-                            // so pulled rows are likely our own changes echoed back from the network.
-                            // The SyncMonitorService marker-based detection handles true remote changes.
-                        }
-                        if (diag)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[PULL][{cid}] Completed pull. Applied {pulled} row(s) from network to local.");
-                            try { LogManager.Info($"[PULL][{cid}] Completed pull. Applied {pulled} row(s)"); } catch { }
-                        }
+                        try { ReconciliationService.InvalidateReconciliationViewCache(cid); } catch { }
+                        // Do NOT fire SyncPulledChanges here — this pull runs right after OUR OWN push,
+                        // so pulled rows are likely our own changes echoed back from the network.
+                        // The SyncMonitorService marker-based detection handles true remote changes.
                     }
-                    catch (Exception exPull)
+                    if (diag)
                     {
-                        if (diag)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[PULL][{cid}] PullReconciliationFromNetworkAsync failed: {exPull.Message}");
-                            try { LogManager.Error($"[PULL][{cid}] PullReconciliationFromNetworkAsync failed: {exPull.Message}", exPull); } catch { }
-                        }
-                        // best-effort: do not fail the overall operation
+                        System.Diagnostics.Debug.WriteLine($"[PULL][{cid}] Completed pull. Applied {pulled} row(s) from network to local.");
+                        try { LogManager.Info($"[PULL][{cid}] Completed pull. Applied {pulled} row(s)"); } catch { }
                     }
+                }
+                catch (Exception exPull)
+                {
+                    if (diag)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[PULL][{cid}] PullReconciliationFromNetworkAsync failed: {exPull.Message}");
+                        try { LogManager.Error($"[PULL][{cid}] PullReconciliationFromNetworkAsync failed: {exPull.Message}", exPull); } catch { }
+                    }
+                    // best-effort: do not fail the overall operation
                 }
                 _lastPushTimesUtc[cid] = DateTime.UtcNow;
                 try { await RaiseSyncStateAsync(cid, SyncStateKind.UpToDate, pendingOverride: 0); } catch { }
@@ -194,11 +189,22 @@ namespace RecoTool.Services
 
             int applied = 0;
 
+            // Use persistent network connection to avoid repeated Open/Close (.ldb churn) on slow networks
+            var netConn = await GetOrOpenNetworkConnectionAsync();
+            if (netConn == null || netConn.State != ConnectionState.Open)
+            {
+                // Fallback: ephemeral connection if persistent fails
+                netConn = new OleDbConnection(GetNetworkCountryConnectionString(countryId));
+                await netConn.OpenAsync();
+            }
+            // netConn is NOT disposed here — it's either persistent (managed by CloseNetworkConnection) or fallback
+            bool isEphemeralNet = !ReferenceEquals(netConn, _persistentNetworkConn);
+
+            try
+            {
             using (var localConn = new OleDbConnection(GetCountryConnectionString(countryId)))
-            using (var netConn = new OleDbConnection(GetNetworkCountryConnectionString(countryId)))
             {
                 await localConn.OpenAsync();
-                await netConn.OpenAsync();
 
                 // ── Discover metadata ONCE per country (cached for session) ──
                 var meta = _pullMetadataCache.GetOrAdd(countryId, _ =>
@@ -344,6 +350,16 @@ namespace RecoTool.Services
             }
 
             return applied;
+            }
+            finally
+            {
+                // Dispose ephemeral fallback connection only (persistent is managed by CloseNetworkConnection)
+                if (isEphemeralNet)
+                {
+                    try { netConn?.Close(); } catch { }
+                    try { netConn?.Dispose(); } catch { }
+                }
+            }
         }
 
         /// <summary>

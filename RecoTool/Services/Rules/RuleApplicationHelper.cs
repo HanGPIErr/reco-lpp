@@ -78,7 +78,7 @@ namespace RecoTool.Services.Rules
                 modified = true;
             }
 
-            if (result.NewFirstClaimTodaySelf.HasValue && result.NewFirstClaimTodaySelf.Value == 1)
+            if (result.NewFirstClaimTodaySelf == true)
             {
                 if (reconciliation.FirstClaimDate.HasValue)
                     reconciliation.LastClaimDate = DateTime.Today;
@@ -121,7 +121,7 @@ namespace RecoTool.Services.Rules
             if (result.NewToRemindSelf.HasValue) parts.Add($"ToRemind={result.NewToRemindSelf.Value}");
             if (result.NewToRemindDaysSelf.HasValue) parts.Add($"ToRemindDays={result.NewToRemindDaysSelf.Value}");
             if (result.NewActionDoneSelf.HasValue) parts.Add($"ActionStatus={(result.NewActionDoneSelf.Value == 1 ? "DONE" : "PENDING")}");
-            if (result.NewFirstClaimTodaySelf.HasValue && result.NewFirstClaimTodaySelf.Value == 1) parts.Add("FirstClaimDate=Today");
+            if (result.NewFirstClaimTodaySelf == true) parts.Add("FirstClaimDate=Today");
 
             return string.Join("; ", parts);
         }
