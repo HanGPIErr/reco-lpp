@@ -143,6 +143,15 @@ namespace RecoTool.Windows
                             });
                         }
                     }
+                    // Ensure Operation_Date ascending is always present as default sort
+                    if (!sfGrid.SortColumnDescriptions.Any(sd => string.Equals(sd.ColumnName, "Operation_Date", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        sfGrid.SortColumnDescriptions.Add(new Syncfusion.UI.Xaml.Grid.SortColumnDescription
+                        {
+                            ColumnName = "Operation_Date",
+                            SortDirection = System.ComponentModel.ListSortDirection.Ascending
+                        });
+                    }
                 }
             }
             catch { }

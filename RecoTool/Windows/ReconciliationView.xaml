@@ -1167,6 +1167,9 @@
                               MouseDoubleClick="ResultsDataGrid_MouseDoubleClick"
                               QueryColumnDragging="ResultsDataGrid_QueryColumnDragging"
                               Grid.ColumnSpan="2" Grid.RowSpan="2">
+                        <syncfusion:SfDataGrid.SortColumnDescriptions>
+                            <syncfusion:SortColumnDescription ColumnName="Operation_Date" SortDirection="Ascending"/>
+                        </syncfusion:SfDataGrid.SortColumnDescriptions>
                         <!-- Row context menu (populated dynamically) -->
                         <syncfusion:SfDataGrid.RecordContextMenu>
                             <ContextMenu Opened="DataGridRow_ContextMenuOpening">
