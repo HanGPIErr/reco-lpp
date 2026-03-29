@@ -128,21 +128,7 @@ namespace RecoTool.Windows
                     catch { }
                 }
 
-                // 3) Enforce Counterpart column immediately after Missing Amount for visual grouping
-                var missingAmountCol = sfGrid.Columns.FirstOrDefault(c => c.HeaderText == "Missing Amount");
-                var counterpartCol = sfGrid.Columns.FirstOrDefault(c => c.HeaderText == "Counterpart");
-                if (missingAmountCol != null && counterpartCol != null)
-                {
-                    int missingIdx = sfGrid.Columns.IndexOf(missingAmountCol);
-                    int counterpartIdx = sfGrid.Columns.IndexOf(counterpartCol);
-                    if (missingIdx >= 0 && counterpartIdx >= 0 && counterpartIdx != missingIdx + 1)
-                    {
-                        sfGrid.Columns.RemoveAt(counterpartIdx);
-                        sfGrid.Columns.Insert(missingIdx + 1, counterpartCol);
-                    }
-                }
-
-                // 4) Apply sorting
+                // 3) Apply sorting
                 if (sfGrid.SortColumnDescriptions != null)
                 {
                     sfGrid.SortColumnDescriptions.Clear();

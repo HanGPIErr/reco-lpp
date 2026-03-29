@@ -2404,6 +2404,12 @@ namespace RecoTool.Windows
         {
             try
             {
+                int count = _linkingBasket.TotalCount;
+
+                // Propagate count to all open views so the context menu header stays in sync
+                foreach (var v in GetAllOpenViews())
+                    v.LinkingBasketCount = count;
+
                 if (!_linkingBasket.HasItems)
                 {
                     LinkingBasketBanner.Visibility = Visibility.Collapsed;
@@ -2411,7 +2417,7 @@ namespace RecoTool.Windows
                 }
 
                 LinkingBasketBanner.Visibility = Visibility.Visible;
-                LinkingBasketSummary.Text = $"Linking Basket: {_linkingBasket.TotalCount} row(s)";
+                LinkingBasketSummary.Text = $"Linking Basket: {count} row(s)";
                 LinkingBasketPivotDetail.Text = $"Pivot: {_linkingBasket.PivotItems.Count} ({_linkingBasket.PivotTotal:N2})";
                 LinkingBasketRecvDetail.Text = $"Receivable: {_linkingBasket.ReceivableItems.Count} ({_linkingBasket.ReceivableTotal:N2})";
 
@@ -2449,19 +2455,10 @@ namespace RecoTool.Windows
                 var allIds = _linkingBasket.GetAllIds();
                 if (allIds.Count < 2) return;
 
-                // Generate a unique group reference for this link
-                var groupRef = $"LINK-{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid().ToString("N").Substring(0, 6).ToUpper()}";
-
-                var confirm = MessageBox.Show(
-                    $"Link {_linkingBasket.PivotItems.Count} Pivot + {_linkingBasket.ReceivableItems.Count} Receivable lines?\n\n" +
-                    $"Pivot total: {_linkingBasket.PivotTotal:N2}\n" +
-                    $"Receivable total: {_linkingBasket.ReceivableTotal:N2}\n" +
-                    $"Delta: {_linkingBasket.Delta:N2}\n\n" +
-                    $"All lines will be linked with reference: {groupRef}",
-                    "Confirm Bulk Link",
-                    MessageBoxButton.YesNo, MessageBoxImage.Question);
-
-                if (confirm != MessageBoxResult.Yes) return;
+                // Ask user for a reference name; generate one if left empty
+                var autoRef = $"LINK-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString("N").Substring(0, 6).ToUpper()}";
+                var groupRef = PromptLinkingReference(autoRef);
+                if (groupRef == null) return; // user cancelled
 
                 var recoSvc = _reconciliationService;
                 if (recoSvc == null) return;
@@ -2486,18 +2483,121 @@ namespace RecoTool.Windows
                 _linkingBasket.Clear();
                 RefreshLinkingBasketUI();
 
-                ShowInfo($"✅ {linked} lines linked with reference {groupRef}");
+                ShowInfo($"✅ {linked} lines linked with reference: {groupRef}");
 
-                // Touch session so other users see fresh activity
+                // Apply rules with TriggerOnField="Linking" (e.g. "Linking - Grouped Balance Zero")
+                // Must run AFTER save so the context reflects the new grouping (IsGrouped=true, MissingAmount=0)
+                try
+                {
+                    int ruled = await recoSvc.ApplyRulesNowAsync(allIds, editedField: "Linking");
+                    if (ruled > 0)
+                        ShowInfo($"⚡ Rules applied to {ruled} linked lines");
+                }
+                catch { }
+
                 try { _todoSessionTracker?.TouchSession(); } catch { }
-
-                // Refresh all open views to show the new grouping
                 RefreshAllOpenViews();
             }
             catch (Exception ex)
             {
                 ShowError($"Linking failed: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Shows a small dialog asking the user for a link reference name.
+        /// Returns the reference entered (or auto-generated if blank), or null if cancelled.
+        /// </summary>
+        private string PromptLinkingReference(string autoRef)
+        {
+            // Build a simple inline dialog window
+            var win = new Window
+            {
+                Title = "🔗 Link Lines — Reference Name",
+                Width = 440,
+                Height = 230,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = Window.GetWindow(this),
+                ResizeMode = ResizeMode.NoResize,
+                ShowInTaskbar = false
+            };
+
+            var stack = new System.Windows.Controls.StackPanel { Margin = new Thickness(20) };
+
+            stack.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = $"Linking {_linkingBasket.PivotItems.Count} Pivot + {_linkingBasket.ReceivableItems.Count} Receivable lines\n" +
+                       $"Pivot: {_linkingBasket.PivotTotal:N2}   Receivable: {_linkingBasket.ReceivableTotal:N2}   Δ {_linkingBasket.Delta:N2}",
+                FontSize = 11,
+                Foreground = System.Windows.Media.Brushes.DimGray,
+                Margin = new Thickness(0, 0, 0, 12),
+                TextWrapping = TextWrapping.Wrap
+            });
+
+            stack.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = "Reference name (leave blank to auto-generate):",
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 4)
+            });
+
+            var tb = new System.Windows.Controls.TextBox
+            {
+                FontSize = 12,
+                Padding = new Thickness(4, 3, 4, 3),
+                Margin = new Thickness(0, 0, 0, 4)
+            };
+            stack.Children.Add(tb);
+
+            var hint = new System.Windows.Controls.TextBlock
+            {
+                Text = $"Auto: {autoRef}",
+                FontSize = 10,
+                Foreground = System.Windows.Media.Brushes.Gray,
+                Margin = new Thickness(0, 0, 0, 16)
+            };
+            stack.Children.Add(hint);
+
+            var btnRow = new System.Windows.Controls.StackPanel
+            {
+                Orientation = System.Windows.Controls.Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+
+            bool? result = null;
+
+            var btnCancel = new System.Windows.Controls.Button
+            {
+                Content = "Cancel",
+                Width = 80,
+                Margin = new Thickness(0, 0, 8, 0),
+                IsCancel = true
+            };
+            btnCancel.Click += (s, ev) => { result = false; win.Close(); };
+
+            var btnOk = new System.Windows.Controls.Button
+            {
+                Content = "Link",
+                Width = 80,
+                IsDefault = true,
+                Background = System.Windows.Media.Brushes.RoyalBlue,
+                Foreground = System.Windows.Media.Brushes.White,
+                FontWeight = FontWeights.SemiBold
+            };
+            btnOk.Click += (s, ev) => { result = true; win.Close(); };
+
+            btnRow.Children.Add(btnCancel);
+            btnRow.Children.Add(btnOk);
+            stack.Children.Add(btnRow);
+
+            win.Content = stack;
+            tb.Focus();
+            win.ShowDialog();
+
+            if (result != true) return null;
+
+            var entered = tb.Text?.Trim();
+            return string.IsNullOrWhiteSpace(entered) ? autoRef : entered;
         }
 
         private void ClearLinkingBasket_Click(object sender, RoutedEventArgs e)

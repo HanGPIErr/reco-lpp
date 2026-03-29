@@ -630,6 +630,8 @@ namespace RecoTool.Windows
                 var linkingItem = cm.Items.OfType<MenuItem>().FirstOrDefault(mi => (mi.Tag as string) == "LinkingBasket");
                 if (linkingItem != null)
                 {
+                    linkingItem.DataContext = rowData;
+                    linkingItem.Header = $"🔗 Add to Linking Basket ({LinkingBasketCount})";
                     linkingItem.Click -= AddToLinkingBasket_Click;
                     linkingItem.Click += AddToLinkingBasket_Click;
                     linkingItem.IsEnabled = !rowData.IsDeleted;

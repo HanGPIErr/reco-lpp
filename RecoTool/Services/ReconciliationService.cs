@@ -585,9 +585,6 @@ namespace RecoTool.Services
                         r.DWINGS_InvoiceID, r.Receivable_InvoiceFromAmbre,
                         r.Reconciliation_Num, r.Comments, r.RawLabel,
                         r.Receivable_DWRefFromAmbre, r.InternalInvoiceReference));
-
-                // Assign alternating colors to rows sharing the same InternalInvoiceReference
-                ReconciliationViewEnricher.AssignInvoiceGroupColors(list);
             }
             catch { }
 
@@ -824,7 +821,7 @@ namespace RecoTool.Services
         /// Exécute immédiatement les règles (scope Edit) pour les IDs donnés.
         /// N'applique que les règles en Auto-apply; les autres peuvent ajouter un message.
         /// </summary>
-        public async Task<int> ApplyRulesNowAsync(IEnumerable<string> ids)
+        public async Task<int> ApplyRulesNowAsync(IEnumerable<string> ids, string editedField = null)
         {
             try
             {
@@ -866,6 +863,7 @@ namespace RecoTool.Services
                         {
                             bool isPivot = amb.IsPivotAccount(country.CNT_AmbrePivot);
                             var ctx = await BuildRuleContextAsync(amb, r, country, currentCountryId, isPivot).ConfigureAwait(false);
+                            ctx.EditedField = editedField;
                             var res = await _rulesEngine.EvaluateAsync(ctx, RuleScope.Edit).ConfigureAwait(false);
                             RuleApplicationHelper.ApplyAndLog(res, r, _currentUser, "run-now", currentCountryId, RaiseRuleApplied);
                             if (res?.NewActionIdSelf.HasValue == true) EnsureActionDefaults(r);
@@ -877,7 +875,7 @@ namespace RecoTool.Services
                 }
                 if (recos.Count == 0) return 0;
 
-                await SaveReconciliationsAsync(recos).ConfigureAwait(false);
+                await SaveReconciliationsAsync(recos, applyRulesOnEdit: false).ConfigureAwait(false);
                 return recos.Count;
             }
             catch { return 0; }

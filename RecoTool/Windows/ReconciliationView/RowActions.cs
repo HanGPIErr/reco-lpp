@@ -878,6 +878,12 @@ Do you want to apply these automatic rules?
         /// </summary>
         public event Action<List<ReconciliationViewData>> AddToLinkingBasketRequested;
 
+        /// <summary>
+        /// Current linking basket count — updated by ReconciliationPage after each basket change.
+        /// Used to display the count in the context menu header.
+        /// </summary>
+        public int LinkingBasketCount { get; set; } = 0;
+
         private void SpiritGeneSearchMenuItem_Click(object sender, RoutedEventArgs e)
         {
             try
