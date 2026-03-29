@@ -89,7 +89,15 @@
                       HeadersVisibility="Column"
                       VirtualizingPanel.IsVirtualizing="True"
                       VirtualizingPanel.VirtualizationMode="Recycling"
-                      EnableRowVirtualization="True">
+                      EnableRowVirtualization="True"
+                      MouseRightButtonDown="ResultsGrid_MouseRightButtonDown">
+                <DataGrid.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="📋 Copy End-to-End ID" Click="CopyEndToEndId_Click"/>
+                        <Separator/>
+                        <MenuItem Header="📋 Copy Row Data" Click="CopyRowData_Click"/>
+                    </ContextMenu>
+                </DataGrid.ContextMenu>
                 <DataGrid.Columns>
                     <DataGridTextColumn Header="Type" Binding="{Binding CTypeOpe}" Width="60"/>
                     <DataGridTextColumn Header="Date" Binding="{Binding DRgltOpe}" Width="90"/>

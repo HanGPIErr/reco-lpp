@@ -8,6 +8,8 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
 using RecoTool.API;
 using RecoTool.Services;
 
@@ -277,6 +279,67 @@ namespace RecoTool.Windows
         private void CloseButton_Click(object sender, RoutedEventArgs e)
         {
             Close();
+        }
+
+        private void ResultsGrid_MouseRightButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            // Select the row under the mouse when right-clicking
+            var row = GetDataGridRow((DependencyObject)e.OriginalSource);
+            if (row != null && row.Item != null)
+            {
+                ResultsGrid.SelectedItem = row.Item;
+                e.Handled = true;
+            }
+        }
+
+        private DataGridRow GetDataGridRow(DependencyObject obj)
+        {
+            while (obj != null && !(obj is DataGridRow))
+            {
+                obj = VisualTreeHelper.GetParent(obj);
+            }
+            return obj as DataGridRow;
+        }
+
+        private void CopyEndToEndId_Click(object sender, RoutedEventArgs e)
+        {
+            var row = ResultsGrid.SelectedItem as SpiritGeneResultRow;
+            if (row != null && !string.IsNullOrWhiteSpace(row.LEndToEndId))
+            {
+                Clipboard.SetText(row.LEndToEndId);
+                StatusText.Text = $"End-to-End ID copied: {row.LEndToEndId}";
+            }
+            else
+            {
+                StatusText.Text = "No End-to-End ID to copy.";
+            }
+        }
+
+        private void CopyRowData_Click(object sender, RoutedEventArgs e)
+        {
+            var row = ResultsGrid.SelectedItem as SpiritGeneResultRow;
+            if (row != null)
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine($"Type: {row.CTypeOpe}");
+                sb.AppendLine($"Date: {row.DRgltOpe}");
+                sb.AppendLine($"Amount: {row.DisplayAmount}");
+                sb.AppendLine($"Ordering IBAN: {row.IIbanDo}");
+                sb.AppendLine($"Ordering BIC: {row.IBicDo}");
+                sb.AppendLine($"Beneficiary IBAN: {row.IIbanBen}");
+                sb.AppendLine($"Beneficiary BIC: {row.IBicBen}");
+                sb.AppendLine($"End-to-End ID: {row.LEndToEndId}");
+                sb.AppendLine($"Message ID: {row.IMsgId}");
+                sb.AppendLine($"Transaction ID: {row.ITransid}");
+                sb.AppendLine($"CSM: {row.CCsm}");
+                
+                Clipboard.SetText(sb.ToString());
+                StatusText.Text = "Row data copied to clipboard.";
+            }
+            else
+            {
+                StatusText.Text = "No row selected to copy.";
+            }
         }
     }
 

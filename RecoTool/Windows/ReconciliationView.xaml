@@ -1135,7 +1135,7 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- Results Grid — Syncfusion SfDataGrid for high-performance scrolling -->
+                    <!-- Results Grid — Syncfusion SfDataGrid for high performance -->
                     <syncfusion:SfDataGrid x:Name="ResultsDataGrid" Grid.Row="1"
                               AutoGenerateColumns="False"
                               AllowEditing="True"
