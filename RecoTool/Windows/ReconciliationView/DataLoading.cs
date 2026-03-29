@@ -385,6 +385,9 @@ namespace RecoTool.Windows
                 _filterCountry = cc?.CNT_Name;
                 UpdateCountryPivotReceivableInfo();
 
+                // Start/restart presence engine for the new country
+                try { StartPresenceEngine(); } catch { }
+
                 // Recharger les options de devise dépendantes du pays
                 _ = LoadCurrencyOptionsAsync();
                 _ = LoadGuaranteeTypeOptionsAsync();

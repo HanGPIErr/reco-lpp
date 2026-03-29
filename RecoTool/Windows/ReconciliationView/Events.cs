@@ -56,6 +56,9 @@ namespace RecoTool.Windows
         {
             try
             {
+                // Broadcast selected row for real-time presence
+                try { UpdatePresenceActiveRow(); } catch { }
+
                 var items = ResultsDataGrid?.SelectedItems;
                 int count = items?.Count ?? 0;
                 if (count > 0)

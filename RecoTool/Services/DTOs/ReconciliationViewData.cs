@@ -610,6 +610,34 @@ namespace RecoTool.Services.DTOs
         // Account side: 'P' for Pivot, 'R' for Receivable (used in matched popup)
         public string AccountSide { get; set; }
 
+        // ── Real-time presence: who is currently viewing/editing this row ──
+        private string _presenceUserName;
+        public string PresenceUserName
+        {
+            get => _presenceUserName;
+            set
+            {
+                if (_presenceUserName != value)
+                {
+                    _presenceUserName = value;
+                    OnPropertyChanged(nameof(PresenceUserName));
+                    OnPropertyChanged(nameof(PresenceInitials));
+                    OnPropertyChanged(nameof(PresenceVisibility));
+                }
+            }
+        }
+        public string PresenceInitials
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(_presenceUserName)) return null;
+                var parts = _presenceUserName.Split(new[] { '.', '_', '-', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 2) return $"{char.ToUpper(parts[0][0])}{char.ToUpper(parts[1][0])}";
+                return _presenceUserName.Length >= 2 ? _presenceUserName.Substring(0, 2).ToUpper() : _presenceUserName.ToUpper();
+            }
+        }
+        public Visibility PresenceVisibility => string.IsNullOrWhiteSpace(_presenceUserName) ? Visibility.Collapsed : Visibility.Visible;
+
         // True if the reference (DWINGS_InvoiceID or InternalInvoiceReference) exists on both accounts
         private bool _isMatchedAcrossAccounts;
         public bool IsMatchedAcrossAccounts

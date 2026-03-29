@@ -554,13 +554,13 @@ namespace RecoTool.Services
             }
             catch { /* best-effort calculation */ }
 
-            // Compute transient UI flag: IsNewlyAdded (CreationDate is today)
+            // Compute transient UI flag: IsNewlyAdded (Ambre import date is today)
             try
             {
                 var today = DateTime.Today;
                 foreach (var row in list)
                 {
-                    if (row.Reco_CreationDate.HasValue && row.Reco_CreationDate.Value.Date == today)
+                    if (row.CreationDate.HasValue && row.CreationDate.Value.Date == today)
                         row.IsNewlyAdded = true;
                 }
             }
@@ -619,6 +619,7 @@ namespace RecoTool.Services
             public double SignedAmount { get; set; }
             public string DWINGS_InvoiceID { get; set; }
             public string InternalInvoiceReference { get; set; }
+            public DateTime? CreationDate { get; set; }
             public DateTime? Reco_CreationDate { get; set; }
             public DateTime? Reco_LastModified { get; set; }
             public string Reco_ModifiedBy { get; set; }
@@ -651,6 +652,7 @@ namespace RecoTool.Services
                             a.ID,
                             a.Account_ID,
                             a.SignedAmount,
+                            a.CreationDate,
                             r.DWINGS_InvoiceID,
                             r.InternalInvoiceReference,
                             r.CreationDate AS Reco_CreationDate,
@@ -679,8 +681,8 @@ namespace RecoTool.Services
                     // Set IsNewlyAdded and IsUpdated flags
                     foreach (var row in rows)
                     {
-                        // New if reconciliation CreationDate is today
-                        if (row.Reco_CreationDate.HasValue && row.Reco_CreationDate.Value.Date == today)
+                        // New if Ambre import date is today
+                        if (row.CreationDate.HasValue && row.CreationDate.Value.Date == today)
                             row.IsNewlyAdded = true;
                         
                         // Updated if LastModified is today AND differs from CreationDate

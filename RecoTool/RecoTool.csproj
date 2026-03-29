@@ -339,6 +339,7 @@
     <Compile Include="Windows\ReconciliationView\Selection.cs" />
     <Compile Include="Windows\ReconciliationView\Shortcuts.cs" />
     <Compile Include="Windows\ReconciliationView\SyncAndTimers.cs" />
+    <Compile Include="Windows\ReconciliationView\Presence.cs" />
     <Compile Include="Windows\ReconciliationView\Title.cs" />
     <Compile Include="Windows\ReportsWindow.xaml.cs">
       <DependentUpon>ReportsWindow.xaml</DependentUpon>

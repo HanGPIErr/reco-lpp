@@ -124,6 +124,8 @@ namespace RecoTool.Windows
                     }
                     _syncEventsHooked = false;
                 }
+                // Stop presence engine
+                try { StopPresenceEngine(); } catch { }
                 // Unsubscribe from rule-applied event
                 try { _reconciliationService.RuleApplied -= ReconciliationService_RuleApplied; } catch { }
                 // Stop session warning banner refresh timer
