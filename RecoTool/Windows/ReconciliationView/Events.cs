@@ -50,9 +50,9 @@ namespace RecoTool.Windows
             }
         }
 
-        // Sélection changée dans la grille
+        // Sélection changée dans la grille (SfDataGrid version)
         // PERF: No LINQ allocation — simple loop for sum
-        private void ResultsDataGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        private void ResultsDataGrid_SelectionChanged(object sender, Syncfusion.UI.Xaml.Grid.GridSelectionChangedEventArgs e)
         {
             try
             {

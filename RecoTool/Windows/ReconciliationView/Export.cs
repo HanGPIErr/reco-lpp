@@ -40,15 +40,15 @@ namespace RecoTool.Windows
                     return;
                 }
 
-                // Build headers and value accessors from DataGrid columns (visible order)
-                var columns = ResultsDataGrid?.Columns?.Where(c => c.Visibility == Visibility.Visible).ToList() ?? new List<DataGridColumn>();
+                // Build headers and value accessors from SfDataGrid columns (visible order)
+                var columns = ResultsDataGrid?.Columns?.Where(c => !c.IsHidden).ToList() ?? new List<Syncfusion.UI.Xaml.Grid.GridColumn>();
                 if (columns.Count == 0)
                 {
                     ShowError("No visible columns to export.");
                     return;
                 }
 
-                var headers = columns.Select(c => (c.Header ?? string.Empty).ToString()).ToList();
+                var headers = columns.Select(c => (c.HeaderText ?? string.Empty).ToString()).ToList();
 
                 string path = dlg.FileName;
                 var ext = System.IO.Path.GetExtension(path)?.ToLowerInvariant();
@@ -85,7 +85,7 @@ namespace RecoTool.Windows
             }
         }
 
-        private void ExportToCsv(string filePath, List<string> headers, List<DataGridColumn> columns, List<RecoTool.Services.DTOs.ReconciliationViewData> items)
+        private void ExportToCsv(string filePath, List<string> headers, List<Syncfusion.UI.Xaml.Grid.GridColumn> columns, List<RecoTool.Services.DTOs.ReconciliationViewData> items)
         {
             using (var writer = new System.IO.StreamWriter(filePath, false, Encoding.UTF8))
             {
@@ -107,7 +107,7 @@ namespace RecoTool.Windows
             }
         }
 
-        private void ExportToExcel(string filePath, List<string> headers, List<DataGridColumn> columns, List<RecoTool.Services.DTOs.ReconciliationViewData> items)
+        private void ExportToExcel(string filePath, List<string> headers, List<Syncfusion.UI.Xaml.Grid.GridColumn> columns, List<RecoTool.Services.DTOs.ReconciliationViewData> items)
         {
             Microsoft.Office.Interop.Excel.Application app = null;
             Microsoft.Office.Interop.Excel.Workbook wb = null;
@@ -254,26 +254,17 @@ namespace RecoTool.Windows
             return value;
         }
 
-        private string GetColumnValue(DataGridColumn column,
+        private string GetColumnValue(Syncfusion.UI.Xaml.Grid.GridColumn column,
                               RecoTool.Services.DTOs.ReconciliationViewData item)
         {
             try
             {
-                var header = (column.Header ?? string.Empty).ToString();
+                var header = (column.HeaderText ?? string.Empty).ToString();
 
                 // -------------------------------------------------
-                // 1️⃣ Récupération de la valeur brute (déjà présente dans votre code)
+                // 1️⃣ Récupération de la valeur brute via MappingName
                 // -------------------------------------------------
-                string bindingPath = null;
-                if (column is DataGridBoundColumn boundCol)
-                {
-                    var b = boundCol.Binding as System.Windows.Data.Binding;
-                    bindingPath = b?.Path?.Path;
-                }
-                else if (column is DataGridTemplateColumn templateCol)
-                {
-                    bindingPath = templateCol.SortMemberPath;
-                }
+                string bindingPath = column.MappingName;
 
                 if (string.IsNullOrWhiteSpace(bindingPath))
                     return string.Empty;

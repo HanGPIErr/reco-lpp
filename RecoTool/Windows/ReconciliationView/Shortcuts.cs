@@ -37,9 +37,9 @@ namespace RecoTool.Windows
         {
             try
             {
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                if (dg == null) return null;
-                return dg.SelectedItems?.OfType<ReconciliationViewData>().FirstOrDefault();
+                var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (sfGrid == null) return null;
+                return sfGrid.SelectedItems?.OfType<ReconciliationViewData>().FirstOrDefault();
             }
             catch { return null; }
         }
@@ -48,9 +48,9 @@ namespace RecoTool.Windows
         {
             try
             {
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                if (dg == null) return;
-                var rows = dg.SelectedItems?.OfType<ReconciliationViewData>().ToList();
+                var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (sfGrid == null) return;
+                var rows = sfGrid.SelectedItems?.OfType<ReconciliationViewData>().ToList();
                 if (rows == null || rows.Count == 0) { ShowToast("Select row(s) first"); return; }
                 AddToLinkingBasketRequested?.Invoke(rows);
                 ShowToast($"\ud83d\udd17 {rows.Count} row(s) added to linking basket");
@@ -87,8 +87,8 @@ namespace RecoTool.Windows
         {
             try
             {
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                if (dg == null || dg.SelectedItems?.Count == 0) { ShowToast("Select row(s) first"); return; }
+                var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (sfGrid == null || sfGrid.SelectedItems?.Count == 0) { ShowToast("Select row(s) first"); return; }
                 QuickSetCommentMenuItem_Click(null, null);
             }
             catch (Exception ex) { ShowError($"Comment: {ex.Message}"); }

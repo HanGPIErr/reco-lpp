@@ -42,44 +42,35 @@ namespace RecoTool.Windows
             var layout = new GridLayout();
             try
             {
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                if (dg == null) return layout;
+                var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (sfGrid == null) return layout;
 
-                foreach (var col in dg.Columns)
+                for (int i = 0; i < sfGrid.Columns.Count; i++)
                 {
+                    var col = sfGrid.Columns[i];
                     var st = new ColumnSetting
                     {
-                        Header = Convert.ToString(col.Header),
-                        SortMemberPath = col.SortMemberPath,
-                        DisplayIndex = col.DisplayIndex,
-                        Visible = col.Visibility == Visibility.Visible
+                        Header = col.HeaderText,
+                        SortMemberPath = col.MappingName,
+                        DisplayIndex = i,
+                        Visible = !col.IsHidden,
+                        WidthType = "Pixel",
+                        WidthValue = col.ActualWidth > 0 ? col.ActualWidth : col.Width
                     };
-                    if (col.Width.IsAbsolute)
-                    {
-                        st.WidthType = "Pixel";
-                        st.WidthValue = col.Width.Value;
-                    }
-                    else if (col.Width.IsAuto)
-                    {
-                        st.WidthType = "Auto";
-                    }
-                    else if (col.Width.UnitType == DataGridLengthUnitType.SizeToCells)
-                    {
-                        st.WidthType = "SizeToCells";
-                    }
-                    else if (col.Width.UnitType == DataGridLengthUnitType.SizeToHeader)
-                    {
-                        st.WidthType = "SizeToHeader";
-                    }
                     layout.Columns.Add(st);
                 }
 
-                var view = CollectionViewSource.GetDefaultView((this as UserControl).DataContext == this ? ViewData : dg.ItemsSource) as ICollectionView;
-                if (view != null)
+                // Capture sort descriptions from SfDataGrid
+                if (sfGrid.SortColumnDescriptions != null)
                 {
-                    foreach (var sd in view.SortDescriptions)
+                    foreach (var sd in sfGrid.SortColumnDescriptions)
                     {
-                        layout.Sorts.Add(new SortDescriptor { Member = sd.PropertyName, Direction = sd.Direction });
+                        layout.Sorts.Add(new SortDescriptor
+                        {
+                            Member = sd.ColumnName,
+                            Direction = sd.SortDirection == ListSortDirection.Ascending
+                                ? ListSortDirection.Ascending : ListSortDirection.Descending
+                        });
                     }
                 }
             }
@@ -92,49 +83,64 @@ namespace RecoTool.Windows
             try
             {
                 if (layout == null) return;
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                if (dg == null) return;
+                var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (sfGrid == null) return;
 
-                // Map by header text
+                // Helper: find column by header text first, then fall back to MappingName for compat with old saved layouts
+                Syncfusion.UI.Xaml.Grid.GridColumn FindCol(ColumnSetting s)
+                {
+                    var c = sfGrid.Columns.FirstOrDefault(x => string.Equals(x.HeaderText, s.Header, StringComparison.OrdinalIgnoreCase));
+                    if (c == null && !string.IsNullOrWhiteSpace(s.SortMemberPath))
+                        c = sfGrid.Columns.FirstOrDefault(x => string.Equals(x.MappingName, s.SortMemberPath, StringComparison.OrdinalIgnoreCase));
+                    return c;
+                }
+
+                // 1) Apply visibility and width
                 foreach (var setting in layout.Columns)
                 {
-                    var col = dg.Columns.FirstOrDefault(c => string.Equals(Convert.ToString(c.Header), setting.Header, StringComparison.OrdinalIgnoreCase));
+                    var col = FindCol(setting);
                     if (col == null) continue;
-                    try { col.DisplayIndex = Math.Max(0, Math.Min(setting.DisplayIndex, dg.Columns.Count - 1)); } catch { }
-                    try { col.Visibility = setting.Visible ? Visibility.Visible : Visibility.Collapsed; } catch { }
+                    try { col.IsHidden = !setting.Visible; } catch { }
                     try
                     {
-                        switch (setting.WidthType)
+                        if (setting.WidthValue.HasValue && setting.WidthValue.Value > 0)
+                            col.Width = setting.WidthValue.Value;
+                    }
+                    catch { }
+                }
+
+                // 2) Reorder columns to match saved DisplayIndex
+                var orderedSettings = layout.Columns.OrderBy(s => s.DisplayIndex).ToList();
+                for (int targetIdx = 0; targetIdx < orderedSettings.Count; targetIdx++)
+                {
+                    try
+                    {
+                        var setting = orderedSettings[targetIdx];
+                        var col = FindCol(setting);
+                        if (col == null) continue;
+                        int currentIdx = sfGrid.Columns.IndexOf(col);
+                        if (currentIdx >= 0 && currentIdx != targetIdx && targetIdx < sfGrid.Columns.Count)
                         {
-                            case "Pixel":
-                                if (setting.WidthValue.HasValue && setting.WidthValue.Value > 0)
-                                    col.Width = new DataGridLength(setting.WidthValue.Value);
-                                break;
-                            case "Auto":
-                                col.Width = DataGridLength.Auto;
-                                break;
-                            case "SizeToCells":
-                                col.Width = new DataGridLength(1, DataGridLengthUnitType.SizeToCells);
-                                break;
-                            case "SizeToHeader":
-                                col.Width = new DataGridLength(1, DataGridLengthUnitType.SizeToHeader);
-                                break;
+                            sfGrid.Columns.RemoveAt(currentIdx);
+                            sfGrid.Columns.Insert(targetIdx, col);
                         }
                     }
                     catch { }
                 }
 
-                // Apply sorting
-                var view = CollectionViewSource.GetDefaultView(dg.ItemsSource);
-                if (view != null)
+                // 3) Apply sorting
+                if (sfGrid.SortColumnDescriptions != null)
                 {
-                    using (view.DeferRefresh())
+                    sfGrid.SortColumnDescriptions.Clear();
+                    foreach (var s in layout.Sorts)
                     {
-                        view.SortDescriptions.Clear();
-                        foreach (var s in layout.Sorts)
+                        if (!string.IsNullOrWhiteSpace(s.Member))
                         {
-                            if (!string.IsNullOrWhiteSpace(s.Member))
-                                view.SortDescriptions.Add(new SortDescription(s.Member, s.Direction));
+                            sfGrid.SortColumnDescriptions.Add(new Syncfusion.UI.Xaml.Grid.SortColumnDescription
+                            {
+                                ColumnName = s.Member,
+                                SortDirection = s.Direction
+                            });
                         }
                     }
                 }

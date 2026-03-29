@@ -18,13 +18,13 @@ namespace RecoTool.Windows
         {
             try
             {
-                var dg = FindName("ResultsDataGrid") as DataGrid;
-                if (dg == null) return;
+                var sfGrid = FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (sfGrid == null) return;
 
                 var modifiers = Keyboard.Modifiers;
                 if ((modifiers & ModifierKeys.Alt) == ModifierKeys.Alt)
                 {
-                    dg.UnselectAll();
+                    sfGrid.SelectedItems.Clear();
                     UpdateStatusInfo("Selection cleared");
                     return;
                 }
@@ -42,14 +42,16 @@ namespace RecoTool.Windows
                            || !string.IsNullOrWhiteSpace(item.COMMISSION_ID);
                 }
 
-                dg.UnselectAll();
+                sfGrid.SelectedItems.Clear();
 
-                // Iterate visible items in the DataGrid
+                // Iterate visible items via the ItemsSource
                 int selected = 0;
-                foreach (var obj in dg.Items)
+                var itemsSource = sfGrid.ItemsSource as System.Collections.IEnumerable;
+                if (itemsSource == null) return;
+                foreach (var obj in itemsSource)
                 {
                     var data = obj as ReconciliationViewData;
-                    if (data == null) continue; // skip grouping placeholders, etc.
+                    if (data == null) continue;
 
                     bool pick;
                     if ((modifiers & ModifierKeys.Shift) == ModifierKeys.Shift)
@@ -61,7 +63,7 @@ namespace RecoTool.Windows
 
                     if (pick)
                     {
-                        dg.SelectedItems.Add(data);
+                        sfGrid.SelectedItems.Add(data);
                         selected++;
                     }
                 }

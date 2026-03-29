@@ -211,11 +211,11 @@ namespace RecoTool.Windows
                 /* -----------------------------------------------------------------
                  * 5️⃣  Détermination des lignes cibles (single / bulk)
                  * -----------------------------------------------------------------*/
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
+                var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
                 var targetRows = new List<ReconciliationViewData>();
 
-                if (dg?.SelectedItems != null && dg.SelectedItems.Count > 1)
-                    targetRows.AddRange(dg.SelectedItems.OfType<ReconciliationViewData>());
+                if (sfGrid?.SelectedItems != null && sfGrid.SelectedItems.Count > 1)
+                    targetRows.AddRange(sfGrid.SelectedItems.OfType<ReconciliationViewData>());
                 else
                     targetRows.Add(row);               // seule la ligne sur laquelle on a cliqué
 
@@ -504,8 +504,8 @@ Do you want to apply these automatic rules?
             {
                 if (_reconciliationService == null) return;
 
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                var selected = dg?.SelectedItems?.OfType<ReconciliationViewData>().ToList() ?? new List<ReconciliationViewData>();
+                var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                var selected = sfGrid?.SelectedItems?.OfType<ReconciliationViewData>().ToList() ?? new List<ReconciliationViewData>();
                 if (selected.Count == 0) return;
 
                 var text = ShowTextInputDialog($"Set Comment for {selected.Count} row(s)", multiLine: true);
@@ -582,9 +582,10 @@ Do you want to apply these automatic rules?
         {
             try
             {
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                if (dg == null) return;
-                var targetRows = dg.Items.OfType<ReconciliationViewData>().ToList();
+                var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (sfGrid == null) return;
+                var itemsSource = sfGrid.ItemsSource as System.Collections.IEnumerable;
+                var targetRows = itemsSource?.OfType<ReconciliationViewData>().ToList() ?? new List<ReconciliationViewData>();
                 if (targetRows.Count == 0) return;
 
                 var user = _reconciliationService.CurrentUser;
@@ -723,11 +724,11 @@ Do you want to apply these automatic rules?
         /// </summary>
         private List<ReconciliationViewData> GetTargetRows(object sender)
         {
-            var dg = this.FindName("ResultsDataGrid") as DataGrid;
+            var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
             var rowCtx = (sender as FrameworkElement)?.DataContext as ReconciliationViewData;
-            if (dg?.SelectedItems?.Count > 1 && rowCtx != null
-                && dg.SelectedItems.OfType<ReconciliationViewData>().Contains(rowCtx))
-                return dg.SelectedItems.OfType<ReconciliationViewData>().ToList();
+            if (sfGrid?.SelectedItems?.Count > 1 && rowCtx != null
+                && sfGrid.SelectedItems.OfType<ReconciliationViewData>().Contains(rowCtx))
+                return sfGrid.SelectedItems.OfType<ReconciliationViewData>().ToList();
             return rowCtx != null ? new List<ReconciliationViewData> { rowCtx } : new List<ReconciliationViewData>();
         }
 

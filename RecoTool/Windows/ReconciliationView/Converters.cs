@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Windows;
 using System.Windows.Data;
 using System.Windows.Media;
 using RecoTool.Models;
@@ -220,9 +221,15 @@ namespace RecoTool.Windows
 
     /// <summary>
     /// Generates filtered UserField options for ComboBoxes based on category and account side
+    /// CACHED: Avoids LINQ filtering on every cell creation during scroll/edit
     /// </summary>
     public class UserFieldOptionsConverter : IMultiValueConverter
     {
+        // Cache key: (category, accountSide) where accountSide is "P", "R", or ""
+        private static readonly Dictionary<(string category, string accountSide), List<UserFieldOption>> _cache
+            = new Dictionary<(string, string), List<UserFieldOption>>();
+        private static IReadOnlyList<UserField> _lastAllUserFields;
+
         // values: [0]=Account_ID (string), [1]=AllUserFields (IReadOnlyList<UserField>), [2]=CurrentCountry (Country)
         public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
         {
@@ -236,39 +243,52 @@ namespace RecoTool.Windows
                 if (all == null || string.IsNullOrWhiteSpace(category))
                     return Array.Empty<object>();
 
-                bool isPivot = country != null && string.Equals(accountId?.Trim(), country.CNT_AmbrePivot?.Trim(), StringComparison.OrdinalIgnoreCase);
-                bool isReceivable = country != null && string.Equals(accountId?.Trim(), country.CNT_AmbreReceivable?.Trim(), StringComparison.OrdinalIgnoreCase);
-
-                // Category mapping: handle synonyms (e.g., Incident Type vs INC)
-                var query = FilterByCategory(all, category);
-
-                // Apply Pivot/Receivable filtering only when we can resolve the account side
-                if (!string.IsNullOrWhiteSpace(accountId) && country != null)
+                // Invalidate cache when source list changes
+                if (!ReferenceEquals(all, _lastAllUserFields))
                 {
-                    if (isPivot)
-                        query = query.Where(u => u.USR_Pivot);
-                    else if (isReceivable)
-                        query = query.Where(u => u.USR_Receivable);
+                    _cache.Clear();
+                    _lastAllUserFields = all;
                 }
 
-                return BuildOptionsList(query);
+                // Determine account side
+                string accountSide = "";
+                if (country != null && !string.IsNullOrWhiteSpace(accountId))
+                {
+                    if (string.Equals(accountId.Trim(), country.CNT_AmbrePivot?.Trim(), StringComparison.OrdinalIgnoreCase))
+                        accountSide = "P";
+                    else if (string.Equals(accountId.Trim(), country.CNT_AmbreReceivable?.Trim(), StringComparison.OrdinalIgnoreCase))
+                        accountSide = "R";
+                }
+
+                // Check cache
+                var cacheKey = (category.ToUpperInvariant(), accountSide);
+                if (_cache.TryGetValue(cacheKey, out var cached))
+                    return cached;
+
+                // Build and cache
+                var result = BuildOptionsList(all, category, accountSide, country);
+                _cache[cacheKey] = result;
+                return result;
             }
             catch { return Array.Empty<object>(); }
         }
 
-        private static IEnumerable<UserField> FilterByCategory(IReadOnlyList<UserField> all, string category)
+        private static List<UserFieldOption> BuildOptionsList(IReadOnlyList<UserField> all, string category, string accountSide, Country country)
         {
             bool isIncident = string.Equals(category, "Incident Type", StringComparison.OrdinalIgnoreCase)
                            || string.Equals(category, "INC", StringComparison.OrdinalIgnoreCase);
 
-            return isIncident
+            IEnumerable<UserField> query = isIncident
                 ? all.Where(u => string.Equals(u.USR_Category, "Incident Type", StringComparison.OrdinalIgnoreCase)
                              || string.Equals(u.USR_Category, "INC", StringComparison.OrdinalIgnoreCase))
                 : all.Where(u => string.Equals(u.USR_Category, category, StringComparison.OrdinalIgnoreCase));
-        }
 
-        private static List<UserFieldOption> BuildOptionsList(IEnumerable<UserField> query)
-        {
+            // Apply Pivot/Receivable filtering
+            if (accountSide == "P")
+                query = query.Where(u => u.USR_Pivot);
+            else if (accountSide == "R")
+                query = query.Where(u => u.USR_Receivable);
+
             var list = new List<UserFieldOption>
             {
                 new UserFieldOption { USR_ID = null, USR_FieldName = string.Empty }
@@ -787,6 +807,139 @@ namespace RecoTool.Windows
 
     #endregion
 
+    #region SfDataGrid Row Background Converter
+
+    /// <summary>
+    /// Converts a ReconciliationViewData row to a Background brush for VirtualizingCellsControl.
+    /// Deleted/archived → pink tint, Matched+balanced → subtle green, Default → transparent.
+    /// </summary>
+    public class RowBackgroundConverter : IValueConverter
+    {
+        private static readonly SolidColorBrush DeletedBg = new SolidColorBrush(Color.FromRgb(0xFE, 0xF2, 0xF2));
+        private static readonly SolidColorBrush MatchedGreenBg = new SolidColorBrush(Color.FromRgb(0xF0, 0xFD, 0xF4));
+        private static readonly Brush DefaultBg = Brushes.Transparent;
+
+        static RowBackgroundConverter()
+        {
+            DeletedBg.Freeze();
+            MatchedGreenBg.Freeze();
+        }
+
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            var row = value as RecoTool.Services.DTOs.ReconciliationViewData;
+            if (row == null) return DefaultBg;
+            if (row.IsDeleted) return DeletedBg;
+            if (row.IsMatchedAcrossAccounts && row.StatusColor == "Green") return MatchedGreenBg;
+            return DefaultBg;
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+            => throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// Converts a ReconciliationViewData row to a Foreground brush. Deleted rows get dimmed text.
+    /// </summary>
+    public class RowForegroundConverter : IValueConverter
+    {
+        private static readonly SolidColorBrush DeletedFg = new SolidColorBrush(Color.FromRgb(0x9C, 0xA3, 0xAF));
+        private static readonly SolidColorBrush DefaultFg = new SolidColorBrush(Color.FromRgb(0x1E, 0x29, 0x3B));
+
+        static RowForegroundConverter()
+        {
+            DeletedFg.Freeze();
+            DefaultFg.Freeze();
+        }
+
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            var row = value as RecoTool.Services.DTOs.ReconciliationViewData;
+            if (row != null && row.IsDeleted) return DeletedFg;
+            return DefaultFg;
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+            => throw new NotImplementedException();
+    }
+
+    #endregion
+
+    #region Visual Enhancement Converters
+
+    /// <summary>
+    /// Returns the number of non-empty comment lines from the Comments field.
+    /// </summary>
+    public class CommentCountConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            var s = value as string;
+            if (string.IsNullOrWhiteSpace(s)) return 0;
+            var lines = s.Replace("\r\n", "\n").Split('\n');
+            int count = 0;
+            foreach (var l in lines)
+                if (!string.IsNullOrWhiteSpace(l)) count++;
+            return count;
+        }
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+            => throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// Returns Visibility.Visible if the string is non-null, non-empty, and not "Not found".
+    /// Used for MbawData search icon.
+    /// </summary>
+    public class MbawHasContentConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            var s = value as string;
+            if (string.IsNullOrWhiteSpace(s) || string.Equals(s, "Not found", StringComparison.OrdinalIgnoreCase))
+                return Visibility.Collapsed;
+            return Visibility.Visible;
+        }
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+            => throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// Returns a foreground brush for MbawData: gray if "Not found", normal otherwise.
+    /// </summary>
+    public class MbawForegroundConverter : IValueConverter
+    {
+        private static readonly SolidColorBrush NotFoundFg = new SolidColorBrush(Color.FromRgb(0x9C, 0xA3, 0xAF));
+        private static readonly SolidColorBrush NormalFg = new SolidColorBrush(Color.FromRgb(0x1E, 0x29, 0x3B));
+        static MbawForegroundConverter() { NotFoundFg.Freeze(); NormalFg.Freeze(); }
+
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            var s = value as string;
+            if (string.Equals(s, "Not found", StringComparison.OrdinalIgnoreCase))
+                return NotFoundFg;
+            return NormalFg;
+        }
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+            => throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// Returns Visibility based on whether comment count > 0.
+    /// </summary>
+    public class CommentCountToVisibilityConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            var s = value as string;
+            if (string.IsNullOrWhiteSpace(s)) return Visibility.Collapsed;
+            return Visibility.Visible;
+        }
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+            => throw new NotImplementedException();
+    }
+
+    #endregion
+
     #region Static Converter Instances
 
     /// <summary>
@@ -804,6 +957,7 @@ namespace RecoTool.Windows
         public static readonly IValueConverter ApplyToToFriendly = new ApplyToToFriendlyConverter();
         public static readonly IValueConverter NullableIdToSentinel = new NullableIdSentinelConverter { Sentinel = -1 };
         public static readonly IValueConverter IsNotNullOrEmpty = new IsNotNullOrEmptyConverter();
+        public static readonly IValueConverter RowBackground = new RowBackgroundConverter();
     }
 
     #endregion

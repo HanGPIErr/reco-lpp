@@ -404,16 +404,13 @@ namespace RecoTool.Windows
             // Le chargement initial est confirmé dans l'événement Loaded pour garantir que le pays a été initialisé
         }
 
-        // Lock first 4 columns (N, U, M, Account) from being moved
-        private void ResultsDataGrid_ColumnReordering(object sender, DataGridColumnReorderingEventArgs e)
+        // Lock first 4 columns (N, U, M, Account) from being moved (SfDataGrid version)
+        private void ResultsDataGrid_ColumnReordering(object sender, Syncfusion.UI.Xaml.Grid.QueryColumnDraggingEventArgs e)
         {
             try
             {
-                var dg = sender as DataGrid;
-                if (dg == null) return;
                 int protectedCount = 4;
-                int currentIndex = e.Column.DisplayIndex;
-                if (currentIndex < protectedCount)
+                if (e.From < protectedCount || e.To < protectedCount)
                     e.Cancel = true; // disallow moving protected columns
             }
             catch { }
@@ -2004,7 +2001,7 @@ namespace RecoTool.Windows
 
             // Toujours étirer la vue aux dimensions du parent
             view.HorizontalAlignment = HorizontalAlignment.Stretch;
-            view.VerticalAlignment = VerticalAlignment.Stretch;
+            view.VerticalAlignment = VerticalAlignment.Top;
             view.Width = double.NaN; // Auto width to stretch
             // Créer un conteneur redimensionnable pour la vue (hauteur ajustable depuis le bas)
             var container = CreateResizableContainer(view);
@@ -2346,15 +2343,15 @@ namespace RecoTool.Windows
         {
             try
             {
-                var dg = view.FindName("ResultsDataGrid") as DataGrid;
-                if (dg == null) return;
+                var sfGrid = view.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (sfGrid == null) return;
                 var containerH = double.IsNaN(container.Height) ? container.ActualHeight : container.Height;
                 // marge approximative pour header/paddings/toolbar/etc.
                 double overhead = 140; // ajuste si besoin
                 double target = Math.Max(200, containerH - overhead);
-                if (target > dg.MaxHeight)
+                if (target > sfGrid.MaxHeight)
                 {
-                    dg.MaxHeight = target;
+                    sfGrid.MaxHeight = target;
                 }
             }
             catch { }

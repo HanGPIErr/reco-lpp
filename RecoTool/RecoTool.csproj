@@ -144,6 +144,7 @@
     </PackageReference>
     <PackageReference Include="System.Data.OleDb" Version="7.0.0" />
     <PackageReference Include="LiveCharts.Wpf" Version="0.9.7" />
+    <PackageReference Include="Syncfusion.SfGrid.WPF" Version="27.1.48" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="API\DWINGS.cs" />

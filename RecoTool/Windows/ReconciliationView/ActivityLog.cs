@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using RecoTool.Services.DTOs;
+using Syncfusion.UI.Xaml.Grid;
 
 namespace RecoTool.Windows
 {
@@ -147,16 +148,17 @@ namespace RecoTool.Windows
                 var panel = this.FindName("ActivityLogPanel") as Border;
                 if (panel != null) panel.Visibility = Visibility.Collapsed;
 
-                // Navigate to the row in the DataGrid
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                if (dg == null) return;
+                // Navigate to the row in the SfDataGrid
+                var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (sfGrid == null) return;
 
                 // If the row is in the current view, select and scroll to it
                 var idx = ViewData.IndexOf(item.SourceRow);
                 if (idx >= 0)
                 {
-                    dg.SelectedItem = item.SourceRow;
-                    dg.ScrollIntoView(item.SourceRow);
+                    sfGrid.SelectedItem = item.SourceRow;
+                    var rowIdx = sfGrid.ResolveToRowIndex(idx);
+                    if (rowIdx >= 0) sfGrid.ScrollInView(new Syncfusion.UI.Xaml.ScrollAxis.RowColumnIndex(rowIdx, 0));
                 }
                 else
                 {

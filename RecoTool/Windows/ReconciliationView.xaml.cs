@@ -79,7 +79,8 @@ namespace RecoTool.Windows
         // Propriétés de filtrage (legacy display-only field kept)
         private string _filterCountry;
 
-        private readonly FreeApiService _freeApi;       
+        private readonly FreeApiService _freeApi;
+        private System.Threading.CancellationTokenSource _freeApiCts;
 
         // (see further below for filter properties; using ScheduleApplyFiltersDebounced)
 
@@ -133,10 +134,10 @@ namespace RecoTool.Windows
         // Backward-compatible overload: defaults to non-ToDo
         public void SetViewTitle(string title) => SetViewTitle(title, false);
 
-        // Simple window to toggle visibility of multiple DataGrid columns
+        // Simple window to toggle visibility of multiple SfDataGrid columns
         private sealed class ManageColumnsWindow : Window
         {
-            private readonly DataGrid _dg;
+            private readonly Syncfusion.UI.Xaml.Grid.SfDataGrid _sfGrid;
             private readonly List<ColumnItem> _items = new List<ColumnItem>();
 
             private sealed class ColumnItem
@@ -144,12 +145,12 @@ namespace RecoTool.Windows
                 public string Header { get; set; }
                 public bool IsVisible { get; set; }
                 public bool IsProtected { get; set; }
-                public DataGridColumn Column { get; set; }
+                public Syncfusion.UI.Xaml.Grid.GridColumn Column { get; set; }
             }
 
-            public ManageColumnsWindow(DataGrid dg)
+            public ManageColumnsWindow(Syncfusion.UI.Xaml.Grid.SfDataGrid sfGrid)
             {
-                _dg = dg;
+                _sfGrid = sfGrid;
                 Title = "Manage Columns";
                 Width = 420;
                 Height = 520;
@@ -198,17 +199,17 @@ namespace RecoTool.Windows
             private void LoadColumns()
             {
                 _items.Clear();
-                if (_dg?.Columns == null) return;
-                // Protect first 3 indicator columns (N, U, M)
-                for (int i = 0; i < _dg.Columns.Count; i++)
+                if (_sfGrid?.Columns == null) return;
+                // Protect first 6 indicator columns
+                for (int i = 0; i < _sfGrid.Columns.Count; i++)
                 {
-                    var col = _dg.Columns[i];
-                    var header = Convert.ToString(col.Header);
+                    var col = _sfGrid.Columns[i];
+                    var header = col.HeaderText;
                     bool isProtected = i < 6; // keep indicators always visible
                     _items.Add(new ColumnItem
                     {
                         Header = string.IsNullOrWhiteSpace(header) ? $"Column {i + 1}" : header,
-                        IsVisible = col.Visibility == Visibility.Visible,
+                        IsVisible = !col.IsHidden,
                         IsProtected = isProtected,
                         Column = col
                     });
@@ -246,7 +247,7 @@ namespace RecoTool.Windows
                     try
                     {
                         if (it.IsProtected) continue;
-                        it.Column.Visibility = it.IsVisible ? Visibility.Visible : Visibility.Collapsed;
+                        it.Column.IsHidden = !it.IsVisible;
                     }
                     catch { }
                 }
@@ -343,14 +344,14 @@ namespace RecoTool.Windows
             }
         }
 
-        // Lock first 4 columns (N, U, M, Account) from being moved
-        private void ResultsDataGrid_ColumnReordering(object sender, DataGridColumnReorderingEventArgs e)
+        // Lock first 6 frozen columns from being moved (SfDataGrid version)
+        private void ResultsDataGrid_QueryColumnDragging(object sender, Syncfusion.UI.Xaml.Grid.QueryColumnDraggingEventArgs e)
         {
             try
             {
                 int protectedCount = 6;
-                int currentIndex = e.Column.DisplayIndex;
-                if (currentIndex < protectedCount)
+                // Prevent dragging of frozen columns and dropping into their range
+                if (e.From < protectedCount || e.To < protectedCount)
                 {
                     e.Cancel = true;
                 }
@@ -451,9 +452,9 @@ namespace RecoTool.Windows
         {
             try
             {
-                if (sender is DataGrid dg)
+                if (sender is Syncfusion.UI.Xaml.Grid.SfDataGrid sfGrid)
                 {
-                    TryHookResultsGridScroll(dg);
+                    TryHookResultsGridScroll(sfGrid);
                 }
             }
             catch { }
@@ -483,79 +484,22 @@ namespace RecoTool.Windows
             catch { }
         }
 
-        #endregion
-
-        // Single-click behavior:
-        // - Read-only cells: set CurrentCell for copy, do NOT change selection, do NOT begin edit.
-        // - Editable cells: keep old behavior (select row, begin edit).
-        private void DataGridCell_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-        {
-            try
-            {
-                var cell = sender as DataGridCell;
-                if (cell == null) return;
-                if (cell.IsEditing) return;
-
-                var dataGrid = VisualTreeHelpers.FindParent<DataGrid>(cell);
-                if (dataGrid == null) return;
-                bool columnReadOnly = (cell.Column != null && cell.Column.IsReadOnly) || cell.IsReadOnly;
-                if (columnReadOnly)
-                {
-                    // Read-only: set CurrentCell for copy helpers; let click bubble so interactive content and row selection work normally
-                    var rowRo = VisualTreeHelpers.FindParent<DataGridRow>(cell);
-                    if (rowRo != null)
-                    {
-                        try { dataGrid.CurrentCell = new DataGridCellInfo(rowRo.Item, cell.Column); } catch { }
-                    }
-                    return;
-                }
-
-                // Editable: selection/edit behavior depends on SelectionUnit
-                if (!cell.IsFocused)
-                    cell.Focus();
-                var row = VisualTreeHelpers.FindParent<DataGridRow>(cell);
-                if (row != null)
-                {
-                    try { dataGrid.SelectedItem = row.Item; } catch { }
-                }
-
-                // If the cell hosts a CheckBox (e.g., Risky Item), let the CheckBox handle the click
-                // and do not force BeginEdit which can cause sticky edit mode.
-                var hasCheckBox = cell.Content is CheckBox || VisualTreeHelpers.FindDescendant<CheckBox>(cell) != null;
-                // Only begin edit when grid/column/cell are editable
-                var col = cell.Column;
-                bool canEdit = !hasCheckBox && !cell.IsReadOnly && (col == null || !col.IsReadOnly) && !dataGrid.IsReadOnly;
-                if (canEdit)
-                {
-                    dataGrid.BeginEdit(e);
-                    e.Handled = true;
-                }
-            }
-            catch { }
-        }
-
-
-
-        // Ensure inner DataGrid scroll consumes the mouse wheel instead of the container page
         // PERF: Single ScrollToVerticalOffset instead of LineUp/LineDown loop
-        // Each LineUp/LineDown triggers a separate ScrollChanged event + layout pass.
-        // A single offset change triggers only ONE layout pass regardless of delta.
         private void ResultsDataGrid_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
         {
             try
             {
-                var dg = sender as DataGrid;
-                if (dg == null) return;
+                var sfGrid = sender as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (sfGrid == null) return;
                 if (_resultsScrollViewer == null)
                 {
-                    _resultsScrollViewer = VisualTreeHelpers.FindDescendant<ScrollViewer>(dg);
+                    _resultsScrollViewer = VisualTreeHelpers.FindDescendant<ScrollViewer>(sfGrid);
                 }
                 if (_resultsScrollViewer != null)
                 {
                     e.Handled = true;
-                    // RowHeight=28; scroll ~3 rows per notch (e.Delta typically ±120)
                     double rowsPerNotch = 3.0;
-                    double pixelDelta = (e.Delta / 120.0) * rowsPerNotch * 28.0;
+                    double pixelDelta = (e.Delta / 120.0) * rowsPerNotch * 30.0;
                     double newOffset = _resultsScrollViewer.VerticalOffset - pixelDelta;
                     newOffset = Math.Max(0, Math.Min(newOffset, _resultsScrollViewer.ScrollableHeight));
                     _resultsScrollViewer.ScrollToVerticalOffset(newOffset);
@@ -572,11 +516,12 @@ namespace RecoTool.Windows
             try
             {
                 if (!ReferenceEquals(e.Command, ApplicationCommands.Copy)) return;
-                var dg = sender as DataGrid;
-                if (dg == null) return;
-                var col = dg.CurrentCell.Column;
-                var item = dg.CurrentCell.Item;
-                bool isReadOnlyCell = (col != null && col.IsReadOnly) || dg.IsReadOnly;
+                var sfGrid = sender as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (sfGrid == null) return;
+                var col = sfGrid.CurrentColumn;
+                var item = sfGrid.CurrentItem;
+                // AllowEditing=false means read-only in SfDataGrid
+                bool isReadOnlyCell = (col != null && !col.AllowEditing) || !sfGrid.AllowEditing;
                 if (isReadOnlyCell && col != null && item != null)
                 {
                     string text = TryGetCellText(col, item);
@@ -591,17 +536,12 @@ namespace RecoTool.Windows
             catch { }
         }
 
-        private static string TryGetCellText(DataGridColumn column, object dataItem)
+        private static string TryGetCellText(Syncfusion.UI.Xaml.Grid.GridColumn column, object dataItem)
         {
             try
             {
-                var fe = column.GetCellContent(dataItem);
-                if (fe is TextBlock tb) return tb.Text;
-                if (fe is TextBox tbox) return tbox.Text;
-                var tbDesc = VisualTreeHelpers.FindDescendant<TextBlock>(fe);
-                if (tbDesc != null) return tbDesc.Text;
-                // Fallback: try reflection with SortMemberPath or binding
-                var path = column.SortMemberPath;
+                // Use MappingName for reflection-based value retrieval
+                var path = column.MappingName;
                 if (!string.IsNullOrWhiteSpace(path))
                 {
                     var prop = dataItem.GetType().GetProperty(path);
@@ -616,18 +556,18 @@ namespace RecoTool.Windows
             return string.Empty;
         }
 
-        // New: populate via DataGridRow ContextMenuOpening to avoid XAML column parsing issues
-        private void DataGridRow_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+        // Populate context menu via SfDataGrid RecordContextMenu Opened event
+        private void DataGridRow_ContextMenuOpening(object sender, RoutedEventArgs e)
         {
             try
             {
-                var row = sender as DataGridRow;
-                if (row == null) return;
-                var rowData = row.DataContext as ReconciliationViewData;
-                if (rowData == null) return;
-
-                var cm = row.ContextMenu;
+                var cm = sender as ContextMenu;
                 if (cm == null) return;
+
+                // SfDataGrid sets the ContextMenu DataContext to GridRecordContextMenuInfo
+                var menuInfo = cm.DataContext as Syncfusion.UI.Xaml.Grid.GridRecordContextMenuInfo;
+                var rowData = menuInfo?.Record as ReconciliationViewData;
+                if (rowData == null) return;
 
                 // Resolve the root submenus
                 MenuItem actionRoot = cm.Items.OfType<MenuItem>().FirstOrDefault(mi => (mi.Tag as string) == "Action");
@@ -847,27 +787,46 @@ namespace RecoTool.Windows
                 var rows = GetCurrentSelection();                // méthode déjà existante
                 if (rows.Count == 0) return;
 
+                // Cancel any running Free API batch
+                try { _freeApiCts?.Cancel(); } catch { }
+                _freeApiCts = new System.Threading.CancellationTokenSource();
 
                 Mouse.OverrideCursor = Cursors.Wait;
-                await CheckWithFreeAsync(rows);
-                Mouse.OverrideCursor = Cursors.Arrow;
-
+                try
+                {
+                    await CheckWithFreeAsync(rows, _freeApiCts.Token);
+                }
+                finally
+                {
+                    Mouse.OverrideCursor = null;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                ShowToast("Free API check cancelled", durationSeconds: 2);
             }
             catch (Exception ex)
             {
-                ShowError($"Erreur lors de l’appel Free API : {ex.Message}");
+                ShowError($"Erreur lors de l'appel Free API : {ex.Message}");
             }
         }
 
         /// <summary>
-        /// Parcourt chaque <see cref="ReconciliationViewData"/> et, si aucune garantie DWINGS n’est liée,
-        /// interroge le service Free et remplit les champs DWINGS (Invoice, BGPMT, Guarantee) ainsi que MbawData.
+        /// Parcourt chaque <see cref="ReconciliationViewData"/> et interroge le service Free.
+        /// Remplit les champs DWINGS (Invoice, BGPMT, Guarantee) ainsi que MbawData,
+        /// puis **persiste chaque ligne en base** pour que les données ne soient pas perdues.
         /// </summary>
-        /// <param name="rows">Les lignes de la grille à enrichir.</param>
-        private async Task CheckWithFreeAsync(IReadOnlyList<ReconciliationViewData> rows)
+        private async Task CheckWithFreeAsync(IReadOnlyList<ReconciliationViewData> rows, System.Threading.CancellationToken ct)
         {
-            foreach (var row in rows)
+            int successCount = 0;
+            int errorCount = 0;
+            var savedRows = new List<ReconciliationViewData>();
+
+            for (int i = 0; i < rows.Count; i++)
             {
+                ct.ThrowIfCancellationRequested();
+                var row = rows[i];
+
                 try
                 {
                     // 1️⃣ Paramètres de recherche
@@ -875,15 +834,28 @@ namespace RecoTool.Windows
                     var reference = row.Reconciliation_Num ?? row.RawLabel ?? string.Empty;
                     var serviceCode = CurrentCountryObject?.CNT_ServiceCode;
 
-                    // On ne touche que les lignes pas déjà check + FK ref
-                    //if (!string.IsNullOrWhiteSpace(row.MbawData) || !(reference.Contains("FK") || reference.Contains("IPA"))) continue;
+                    // 2️⃣ Call Free API with per-request timeout (300s)
+                    string payload;
+                    using (var requestCts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ct))
+                    {
+                        requestCts.CancelAfter(TimeSpan.FromSeconds(300));
+                        try
+                        {
+                            payload = await _freeApi.SearchAsync(day, reference, serviceCode);
+                        }
+                        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                        {
+                            // Per-request timeout — mark as timeout, don't abort batch
+                            row.MbawData = "Timeout";
+                            errorCount++;
+                            continue;
+                        }
+                    }
 
-                    var payload = await _freeApi.SearchAsync(day, reference, serviceCode);
-
-                    // 2a️ Mémorisation du résultat (ou du sentinel “Not found”)
+                    // 3️⃣ Mémorisation du résultat (ou du sentinel "Not found")
                     row.MbawData = string.IsNullOrWhiteSpace(payload) ? "Not found" : payload;
 
-                    // 2b️ Extraction des tokens si le payload existe
+                    // 4️⃣ Extraction des tokens si le payload existe
                     if (!string.IsNullOrWhiteSpace(payload))
                     {
                         var foundBgpmt = DwingsLinkingHelper.ExtractBgpmtToken(payload);
@@ -899,22 +871,46 @@ namespace RecoTool.Windows
                         if (!string.IsNullOrWhiteSpace(foundBgpmt) && string.IsNullOrWhiteSpace(row.DWINGS_BGPMT))
                             row.DWINGS_BGPMT = foundBgpmt;
 
-                        // Recherche d’une garantie officielle éventuelle
-                        var officialGid = GuaranteeCache.FindGuaranteeId(payload);
-                        if (officialGid != null)
-                            row.DWINGS_GuaranteeID = officialGid;
+                        // Fallback: use GuaranteeCache only if no structured G/N-ref was found by regex
+                        if (string.IsNullOrWhiteSpace(row.DWINGS_GuaranteeID))
+                        {
+                            var officialGid = GuaranteeCache.FindGuaranteeId(payload);
+                            if (officialGid != null)
+                                row.DWINGS_GuaranteeID = officialGid;
+                        }
+                    }
+
+                    // 5️⃣ CRITICAL: Persist to database so data survives close/reopen
+                    try
+                    {
+                        await SaveEditedRowAsync(row);
+                        savedRows.Add(row);
+                        successCount++;
+                    }
+                    catch (Exception saveEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[CheckWithFree] Save failed for {row.ID}: {saveEx.Message}");
+                        errorCount++;
                     }
                 }
-                catch
+                catch (OperationCanceledException) { throw; } // re-throw user cancellation
+                catch (Exception ex)
                 {
-                    // « best‑effort » – on ne bloque pas le reste des lignes.
+                    System.Diagnostics.Debug.WriteLine($"[CheckWithFree] Error for row {row.ID}: {ex.Message}");
+                    errorCount++;
                 }
             }
 
-            // 4️⃣ Notification UI
-            ShowToast($"{rows.Count} ligne(s) vérifiées via Free API", durationSeconds: 3);
-            // Rafraîchissement de la grille (si besoin)
-            Refresh();          // méthode déjà existante dans la classe
+            // 6️⃣ Update KPIs to reflect changes in real-time
+            try { UpdateKpis(_filteredData); } catch { }
+
+            // 7️⃣ Notification UI
+            var msg = $"{successCount}/{rows.Count} ligne(s) enrichies via Free API";
+            if (errorCount > 0) msg += $" ({errorCount} erreur(s))";
+            ShowToast(msg, durationSeconds: 4);
+
+            // 8️⃣ Schedule background sync (debounced) instead of hard Refresh
+            try { ScheduleBulkPushDebounced(); } catch { }
         }
 
         /// <summary>
@@ -1027,15 +1023,15 @@ namespace RecoTool.Windows
             {
                 try
                 {
-                    var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                    if (dg != null)
+                    var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                    if (sfGrid != null)
                     {
-                        try { dg.GotFocus -= ResultsDataGrid_GotFocus; } catch { }
-                        try { dg.GotFocus += ResultsDataGrid_GotFocus; } catch { }
-                        dg.PreviewMouseRightButtonUp -= ResultsDataGrid_PreviewMouseRightButtonUp;
-                        dg.PreviewMouseRightButtonUp += ResultsDataGrid_PreviewMouseRightButtonUp;
-                        dg.CanUserSortColumns = true; // allow sorting on all columns (template ones have SortMemberPath in XAML)
-                        TryHookResultsGridScroll(dg);
+                        try { sfGrid.GotFocus -= ResultsDataGrid_GotFocus; } catch { }
+                        try { sfGrid.GotFocus += ResultsDataGrid_GotFocus; } catch { }
+                        sfGrid.PreviewMouseRightButtonUp -= ResultsDataGrid_PreviewMouseRightButtonUp;
+                        sfGrid.PreviewMouseRightButtonUp += ResultsDataGrid_PreviewMouseRightButtonUp;
+                        sfGrid.AllowSorting = true; // allow sorting on all columns
+                        TryHookResultsGridScroll(sfGrid);
                     }
                 }
                 catch { }
@@ -1055,26 +1051,80 @@ namespace RecoTool.Windows
             try { ReconciliationViewFocusTracker.SetLastFocused(this); } catch { }
         }
 
-        // Open "Manage columns" when user right-clicks a column header
+        // Open header context menu when user right-clicks a column header
         private void ResultsDataGrid_PreviewMouseRightButtonUp(object sender, MouseButtonEventArgs e)
         {
             try
             {
-                var dg = sender as DataGrid;
-                if (dg == null) return;
+                var sfGrid = sender as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (sfGrid == null) return;
 
                 var source = e.OriginalSource as DependencyObject;
-                var header = VisualTreeHelpers.FindParent<DataGridColumnHeader>(source);
+                var header = VisualTreeHelpers.FindParent<Syncfusion.UI.Xaml.Grid.GridHeaderCellControl>(source);
                 if (header == null)
                 {
                     // Not a header: let row context menu proceed
                     return;
                 }
 
-                var win = new ManageColumnsWindow(dg);
-                try { win.Owner = Window.GetWindow(this); } catch { }
-                win.ShowDialog();
                 e.Handled = true;
+
+                // Determine which column was right-clicked
+                var clickedColumn = header.Column;
+                int clickedIdx = clickedColumn != null ? sfGrid.Columns.IndexOf(clickedColumn) : -1;
+                int frozenCount = sfGrid.FrozenColumnCount;
+
+                var cm = new ContextMenu();
+
+                // Freeze/Unfreeze options
+                if (clickedIdx >= 0)
+                {
+                    if (clickedIdx < frozenCount)
+                    {
+                        // Column is frozen — offer to unfreeze (set freeze boundary to this column)
+                        var unfreezeItem = new MenuItem { Header = $"❄️ Unfreeze from here (freeze {clickedIdx})" };
+                        unfreezeItem.Click += (s, ev) =>
+                        {
+                            try { sfGrid.FrozenColumnCount = clickedIdx; } catch { }
+                        };
+                        cm.Items.Add(unfreezeItem);
+                    }
+                    else
+                    {
+                        // Column is not frozen — offer to freeze up to this column
+                        var freezeItem = new MenuItem { Header = $"🔒 Freeze up to here ({clickedIdx + 1} columns)" };
+                        freezeItem.Click += (s, ev) =>
+                        {
+                            try { sfGrid.FrozenColumnCount = clickedIdx + 1; } catch { }
+                        };
+                        cm.Items.Add(freezeItem);
+                    }
+
+                    // Always show option to reset to default
+                    var resetFreezeItem = new MenuItem { Header = "↩️ Reset freeze (6 columns)" };
+                    resetFreezeItem.Click += (s, ev) =>
+                    {
+                        try { sfGrid.FrozenColumnCount = 6; } catch { }
+                    };
+                    cm.Items.Add(resetFreezeItem);
+                    cm.Items.Add(new Separator());
+                }
+
+                // Manage columns option
+                var manageItem = new MenuItem { Header = "⚙️ Manage columns…", FontWeight = FontWeights.SemiBold };
+                manageItem.Click += (s, ev) =>
+                {
+                    try
+                    {
+                        var win = new ManageColumnsWindow(sfGrid);
+                        try { win.Owner = Window.GetWindow(this); } catch { }
+                        win.ShowDialog();
+                    }
+                    catch { }
+                };
+                cm.Items.Add(manageItem);
+
+                cm.IsOpen = true;
             }
             catch { }
         }
@@ -1359,6 +1409,8 @@ namespace RecoTool.Windows
             }
         }
 
+        #endregion
+
         #region Row ContextMenu (Quick Set: Action/KPI/Incident)
         // Moved to ReconciliationView.RowActions.cs
         #endregion
@@ -1507,10 +1559,10 @@ namespace RecoTool.Windows
         {
             try
             {
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                if (dg == null) return new List<ReconciliationViewData>();
-                var items = dg.SelectedItems?.Cast<ReconciliationViewData>().ToList() ?? new List<ReconciliationViewData>();
-                if (items.Count == 0 && dg.CurrentItem is ReconciliationViewData one) items.Add(one);
+                var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (sfGrid == null) return new List<ReconciliationViewData>();
+                var items = sfGrid.SelectedItems?.Cast<ReconciliationViewData>().ToList() ?? new List<ReconciliationViewData>();
+                if (items.Count == 0 && sfGrid.CurrentItem is ReconciliationViewData one) items.Add(one);
                 return items;
             }
             catch { return new List<ReconciliationViewData>(); }
@@ -1679,16 +1731,15 @@ namespace RecoTool.Windows
         {
             try
             {
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
+                var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
                 var items = GetCurrentSelection();
-                if (dg == null || items.Count == 0) return;
+                if (sfGrid == null || items.Count == 0) return;
 
                 // Find the column bound to the displayed "BGI Ref" header
                 string headerName = "BGI Ref";
-                var col = dg.Columns.FirstOrDefault(c => string.Equals(c.Header?.ToString(), headerName, StringComparison.OrdinalIgnoreCase)) as DataGridBoundColumn;
-                // Fallback to data property if column not found
-                string path = null;
-                if (col?.Binding is Binding b && b.Path != null) path = b.Path.Path;
+                var col = sfGrid.Columns.FirstOrDefault(c => string.Equals(c.HeaderText, headerName, StringComparison.OrdinalIgnoreCase));
+                // Use MappingName; fallback to data property if column not found
+                string path = col?.MappingName;
                 if (string.IsNullOrWhiteSpace(path)) path = nameof(ReconciliationViewData.Receivable_DWRefFromAmbre);
 
                 var sb = new StringBuilder();
@@ -1705,31 +1756,27 @@ namespace RecoTool.Windows
         {
             try
             {
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
+                var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
                 var items = GetCurrentSelection();
-                if (dg == null || items.Count == 0) return;
+                if (sfGrid == null || items.Count == 0) return;
 
                 // Build list of exportable columns in current display order
-                var cols = dg.Columns
-                    .Where(c => c.Visibility == Visibility.Visible)
-                    .Where(c => !string.IsNullOrWhiteSpace(c.Header?.ToString()))
-                    .OfType<DataGridBoundColumn>()
+                var cols = sfGrid.Columns
+                    .Where(c => !c.IsHidden)
+                    .Where(c => !string.IsNullOrWhiteSpace(c.HeaderText))
+                    .Where(c => !string.IsNullOrWhiteSpace(c.MappingName))
                     .ToList();
 
                 var sb = new StringBuilder();
                 // Header
                 if (includeHeader)
                 {
-                    sb.AppendLine(string.Join("\t", cols.Select(c => c.Header?.ToString()?.Trim())));
+                    sb.AppendLine(string.Join("\t", cols.Select(c => c.HeaderText?.Trim())));
                 }
 
                 foreach (var it in items)
                 {
-                    var values = cols.Select(c =>
-                    {
-                        var p = (c.Binding as Binding)?.Path?.Path;
-                        return GetPropertyString(it, p);
-                    });
+                    var values = cols.Select(c => GetPropertyString(it, c.MappingName));
                     sb.AppendLine(string.Join("\t", values));
                 }
 

@@ -9,6 +9,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using RecoTool.Services.DTOs;
+using Syncfusion.UI.Xaml.Grid;
 
 namespace RecoTool.Windows
 {
@@ -293,14 +294,15 @@ namespace RecoTool.Windows
                 if (popup != null) popup.IsOpen = false;
 
                 // Navigate to the row
-                var dg = this.FindName("ResultsDataGrid") as DataGrid;
-                if (dg == null) return;
+                var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (sfGrid == null) return;
 
                 var idx = ViewData.IndexOf(item.SourceRow);
                 if (idx >= 0)
                 {
-                    dg.SelectedItem = item.SourceRow;
-                    dg.ScrollIntoView(item.SourceRow);
+                    sfGrid.SelectedItem = item.SourceRow;
+                    var rowIdx = sfGrid.ResolveToRowIndex(idx);
+                    if (rowIdx >= 0) sfGrid.ScrollInView(new Syncfusion.UI.Xaml.ScrollAxis.RowColumnIndex(rowIdx, 0));
                 }
                 else
                 {

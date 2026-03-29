@@ -10,6 +10,8 @@ using RecoTool.Services.DTOs;
 using RecoTool.Services.Helpers;
 using RecoTool.Infrastructure.Logging;
 using RecoTool.Services.Rules;
+using Syncfusion.UI.Xaml.Grid.Helpers;
+using Syncfusion.UI.Xaml.Grid;
 
 namespace RecoTool.Windows
 {
@@ -21,11 +23,6 @@ namespace RecoTool.Windows
         
         // Debounce checkbox saves to avoid multiple saves for the same row
         private readonly Dictionary<string, System.Threading.CancellationTokenSource> _checkboxSavePending = new Dictionary<string, System.Threading.CancellationTokenSource>();
-        
-        /// <summary>
-        /// Handles CheckBox Checked/Unchecked events to save immediately
-        /// This is necessary because DataGridCheckBoxColumn doesn't trigger CellEditEnding reliably
-        /// </summary>
         private async void CheckBox_CheckedChanged(object sender, RoutedEventArgs e)
         {
             try
@@ -75,7 +72,7 @@ namespace RecoTool.Windows
         }
         
         // Persist selection changes for Action/KPI/Incident and ActionStatus
-        private async void UserFieldComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        private async void UserFieldComboBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
         {
             try
             {
@@ -201,59 +198,58 @@ namespace RecoTool.Windows
             }
         }
 
-        // Persist text/checkbox/date edits as soon as a cell commit occurs
-        private async void ResultsDataGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
+        // Persist text/checkbox/date edits as soon as a cell commit occurs (SfDataGrid version)
+        private async void ResultsDataGrid_CurrentCellEndEdit(object sender, Syncfusion.UI.Xaml.Grid.CurrentCellEndEditEventArgs e)
         {
             try
             {
-                if (e.EditAction != DataGridEditAction.Commit) return;
-                var rowData = e.Row?.Item as ReconciliationViewData;
+                var grid = sender as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (grid == null) return;
+
+                // Get row data from the record index
+                var rowData = grid.GetRecordAtRowIndex(e.RowColumnIndex.RowIndex) as ReconciliationViewData;
                 if (rowData == null) return;
-                
-                // CRITICAL: Ignore spurious CellEditEnding events during scroll/virtualization
-                // EditingElement is null when DataGrid virtualizes rows
-                if (e.EditingElement == null)
+
+                // Determine which column was edited
+                int columnIndex = grid.ResolveToGridVisibleColumnIndex(e.RowColumnIndex.ColumnIndex);
+                if (columnIndex < 0 || columnIndex >= grid.Columns.Count) return;
+                var column = grid.Columns[columnIndex];
+                var mappingName = column.MappingName ?? string.Empty;
+
+                // Skip ComboBox-based columns handled by UserFieldComboBox_SelectionChanged
+                if (string.Equals(mappingName, "Action", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(mappingName, "KPI", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(mappingName, "IncidentType", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(mappingName, "ReasonNonRisky", StringComparison.OrdinalIgnoreCase))
                 {
-                    System.Diagnostics.Debug.WriteLine("[CellEditEnding] IGNORED: EditingElement is null (scroll/virtualization)");
                     return;
                 }
 
-                // Skip here for ComboBox-based columns handled by UserFieldComboBox_SelectionChanged
-                var headerText = Convert.ToString(e.Column?.Header) ?? string.Empty;
-                if (string.Equals(headerText, "Action", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(headerText, "KPI", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(headerText, "Incident Type", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(headerText, "Reason Non Risky", StringComparison.OrdinalIgnoreCase))
+                // CRITICAL: SfDataGrid fires CurrentCellEndEdit BEFORE updating the binding source.
+                // Capture the new value from the focused TextBox and write it to the row property
+                // immediately so that SaveEditedRowAsync sees the new value instead of the old one
+                // (which would cause DB change detection to NOOP).
+                try
                 {
-                    return;
-                }
-
-                // Ensure the editing element pushes its value to the binding source before we save
-                if (e.EditingElement is TextBox tb)
-                {
-                    // DEBUG: Log TextBox value before UpdateSource
-                    if (headerText == "Incident Number")
+                    if (System.Windows.Input.Keyboard.FocusedElement is System.Windows.Controls.TextBox focusedTb
+                        && !string.IsNullOrEmpty(mappingName))
                     {
-                        System.Diagnostics.Debug.WriteLine($"[CellEditEnding] TextBox.Text = '{tb.Text}', rowData.IncNumber = '{rowData.IncNumber}'");
-                    }
-                    try { tb.GetBindingExpression(TextBox.TextProperty)?.UpdateSource(); } catch { }
-                    // DEBUG: Log after UpdateSource
-                    if (headerText == "Incident Number")
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[CellEditEnding] After UpdateSource: rowData.IncNumber = '{rowData.IncNumber}'");
+                        var newCellValue = focusedTb.Text;
+                        var prop = rowData.GetType().GetProperty(mappingName);
+                        if (prop != null && prop.CanWrite && prop.PropertyType == typeof(string))
+                        {
+                            var oldVal = prop.GetValue(rowData) as string;
+                            if (!string.Equals(oldVal, newCellValue, StringComparison.Ordinal))
+                            {
+                                prop.SetValue(rowData, newCellValue);
+                                System.Diagnostics.Debug.WriteLine($"[CellEndEdit] Forced {mappingName}: '{oldVal}' -> '{newCellValue}'");
+                            }
+                        }
                     }
                 }
-                else if (e.EditingElement is CheckBox cbx)
-                {
-                    try { cbx.GetBindingExpression(ToggleButton.IsCheckedProperty)?.UpdateSource(); } catch { }
-                }
-                else if (e.EditingElement is DatePicker dp)
-                {
-                    try { dp.GetBindingExpression(DatePicker.SelectedDateProperty)?.UpdateSource(); } catch { }
-                }
+                catch { }
 
-                // CRITICAL: Defer save until AFTER DataGrid commits the edit transaction
-                // This prevents InvalidOperationException when recalculating grouping flags
+                // Defer save to allow any remaining binding updates to complete
                 Dispatcher?.BeginInvoke(new Action(async () =>
                 {
                     try
@@ -303,6 +299,12 @@ namespace RecoTool.Windows
             reco.RiskyItem = row.RiskyItem;
             reco.ReasonNonRisky = row.ReasonNonRisky;
             reco.IncNumber = row.IncNumber;
+            // Persist Free API / DWINGS enrichment fields
+            reco.MbawData = row.MbawData;
+            reco.SpiritData = row.SpiritData;
+            reco.DWINGS_GuaranteeID = row.DWINGS_GuaranteeID;
+            reco.DWINGS_InvoiceID = row.DWINGS_InvoiceID;
+            reco.DWINGS_BGPMT = row.DWINGS_BGPMT;
             // Check if linking fields actually changed OR if they have a value (even if unchanged)
             // We need to recalculate when:
             // 1. The value changed (old != new)
@@ -323,39 +325,35 @@ namespace RecoTool.Windows
                 row.RefreshDwingsData();
             }
 
-            // Preview rules and ask user confirmation for self outputs; apply to UI immediately
-            var ruleApplied = await ConfirmAndApplyRuleOutputsAsync(row, reco);
+            // Always save user-edited fields first (IncNumber, Comments, etc.)
+            await _reconciliationService.SaveReconciliationAsync(reco, applyRulesOnEdit: false);
 
-            // Save without applying rules again (we already applied chosen outputs above)
-            // Only save if user confirmed rule application or if no rule was proposed
+            // Then preview rules and apply rule-proposed outputs on top if confirmed
+            var ruleApplied = await ConfirmAndApplyRuleOutputsAsync(row, reco);
             if (ruleApplied)
             {
+                // Save again only if rule outputs were applied on top of the manual edit
                 await _reconciliationService.SaveReconciliationAsync(reco, applyRulesOnEdit: false);
-                
-                // IMPORTANT: Recalculate if linking fields changed OR if they have a value
-                // This ensures that adding a reference to join an existing group triggers recalculation
-                // Safe to call directly here since entire SaveEditedRowAsync is already deferred via Dispatcher
-                if (linkingFieldsChanged || hasLinkingValue)
+            }
+
+            // Recalculate grouping if linking fields changed
+            if (linkingFieldsChanged || hasLinkingValue)
+            {
+                try
                 {
-                    try
+                    var changedRef = reco.InternalInvoiceReference ?? reco.DWINGS_InvoiceID;
+                    if (!string.IsNullOrWhiteSpace(changedRef))
                     {
-                        // OPTIMIZATION: Use incremental recalculation if only one reference changed
-                        var changedRef = reco.InternalInvoiceReference ?? reco.DWINGS_InvoiceID;
-                        if (!string.IsNullOrWhiteSpace(changedRef))
-                        {
-                            RecalculateGroupingFlagsIncremental(changedRef);
-                        }
-                        else
-                        {
-                            // Fallback to full recalculation if no reference
-                            RecalculateGroupingFlags();
-                        }
+                        RecalculateGroupingFlagsIncremental(changedRef);
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        // Log critical errors only
-                        throw new Exception($"RecalculateGroupingFlags failed: {ex.Message}");
+                        RecalculateGroupingFlags();
                     }
+                }
+                catch (Exception ex)
+                {
+                    throw new Exception($"RecalculateGroupingFlags failed: {ex.Message}");
                 }
             }
             
@@ -386,6 +384,11 @@ namespace RecoTool.Windows
                     allRow.PaymentReference = row.PaymentReference;
                     allRow.ReasonNonRisky = row.ReasonNonRisky;
                     allRow.IncNumber = row.IncNumber;
+                    allRow.MbawData = row.MbawData;
+                    allRow.SpiritData = row.SpiritData;
+                    allRow.DWINGS_GuaranteeID = row.DWINGS_GuaranteeID;
+                    allRow.DWINGS_InvoiceID = row.DWINGS_InvoiceID;
+                    allRow.DWINGS_BGPMT = row.DWINGS_BGPMT;
                 }
             }
             catch { }

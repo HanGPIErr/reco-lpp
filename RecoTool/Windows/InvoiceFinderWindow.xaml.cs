@@ -300,8 +300,8 @@ namespace RecoTool.Windows
                     try
                     {
                         var targetView = ReconciliationViewFocusTracker.GetLastFocused();
-                        var dgReco = targetView?.FindName("ResultsDataGrid") as DataGrid;
-                        var rowData = dgReco?.SelectedItem as RecoTool.Services.DTOs.ReconciliationViewData;
+                        var sfGridReco = targetView?.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                        var rowData = sfGridReco?.SelectedItem as RecoTool.Services.DTOs.ReconciliationViewData;
                         var recoNum = rowData?.Reconciliation_Num;
                         if (!string.IsNullOrWhiteSpace(recoNum))
                         {
@@ -337,8 +337,8 @@ namespace RecoTool.Windows
                 try { targetView.FlashLinkProposalHighlight(); } catch { }
 
                 // Find selected row in target view
-                var dg = targetView.FindName("ResultsDataGrid") as DataGrid;
-                var rowData = dg?.SelectedItem as Services.DTOs.ReconciliationViewData;
+                var sfGrid = targetView.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                var rowData = sfGrid?.SelectedItem as Services.DTOs.ReconciliationViewData;
                 if (rowData == null)
                 {
                     MessageBox.Show("Select a row in the Reconciliation view to link.", "Invoice Finder", MessageBoxButton.OK, MessageBoxImage.Information);

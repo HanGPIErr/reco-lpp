@@ -431,9 +431,13 @@ namespace RecoTool.Services.Ambre
                             if (!string.IsNullOrWhiteSpace(foundBgpmt) && string.IsNullOrWhiteSpace(reconciliation.DWINGS_BGPMT))
                                 reconciliation.DWINGS_BGPMT = foundBgpmt;
 
-                            var searchByOfficial = GuaranteeCache.FindGuaranteeId(payload);
-                            if (searchByOfficial != null)
-                                reconciliation.DWINGS_GuaranteeID = searchByOfficial;
+                            // Fallback: use GuaranteeCache only if no structured G/N-ref was found by regex
+                            if (string.IsNullOrWhiteSpace(reconciliation.DWINGS_GuaranteeID))
+                            {
+                                var searchByOfficial = GuaranteeCache.FindGuaranteeId(payload);
+                                if (searchByOfficial != null)
+                                    reconciliation.DWINGS_GuaranteeID = searchByOfficial;
+                            }
                         }
                     }
                 }

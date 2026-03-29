@@ -10,13 +10,13 @@ namespace RecoTool.Windows
     // Partial: Paging and scroll handling for ReconciliationView
     public partial class ReconciliationView
     {
-        // Wire the DataGrid's ScrollViewer for incremental loading
-        private void TryHookResultsGridScroll(DataGrid dg)
+        // Wire the SfDataGrid's ScrollViewer for incremental loading
+        private void TryHookResultsGridScroll(Syncfusion.UI.Xaml.Grid.SfDataGrid sfGrid)
         {
             try
             {
-                if (_scrollHooked || dg == null) return;
-                _resultsScrollViewer = VisualTreeHelpers.FindDescendant<ScrollViewer>(dg);
+                if (_scrollHooked || sfGrid == null) return;
+                _resultsScrollViewer = VisualTreeHelpers.FindDescendant<ScrollViewer>(sfGrid);
                 if (_resultsScrollViewer != null)
                 {
                     _resultsScrollViewer.ScrollChanged -= ResultsScrollViewer_ScrollChanged;

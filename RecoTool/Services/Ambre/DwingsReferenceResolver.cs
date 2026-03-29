@@ -59,22 +59,46 @@ namespace RecoTool.Services.Ambre
         /// <summary>
         /// Retourne le <c>GuaranteeId</c> dont la <c>OfficialRef</c> apparaît dans le payload.
         /// Retourne <c>null</c> si le cache n'est pas encore initialisé (pas d'exception).
+        /// 
+        /// Priority order:
+        ///   1. Structured G/N-ref regex (e.g. G2603AT000651373) — highest confidence
+        ///   2. Brute-force substring match on cleaned payload — only for refs that are
+        ///      long enough and contain letters (to avoid false positives from timestamps,
+        ///      amounts, IBANs, etc.)
         /// </summary>
         public static string? FindGuaranteeId(string payload)
         {
-            // Capture locale pour éviter une NullReferenceException si Clear() est appelé en parallèle
             var snapshot = _lookup;
-            if (snapshot == null)
-                return null;  // pas encore initialisé → pas d'exception, retour silencieux
+            if (snapshot == null || string.IsNullOrWhiteSpace(payload))
+                return null;
 
-            // Strip pacs message-type identifiers (e.g. pacs.009.001.08, pacs.008.001.08)
-            // before alphanumeric cleaning to avoid false-positive matches on their numeric fragments.
-            string sanitized = Regex.Replace(payload, @"pacs(?:\.[0-9]+)+", " ",
-                                        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+            // ── STRATEGY 1: Structured regex extraction (most reliable) ──
+            // Extract all G/N-refs from the raw payload and check against known guarantees.
+            // This avoids any cleaning/concatenation that destroys token boundaries.
+            var gMatches = Regex.Matches(payload, @"[GN]\d{4}[A-Za-z]{2}\d{9}");
+            foreach (System.Text.RegularExpressions.Match gm in gMatches)
+            {
+                var candidate = gm.Value.ToUpperInvariant();
+                // Check if this guarantee ID is directly in the cache values
+                if (snapshot.Values.Any(v => string.Equals(v, candidate, StringComparison.OrdinalIgnoreCase)))
+                    return candidate;
+            }
+
+            // ── STRATEGY 2: Brute-force substring match (fallback, with safeguards) ──
+            // Strip noise sources before alphanumeric cleaning:
+            //   - pacs message-type identifiers (pacs.009.001.08)
+            //   - ISO timestamps (2026-03-23T09:00:28.898+00:00)
+            //   - IBAN numbers (AT301810018388...)
+            string sanitized = payload;
+            sanitized = Regex.Replace(sanitized, @"pacs(?:\.[0-9]+)+", " ",
+                                      RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+            sanitized = Regex.Replace(sanitized, @"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*(?:[+-]\d{2}:\d{2})?", " ",
+                                      RegexOptions.CultureInvariant);
+            sanitized = Regex.Replace(sanitized, @"(?:IBAN>?)[A-Z]{2}\d{10,30}", " ",
+                                      RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
             string cleaned = Regex.Replace(sanitized, "[^a-zA-Z0-9]", string.Empty,
                                       RegexOptions.CultureInvariant);
-
             if (string.IsNullOrWhiteSpace(cleaned))
                 return null;
 
@@ -82,6 +106,14 @@ namespace RecoTool.Services.Ambre
 
             foreach (var kvp in snapshot)
             {
+                // Skip OFFICIALREFs that are too short (< 8 chars) — high false-positive risk
+                if (kvp.Key.Length < 8)
+                    continue;
+
+                // Skip purely numeric OFFICIALREFs — too ambiguous (match amounts, dates, etc.)
+                if (Regex.IsMatch(kvp.Key, @"^\d+$"))
+                    continue;
+
                 if (upperPayload.Contains(kvp.Key))
                     return kvp.Value;
             }
