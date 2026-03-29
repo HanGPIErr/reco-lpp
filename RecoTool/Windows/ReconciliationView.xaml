@@ -1162,6 +1162,7 @@
                               Loaded="ResultsDataGrid_Loaded"
                               SelectionChanged="ResultsDataGrid_SelectionChanged"
                               CurrentCellEndEdit="ResultsDataGrid_CurrentCellEndEdit"
+                              CellTapped="ResultsDataGrid_CellTapped"
                               PreviewMouseWheel="ResultsDataGrid_PreviewMouseWheel"
                               MouseDoubleClick="ResultsDataGrid_MouseDoubleClick"
                               QueryColumnDragging="ResultsDataGrid_QueryColumnDragging"
@@ -1196,35 +1197,13 @@
                                                 <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
-                                            <!-- New/Updated pill badge -->
+                                            <!-- New/Updated pill badge — pre-calculated brushes -->
                                             <Border Grid.Column="0" CornerRadius="8" Padding="6,2" Margin="0,0,5,0"
-                                                    Visibility="{Binding HasStatusIndicatorVisibility}">
-                                                <Border.Style>
-                                                    <Style TargetType="Border">
-                                                        <Setter Property="Background" Value="#DBEAFE"/>
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding StatusIndicator}" Value="N">
-                                                                <Setter Property="Background" Value="#DBEAFE"/>
-                                                            </DataTrigger>
-                                                            <DataTrigger Binding="{Binding StatusIndicator}" Value="U">
-                                                                <Setter Property="Background" Value="#FEF3C7"/>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Border.Style>
-                                                <TextBlock FontWeight="Bold" FontSize="9" FontFamily="Segoe UI">
-                                                    <TextBlock.Style>
-                                                        <Style TargetType="TextBlock">
-                                                            <Setter Property="Foreground" Value="#1D4ED8"/>
-                                                            <Setter Property="Text" Value="{Binding StatusIndicator}"/>
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding StatusIndicator}" Value="U">
-                                                                    <Setter Property="Foreground" Value="#92400E"/>
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </TextBlock.Style>
-                                                </TextBlock>
+                                                    Visibility="{Binding HasStatusIndicatorVisibility}"
+                                                    Background="{Binding StatusBadgeBgBrush}">
+                                                <TextBlock Text="{Binding StatusIndicator}"
+                                                           Foreground="{Binding StatusBadgeFgBrush}"
+                                                           FontWeight="Bold" FontSize="9" FontFamily="Segoe UI"/>
                                             </Border>
                                             <!-- Status color dot with glow ring -->
                                             <Grid Grid.Column="1">
@@ -1266,16 +1245,14 @@
                             <!-- HasEmail: COMM_ID_EMAIL flag from DWINGS invoice (used for rules) -->
                             <syncfusion:GridCheckBoxColumn HeaderText="HasEmail" Width="80" MappingName="HasEmail" AllowEditing="False" HeaderStyle="{StaticResource DWInvoiceHeaderStyle}"/>
                             <syncfusion:GridTextColumn HeaderText="MT Error message" MappingName="I_ERROR_MESSAGE" Width="220" AllowEditing="False" HeaderStyle="{StaticResource DWInvoiceHeaderStyle}"/>
-                            <syncfusion:GridTemplateColumn HeaderText="Amount" MappingName="LocalSignedAmount" Width="150" AllowEditing="False" HeaderStyle="{StaticResource AmbreHeaderStyle}">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding LocalSignedAmount, StringFormat={}{0:N2}}" 
-                                                   Foreground="{Binding LocalSignedAmountFgBrush}"
-                                                   HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                   FontFamily="Segoe UI" FontSize="12" FontWeight="SemiBold"/>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                            </syncfusion:GridTemplateColumn>
+                            <syncfusion:GridTextColumn HeaderText="Amount" MappingName="LocalSignedAmount" Width="150" AllowEditing="False" HeaderStyle="{StaticResource AmbreHeaderStyle}" DisplayBinding="{Binding LocalSignedAmount, StringFormat={}{0:N2}}" TextAlignment="Right">
+                                <syncfusion:GridTextColumn.CellStyle>
+                                    <Style TargetType="syncfusion:GridCell">
+                                        <Setter Property="Foreground" Value="{Binding LocalSignedAmountFgBrush}"/>
+                                        <Setter Property="FontWeight" Value="SemiBold"/>
+                                    </Style>
+                                </syncfusion:GridTextColumn.CellStyle>
+                            </syncfusion:GridTextColumn>
                             <syncfusion:GridTextColumn HeaderText="Operation Date" MappingName="Operation_Date" DisplayBinding="{Binding Operation_Date, StringFormat={}{0:dd/MM/yyyy}}" Width="110" AllowEditing="False" TextAlignment="Center" HeaderStyle="{StaticResource AmbreHeaderStyle}"/>
                             <syncfusion:GridTextColumn HeaderText="Reconciliation Num" MappingName="Reconciliation_Num" Width="130" AllowEditing="False" HeaderStyle="{StaticResource UserHeaderStyle}"/>
                             <syncfusion:GridTextColumn HeaderText="Reconciliation Origin Num" MappingName="ReconciliationOrigin_Num" Width="150" AllowEditing="False" HeaderStyle="{StaticResource UserHeaderStyle}"/>
@@ -1284,16 +1261,14 @@
                             <syncfusion:GridTextColumn HeaderText="DW Invoice ID (BGI)" MappingName="DWINGS_InvoiceID" Width="150" AllowEditing="False" HeaderStyle="{StaticResource UserHeaderStyle}"/>
                             <syncfusion:GridTextColumn HeaderText="DW Commission (BGPMT)" MappingName="DWINGS_BGPMT" Width="170" AllowEditing="False" HeaderStyle="{StaticResource UserHeaderStyle}"/>
                             <syncfusion:GridTextColumn HeaderText="Official Ref" MappingName="G_OFFICIALREF" Width="160" AllowEditing="False" HeaderStyle="{StaticResource DWGuaranteeHeaderStyle}"/>
-                            <syncfusion:GridTemplateColumn HeaderText="Amount in original CCY" MappingName="SignedAmount" Width="150" AllowEditing="False" HeaderStyle="{StaticResource AmbreHeaderStyle}">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding SignedAmount, StringFormat={}{0:N2}}" 
-                                                   Foreground="{Binding SignedAmountFgBrush}"
-                                                   HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                   FontFamily="Segoe UI" FontSize="12" FontWeight="SemiBold"/>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                            </syncfusion:GridTemplateColumn>
+                            <syncfusion:GridTextColumn HeaderText="Amount in original CCY" MappingName="SignedAmount" Width="150" AllowEditing="False" HeaderStyle="{StaticResource AmbreHeaderStyle}" DisplayBinding="{Binding SignedAmount, StringFormat={}{0:N2}}" TextAlignment="Right">
+                                <syncfusion:GridTextColumn.CellStyle>
+                                    <Style TargetType="syncfusion:GridCell">
+                                        <Setter Property="Foreground" Value="{Binding SignedAmountFgBrush}"/>
+                                        <Setter Property="FontWeight" Value="SemiBold"/>
+                                    </Style>
+                                </syncfusion:GridTextColumn.CellStyle>
+                            </syncfusion:GridTextColumn>
                             <syncfusion:GridTextColumn HeaderText="CCY" MappingName="CCY" Width="60" AllowEditing="False" TextAlignment="Center" HeaderStyle="{StaticResource AmbreHeaderStyle}"/>
 
                             <!-- Missing Amount: conditional formatting (Green=0, Orange>0, Red<0) -->
@@ -1393,49 +1368,9 @@
                                 </syncfusion:GridTemplateColumn.EditTemplate>
                             </syncfusion:GridTemplateColumn>
                             <!-- Action Date -->
-                            <syncfusion:GridTemplateColumn HeaderText="Action Date" Width="160" MappingName="ActionDate" HeaderStyle="{StaticResource UserHeaderStyle}">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding ActionDate, StringFormat={}{0:dd/MM/yyyy}}" HorizontalAlignment="Center" TextAlignment="Center"/>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                                <syncfusion:GridTemplateColumn.EditTemplate>
-                                    <DataTemplate>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <DatePicker Grid.Column="0" Language="fr-FR"
-                                                        SelectedDateFormat="Short"
-                                                        SelectedDate="{Binding ActionDate, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                        Loaded="DatePicker_OpenOnLoad"/>
-                                            <Button Grid.Column="1" Content="📅" ToolTip="Set to Today" 
-                                                    Padding="4,2" Margin="2,0,0,0" FontSize="10"
-                                                    Click="SetDateToToday_Click" Tag="ActionDate"/>
-                                        </Grid>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.EditTemplate>
-                            </syncfusion:GridTemplateColumn>
+                            <syncfusion:GridTextColumn HeaderText="Action Date" Width="160" MappingName="ActionDate" HeaderStyle="{StaticResource UserHeaderStyle}" DisplayBinding="{Binding ActionDate, StringFormat={}{0:dd/MM/yyyy}}" TextAlignment="Center" AllowEditing="False"/>
                             <!-- Assignee: displays user name, binds ID -->
-                            <syncfusion:GridTemplateColumn HeaderText="Assignee" Width="140" MappingName="Assignee" HeaderStyle="{StaticResource UserHeaderStyle}">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding AssigneeDisplayName}" HorizontalAlignment="Center" TextAlignment="Center"/>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                                <syncfusion:GridTemplateColumn.EditTemplate>
-                                    <DataTemplate>
-                                        <ComboBox Width="Auto"
-                                                  ItemsSource="{Binding ElementName=Root, Path=DataContext.AssigneeOptions}"
-                                                  DisplayMemberPath="Name"
-                                                  SelectedValuePath="Id"
-                                                  SelectedValue="{Binding Assignee, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                  HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
-                                        </ComboBox>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.EditTemplate>
-                            </syncfusion:GridTemplateColumn>
+                            <syncfusion:GridTextColumn HeaderText="Assignee" Width="140" MappingName="Assignee" HeaderStyle="{StaticResource UserHeaderStyle}" DisplayBinding="{Binding AssigneeDisplayName}" TextAlignment="Center" AllowEditing="False"/>
 
                             <syncfusion:GridTemplateColumn HeaderText="Comments" Width="220" MappingName="LastComment" AllowEditing="False" HeaderStyle="{StaticResource UserHeaderStyle}">
                                 <syncfusion:GridTemplateColumn.CellTemplate>
@@ -1487,57 +1422,11 @@
                                 </syncfusion:GridTemplateColumn.CellTemplate>
                             </syncfusion:GridTemplateColumn>
 
-                            <!-- First Claim Date with DatePicker -->
-                            <syncfusion:GridTemplateColumn HeaderText="First Claim Date" Width="160" MappingName="FirstClaimDate" HeaderStyle="{StaticResource UserHeaderStyle}">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding FirstClaimDate, StringFormat={}{0:dd/MM/yyyy}}" HorizontalAlignment="Center" TextAlignment="Center"/>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                                <syncfusion:GridTemplateColumn.EditTemplate>
-                                    <DataTemplate>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <DatePicker Grid.Column="0" Language="fr-FR"
-                                                        SelectedDateFormat="Short"
-                                                        SelectedDate="{Binding FirstClaimDate, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                        Loaded="DatePicker_OpenOnLoad"/>
-                                            <Button Grid.Column="1" Content="📅" ToolTip="Set to Today" 
-                                                    Padding="4,2" Margin="2,0,0,0" FontSize="10"
-                                                    Click="SetDateToToday_Click" Tag="FirstClaimDate"/>
-                                        </Grid>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.EditTemplate>
-                            </syncfusion:GridTemplateColumn>
+                            <!-- First Claim Date -->
+                            <syncfusion:GridTextColumn HeaderText="First Claim Date" Width="160" MappingName="FirstClaimDate" HeaderStyle="{StaticResource UserHeaderStyle}" DisplayBinding="{Binding FirstClaimDate, StringFormat={}{0:dd/MM/yyyy}}" TextAlignment="Center" AllowEditing="False"/>
 
-                            <!-- Last Claim Date with DatePicker -->
-                            <syncfusion:GridTemplateColumn HeaderText="Last Claim Date" Width="160" MappingName="LastClaimDate" HeaderStyle="{StaticResource UserHeaderStyle}">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding LastClaimDate, StringFormat={}{0:dd/MM/yyyy}}" HorizontalAlignment="Center" TextAlignment="Center"/>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                                <syncfusion:GridTemplateColumn.EditTemplate>
-                                    <DataTemplate>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <DatePicker Grid.Column="0" Language="fr-FR"
-                                                        SelectedDateFormat="Short"
-                                                        SelectedDate="{Binding LastClaimDate, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                        Loaded="DatePicker_OpenOnLoad"/>
-                                            <Button Grid.Column="1" Content="📅" ToolTip="Set to Today" 
-                                                    Padding="4,2" Margin="2,0,0,0" FontSize="10"
-                                                    Click="SetDateToToday_Click" Tag="LastClaimDate"/>
-                                        </Grid>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.EditTemplate>
-                            </syncfusion:GridTemplateColumn>
+                            <!-- Last Claim Date -->
+                            <syncfusion:GridTextColumn HeaderText="Last Claim Date" Width="160" MappingName="LastClaimDate" HeaderStyle="{StaticResource UserHeaderStyle}" DisplayBinding="{Binding LastClaimDate, StringFormat={}{0:dd/MM/yyyy}}" TextAlignment="Center" AllowEditing="False"/>
 
                             <syncfusion:GridTemplateColumn HeaderText="To Remind" Width="80" MappingName="ToRemind" HeaderStyle="{StaticResource UserHeaderStyle}">
                                 <syncfusion:GridTemplateColumn.CellTemplate>
@@ -1549,31 +1438,8 @@
                                 </syncfusion:GridTemplateColumn.CellTemplate>
                             </syncfusion:GridTemplateColumn>
 
-                            <!-- Remind Date with DatePicker -->
-                            <syncfusion:GridTemplateColumn HeaderText="Remind Date" Width="150" MappingName="ToRemindDate" HeaderStyle="{StaticResource UserHeaderStyle}">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding ToRemindDate, StringFormat={}{0:dd/MM/yyyy}}" HorizontalAlignment="Center" TextAlignment="Center"/>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                                <syncfusion:GridTemplateColumn.EditTemplate>
-                                    <DataTemplate>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <DatePicker Grid.Column="0" Language="fr-FR"
-                                                        SelectedDateFormat="Short"
-                                                        SelectedDate="{Binding ToRemindDate, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                        Loaded="DatePicker_OpenOnLoad"/>
-                                            <Button Grid.Column="1" Content="📅" ToolTip="Set to Today" 
-                                                    Padding="4,2" Margin="2,0,0,0" FontSize="10"
-                                                    Click="SetDateToToday_Click" Tag="ToRemindDate"/>
-                                        </Grid>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.EditTemplate>
-                            </syncfusion:GridTemplateColumn>
+                            <!-- Remind Date -->
+                            <syncfusion:GridTextColumn HeaderText="Remind Date" Width="150" MappingName="ToRemindDate" HeaderStyle="{StaticResource UserHeaderStyle}" DisplayBinding="{Binding ToRemindDate, StringFormat={}{0:dd/MM/yyyy}}" TextAlignment="Center" AllowEditing="False"/>
                             <syncfusion:GridTemplateColumn HeaderText="ACK" Width="60" MappingName="ACK" HeaderStyle="{StaticResource UserHeaderStyle}">
                                 <syncfusion:GridTemplateColumn.CellTemplate>
                                     <DataTemplate>

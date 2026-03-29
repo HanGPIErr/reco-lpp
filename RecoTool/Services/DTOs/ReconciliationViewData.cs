@@ -833,6 +833,32 @@ namespace RecoTool.Services.DTOs
         private Visibility _cachedHasStatusIndicatorVisibility = Visibility.Collapsed;
         public Visibility HasStatusIndicatorVisibility => _cachedHasStatusIndicatorVisibility;
         
+        // ── StatusIndicator badge brushes (replaces 3 DataTriggers in Status column) ──
+        private static readonly SolidColorBrush _statusBadgeNewBg = CreateFrozenBrush(0xDB, 0xEA, 0xFE);   // #DBEAFE
+        private static readonly SolidColorBrush _statusBadgeUpdBg = CreateFrozenBrush(0xFE, 0xF3, 0xC7);   // #FEF3C7
+        private static readonly SolidColorBrush _statusBadgeNewFg = CreateFrozenBrush(0x1D, 0x4E, 0xD8);   // #1D4ED8
+        private static readonly SolidColorBrush _statusBadgeUpdFg = CreateFrozenBrush(0x92, 0x40, 0x0E);   // #92400E
+
+        private SolidColorBrush _statusBadgeBgBrush;
+        public SolidColorBrush StatusBadgeBgBrush => _statusBadgeBgBrush ?? _statusBadgeNewBg;
+
+        private SolidColorBrush _statusBadgeFgBrush;
+        public SolidColorBrush StatusBadgeFgBrush => _statusBadgeFgBrush ?? _statusBadgeNewFg;
+
+        private void RecalcStatusBadgeBrushes()
+        {
+            if (string.Equals(_cachedStatusIndicator, "U", StringComparison.Ordinal))
+            {
+                _statusBadgeBgBrush = _statusBadgeUpdBg;
+                _statusBadgeFgBrush = _statusBadgeUpdFg;
+            }
+            else
+            {
+                _statusBadgeBgBrush = _statusBadgeNewBg;
+                _statusBadgeFgBrush = _statusBadgeNewFg;
+            }
+        }
+
         /// <summary>
         /// Visibility for IsMatchedAcrossAccounts. PRE-CALCULATED to avoid re-evaluation on every scroll.
         /// </summary>
@@ -954,6 +980,9 @@ namespace RecoTool.Services.DTOs
             _cachedHasStatusIndicator = _isNewlyAdded || _isUpdated;
             _cachedHasStatusIndicatorVisibility = _cachedHasStatusIndicator
                 ? Visibility.Visible : Visibility.Collapsed;
+
+            // Status badge brushes (N/U indicator)
+            RecalcStatusBadgeBrushes();
 
             // Matched across accounts visibility (G indicator)
             _cachedIsMatchedAcrossAccountsVisibility = _isMatchedAcrossAccounts

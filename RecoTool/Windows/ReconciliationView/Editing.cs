@@ -823,5 +823,179 @@ namespace RecoTool.Windows
                 System.Diagnostics.Debug.WriteLine($"[PropagateTrigger] Error: {ex.Message}");
             }
         }
+        // ── Popup editing for date/Assignee columns (converted to GridTextColumn for scroll perf) ──
+        private static readonly HashSet<string> _datePopupColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "ActionDate", "FirstClaimDate", "LastClaimDate", "ToRemindDate"
+        };
+
+        private Popup _cellEditPopup;
+
+        private void ResultsDataGrid_CellTapped(object sender, Syncfusion.UI.Xaml.Grid.GridCellTappedEventArgs e)
+        {
+            try
+            {
+                var grid = sender as SfDataGrid;
+                if (grid == null) return;
+                var row = e.Record as ReconciliationViewData;
+                if (row == null) return;
+                var col = e.Column;
+                if (col == null) return;
+                var mapping = col.MappingName ?? "";
+
+                if (_datePopupColumns.Contains(mapping))
+                {
+                    ShowDateEditPopup(grid, row, mapping);
+                }
+                else if (string.Equals(mapping, "Assignee", StringComparison.OrdinalIgnoreCase))
+                {
+                    ShowAssigneeEditPopup(grid, row);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[CellTapped] Error: {ex.Message}");
+            }
+        }
+
+        private void ShowDateEditPopup(SfDataGrid grid, ReconciliationViewData row, string propertyName)
+        {
+            CloseEditPopup();
+
+            var prop = typeof(ReconciliationViewData).GetProperty(propertyName);
+            if (prop == null) return;
+            var currentValue = prop.GetValue(row) as DateTime?;
+
+            var dp = new DatePicker
+            {
+                Language = System.Windows.Markup.XmlLanguage.GetLanguage("fr-FR"),
+                SelectedDateFormat = DatePickerFormat.Short,
+                SelectedDate = currentValue,
+                Width = 140,
+                Margin = new Thickness(4)
+            };
+
+            var todayBtn = new Button
+            {
+                Content = "📅 Today",
+                Padding = new Thickness(6, 2, 6, 2),
+                Margin = new Thickness(2, 4, 4, 4),
+                FontSize = 11
+            };
+
+            var clearBtn = new Button
+            {
+                Content = "✕",
+                Padding = new Thickness(6, 2, 6, 2),
+                Margin = new Thickness(0, 4, 2, 4),
+                FontSize = 11,
+                ToolTip = "Clear date"
+            };
+
+            var panel = new StackPanel { Orientation = Orientation.Horizontal, Background = System.Windows.Media.Brushes.White };
+            panel.Children.Add(dp);
+            panel.Children.Add(todayBtn);
+            panel.Children.Add(clearBtn);
+
+            var border = new Border
+            {
+                Child = panel,
+                BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x3B, 0x82, 0xF6)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Background = System.Windows.Media.Brushes.White,
+                Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 8, Opacity = 0.3, ShadowDepth = 2 }
+            };
+
+            _cellEditPopup = new Popup
+            {
+                Child = border,
+                Placement = PlacementMode.MousePoint,
+                StaysOpen = false,
+                AllowsTransparency = true,
+                IsOpen = true
+            };
+
+            // Wire events
+            dp.SelectedDateChanged += async (s, args) =>
+            {
+                prop.SetValue(row, dp.SelectedDate);
+                CloseEditPopup();
+                await SaveEditedRowAsync(row);
+            };
+            todayBtn.Click += async (s, args) =>
+            {
+                prop.SetValue(row, DateTime.Today);
+                CloseEditPopup();
+                await SaveEditedRowAsync(row);
+            };
+            clearBtn.Click += async (s, args) =>
+            {
+                prop.SetValue(row, null);
+                CloseEditPopup();
+                await SaveEditedRowAsync(row);
+            };
+        }
+
+        private void ShowAssigneeEditPopup(SfDataGrid grid, ReconciliationViewData row)
+        {
+            CloseEditPopup();
+
+            var cb = new ComboBox
+            {
+                Width = 180,
+                Margin = new Thickness(4),
+                DisplayMemberPath = "Name",
+                SelectedValuePath = "Id",
+                SelectedValue = row.Assignee,
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center
+            };
+
+            // AssigneeOptions is a property on ReconciliationView (partial class in Options.cs)
+            try
+            {
+                cb.ItemsSource = AssigneeOptions;
+            }
+            catch { }
+
+            var border = new Border
+            {
+                Child = cb,
+                BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x3B, 0x82, 0xF6)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Background = System.Windows.Media.Brushes.White,
+                Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 8, Opacity = 0.3, ShadowDepth = 2 }
+            };
+
+            _cellEditPopup = new Popup
+            {
+                Child = border,
+                Placement = PlacementMode.MousePoint,
+                StaysOpen = false,
+                AllowsTransparency = true,
+                IsOpen = true
+            };
+
+            cb.SelectionChanged += async (s, args) =>
+            {
+                row.Assignee = cb.SelectedValue?.ToString();
+                CloseEditPopup();
+                await SaveEditedRowAsync(row);
+            };
+
+            // Open dropdown immediately
+            cb.IsDropDownOpen = true;
+        }
+
+        private void CloseEditPopup()
+        {
+            if (_cellEditPopup != null)
+            {
+                _cellEditPopup.IsOpen = false;
+                _cellEditPopup = null;
+            }
+        }
     }
 }
