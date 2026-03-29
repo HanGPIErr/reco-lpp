@@ -1076,10 +1076,10 @@ namespace RecoTool.Services
                                 try { LogManager.Warning("ChangeLog recording failed in SaveReconciliationsAsync; background sync will skip these rows unless reconstructed."); } catch { }
                             }
 
-                            // Invalidate view cache so next loads fetch fresh data
-                            //try { _recoViewCache.Clear(); } catch { }
+                            // Invalidate Lazy<Task> coalescing cache so next loads fetch fresh data from DB
+                            try { _recoViewCache.Clear(); } catch { }
 
-                            // Incrementally update all cached view lists with the modified reconciliation fields
+                            // Incrementally update materialized view lists with the modified reconciliation fields
                             try { UpdateRecoViewCaches(updatedRows); } catch { }
 
                             // Synchronization is handled by background services (e.g., SyncMonitor),

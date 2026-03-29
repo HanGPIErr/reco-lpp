@@ -1270,22 +1270,9 @@
                                 <syncfusion:GridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding LocalSignedAmount, StringFormat={}{0:N2}}" 
+                                                   Foreground="{Binding LocalSignedAmountFgBrush}"
                                                    HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                   FontFamily="Segoe UI" FontSize="12" FontWeight="SemiBold">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Foreground" Value="#6B7280"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding LocalSignedAmount, Converter={StaticResource IsNegativeConverter}}" Value="True">
-                                                            <Setter Property="Foreground" Value="#DC2626"/>
-                                                        </DataTrigger>
-                                                        <DataTrigger Binding="{Binding LocalSignedAmount, Converter={StaticResource IsPositiveConverter}}" Value="True">
-                                                            <Setter Property="Foreground" Value="#16A34A"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
+                                                   FontFamily="Segoe UI" FontSize="12" FontWeight="SemiBold"/>
                                     </DataTemplate>
                                 </syncfusion:GridTemplateColumn.CellTemplate>
                             </syncfusion:GridTemplateColumn>
@@ -1301,22 +1288,9 @@
                                 <syncfusion:GridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding SignedAmount, StringFormat={}{0:N2}}" 
+                                                   Foreground="{Binding SignedAmountFgBrush}"
                                                    HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                   FontFamily="Segoe UI" FontSize="12" FontWeight="SemiBold">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Foreground" Value="#6B7280"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding SignedAmount, Converter={StaticResource IsNegativeConverter}}" Value="True">
-                                                            <Setter Property="Foreground" Value="#DC2626"/>
-                                                        </DataTrigger>
-                                                        <DataTrigger Binding="{Binding SignedAmount, Converter={StaticResource IsPositiveConverter}}" Value="True">
-                                                            <Setter Property="Foreground" Value="#16A34A"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
+                                                   FontFamily="Segoe UI" FontSize="12" FontWeight="SemiBold"/>
                                     </DataTemplate>
                                 </syncfusion:GridTemplateColumn.CellTemplate>
                             </syncfusion:GridTemplateColumn>
@@ -1396,31 +1370,11 @@
                             <syncfusion:GridTemplateColumn HeaderText="Action Status" Width="120" MappingName="ActionStatus">
                                 <syncfusion:GridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <Border CornerRadius="10" Padding="8,3" Margin="2,3" HorizontalAlignment="Center">
-                                            <Border.Style>
-                                                <Style TargetType="Border">
-                                                    <Setter Property="Background" Value="#FEF3C7"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding ActionStatus}" Value="True">
-                                                            <Setter Property="Background" Value="#DCFCE7"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Border.Style>
-                                            <TextBlock FontFamily="Segoe UI" FontSize="10" FontWeight="Bold" HorizontalAlignment="Center">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock">
-                                                        <Setter Property="Text" Value="⏳ PENDING"/>
-                                                        <Setter Property="Foreground" Value="#92400E"/>
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding ActionStatus}" Value="True">
-                                                                <Setter Property="Text" Value="✓ DONE"/>
-                                                                <Setter Property="Foreground" Value="#166534"/>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
+                                        <Border CornerRadius="10" Padding="8,3" Margin="2,3" HorizontalAlignment="Center"
+                                                Background="{Binding ActionStatusBgBrush}">
+                                            <TextBlock Text="{Binding ActionStatusText}"
+                                                       Foreground="{Binding ActionStatusFgBrush}"
+                                                       FontFamily="Segoe UI" FontSize="10" FontWeight="Bold" HorizontalAlignment="Center"/>
                                         </Border>
                                     </DataTemplate>
                                 </syncfusion:GridTemplateColumn.CellTemplate>
@@ -1494,11 +1448,11 @@
                                             </Grid.ColumnDefinitions>
                                             <!-- Chat icon + count badge -->
                                             <Grid Grid.Column="0" Margin="0,0,4,0"
-                                                  Visibility="{Binding Comments, Converter={StaticResource CommentCountToVisibilityConverter}}">
+                                                  Visibility="{Binding CommentBadgeVisibility}">
                                                 <TextBlock Text="💬" FontSize="12" VerticalAlignment="Center"/>
                                                 <Border Background="#3B82F6" CornerRadius="7" MinWidth="14" Height="14"
                                                         HorizontalAlignment="Right" VerticalAlignment="Top" Margin="10,-3,-6,0" Padding="3,0">
-                                                    <TextBlock Text="{Binding Comments, Converter={StaticResource CommentCountConverter}}" 
+                                                    <TextBlock Text="{Binding CommentCountText}" 
                                                                Foreground="White" FontSize="8" FontWeight="Bold"
                                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                 </Border>
@@ -1524,10 +1478,10 @@
                                             </Grid.ColumnDefinitions>
                                             <!-- Search icon for rows with real content -->
                                             <TextBlock Grid.Column="0" Text="🔍" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"
-                                                       Visibility="{Binding MbawData, Converter={StaticResource MbawHasContentConverter}}"/>
+                                                       Visibility="{Binding MbawIconVisibility}"/>
                                             <TextBlock Grid.Column="1" Text="{Binding MbawData}" TextTrimming="CharacterEllipsis"
                                                        VerticalAlignment="Center" FontFamily="Segoe UI" FontSize="11"
-                                                       Foreground="{Binding MbawData, Converter={StaticResource MbawForegroundConverter}}"/>
+                                                       Foreground="{Binding MbawForegroundBrush}"/>
                                         </Grid>
                                     </DataTemplate>
                                 </syncfusion:GridTemplateColumn.CellTemplate>

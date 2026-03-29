@@ -32,31 +32,103 @@ namespace RecoTool.Windows
             catch { }
         }
 
+        private System.Diagnostics.Stopwatch _scrollStopwatch;
+        private int _scrollEventCount;
+        private long _lastScrollMs;
+
         private void ResultsScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
         {
             try
             {
-                // PERF: Early-exit for horizontal-only scroll BEFORE any work
-                if (e != null && Math.Abs(e.VerticalChange) < double.Epsilon
-                             && Math.Abs(e.ExtentHeightChange) < double.Epsilon
-                             && Math.Abs(e.ViewportHeightChange) < double.Epsilon)
-                    return;
+                if (_scrollStopwatch == null) _scrollStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                _scrollEventCount++;
+                var t0 = _scrollStopwatch.ElapsedMilliseconds;
+                var frameDelta = t0 - _lastScrollMs; // time since last scroll event
+
+                bool isHorizontal = e != null && Math.Abs(e.HorizontalChange) > double.Epsilon;
+                bool isVertical = e != null && Math.Abs(e.VerticalChange) > double.Epsilon;
 
                 var sv = sender as ScrollViewer;
-                if (sv == null) return;
 
-                // Show/hide footer button when near bottom (zero-allocation path)
-                var pagedSource = GetEffectivePagedData();
-                if (pagedSource == null || pagedSource.Count == 0) return;
-
-                bool atBottom = sv.ScrollableHeight > 0 && sv.VerticalOffset >= (sv.ScrollableHeight * 0.9);
-                int remaining = pagedSource.Count - _loadedCount;
-                if (_loadMoreFooterButton != null)
+                // ── Vertical-only logic: footer button visibility ──
+                if (isVertical && sv != null)
                 {
-                    var desired = (atBottom && remaining > 0) ? Visibility.Visible : Visibility.Collapsed;
-                    if (_loadMoreFooterButton.Visibility != desired)
-                        _loadMoreFooterButton.Visibility = desired;
+                    var pagedSource = GetEffectivePagedData();
+                    if (pagedSource != null && pagedSource.Count > 0)
+                    {
+                        bool atBottom = sv.ScrollableHeight > 0 && sv.VerticalOffset >= (sv.ScrollableHeight * 0.9);
+                        int remaining = pagedSource.Count - _loadedCount;
+                        if (_loadMoreFooterButton != null)
+                        {
+                            var desired = (atBottom && remaining > 0) ? Visibility.Visible : Visibility.Collapsed;
+                            if (_loadMoreFooterButton.Visibility != desired)
+                                _loadMoreFooterButton.Visibility = desired;
+                        }
+                    }
                 }
+
+                // ── Horizontal scroll stutter diagnostics ──
+                if (isHorizontal && sv != null)
+                {
+                    var elapsed = _scrollStopwatch.ElapsedMilliseconds - t0;
+                    // Identify visible column range at current horizontal offset
+                    string colInfo = "";
+                    try
+                    {
+                        var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                        if (sfGrid != null)
+                        {
+                            double hOffset = sv.HorizontalOffset;
+                            double vpRight = hOffset + sv.ViewportWidth;
+                            int frozenCount = sfGrid.FrozenColumnCount;
+                            double accum = 0;
+                            string firstCol = null, lastCol = null;
+                            var templateCols = new System.Collections.Generic.List<string>();
+                            int idx = 0;
+                            foreach (var col in sfGrid.Columns)
+                            {
+                                idx++;
+                                // Skip frozen columns — they don't scroll horizontally
+                                if (idx <= frozenCount) continue;
+
+                                double w = col.ActualWidth > 0 ? col.ActualWidth : col.Width;
+                                double colLeft = accum;
+                                double colRight = accum + w;
+
+                                // Column is visible if it overlaps the viewport
+                                if (colRight > hOffset && colLeft < vpRight)
+                                {
+                                    var name = col.MappingName ?? col.HeaderText ?? $"col{idx}";
+                                    if (firstCol == null) firstCol = name;
+                                    lastCol = name;
+                                    // Mark TemplateColumns (heavier rendering)
+                                    if (col is Syncfusion.UI.Xaml.Grid.GridTemplateColumn)
+                                        templateCols.Add(name);
+                                }
+                                accum += w;
+                            }
+                            colInfo = $" cols=[{firstCol ?? "?"}..{lastCol ?? "?"}]";
+                            if (templateCols.Count > 0)
+                                colInfo += $" tpl={string.Join(",", templateCols)}";
+                        }
+                    }
+                    catch { }
+
+                    // Log EVERY horizontal scroll that shows stutter (frameDelta > 16ms = dropped frame)
+                    // or every 10th horizontal event for baseline
+                    bool isStutter = frameDelta > 16;
+                    if (isStutter || _scrollEventCount % 10 == 0)
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[HScroll#{_scrollEventCount}] {(isStutter ? "⚠️STUTTER " : "")}" +
+                            $"frameDelta={frameDelta}ms handler={elapsed}ms " +
+                            $"| hOffset={sv.HorizontalOffset:F0}/{sv.ScrollableWidth:F0} hChange={e.HorizontalChange:F0}" +
+                            $"{colInfo}" +
+                            $" | vOffset={sv.VerticalOffset:F0} loaded={_loadedCount}");
+                    }
+                }
+
+                _lastScrollMs = t0;
             }
             catch { }
         }

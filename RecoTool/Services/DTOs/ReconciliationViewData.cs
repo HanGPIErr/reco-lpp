@@ -341,8 +341,11 @@ namespace RecoTool.Services.DTOs
                 {
                     _comments = value;
                     _cachedLastComment = ComputeLastComment();
+                    RecalcCommentDisplay();
                     OnPropertyChanged(nameof(Comments));
                     OnPropertyChanged(nameof(LastComment));
+                    OnPropertyChanged(nameof(CommentCountText));
+                    OnPropertyChanged(nameof(CommentBadgeVisibility));
                 }
             }
         }
@@ -462,11 +465,15 @@ namespace RecoTool.Services.DTOs
                     _cachedIsToReview = null;
                     _cachedIsReviewed = null;
                     _actionStatusDisplay = value == true ? "DONE" : (value == false ? "PENDING" : "");
+                    RecalcActionStatusDisplay();
                     RecalcCellColors();
                     _cellBackgroundBrush = GetCachedBrush(_cachedCellBackgroundColor);
                     _cellBorderBrushValue = _cachedCellBorderBrush == "#DDDDDD" ? _defaultBorderBrush : GetCachedBrush(_cachedCellBorderBrush);
                     OnPropertyChanged(nameof(ActionStatus));
                     OnPropertyChanged(nameof(ActionStatusDisplay));
+                    OnPropertyChanged(nameof(ActionStatusBgBrush));
+                    OnPropertyChanged(nameof(ActionStatusFgBrush));
+                    OnPropertyChanged(nameof(ActionStatusText));
                     OnPropertyChanged(nameof(IsReviewedToday));
                     OnPropertyChanged(nameof(IsToReview));
                     OnPropertyChanged(nameof(IsReviewed));
@@ -575,7 +582,22 @@ namespace RecoTool.Services.DTOs
         public bool IsRiskyEffective => RiskyItem == true;
 
         // Notes fields from T_Reconciliation
-        public string MbawData { get; set; }
+        private string _mbawData;
+        public string MbawData
+        {
+            get => _mbawData;
+            set
+            {
+                if (_mbawData != value)
+                {
+                    _mbawData = value;
+                    RecalcMbawDisplay();
+                    OnPropertyChanged(nameof(MbawData));
+                    OnPropertyChanged(nameof(MbawIconVisibility));
+                    OnPropertyChanged(nameof(MbawForegroundBrush));
+                }
+            }
+        }
         public string SpiritData { get; set; }
 
         // Trigger date from T_Reconciliation
@@ -970,6 +992,18 @@ namespace RecoTool.Services.DTOs
             _missingAmountBgBrush = GetCachedBrush(_cachedMissingAmountBackgroundColor);
             _missingAmountFgBrush = GetCachedBrush(_cachedMissingAmountForegroundColor);
             _actionBgBrush = GetCachedBrush(_actionBackgroundColor);
+
+            // MbawData display (replaces MbawHasContentConverter + MbawForegroundConverter)
+            RecalcMbawDisplay();
+
+            // Comment badge display (replaces CommentCountConverter + CommentCountToVisibilityConverter)
+            RecalcCommentDisplay();
+
+            // Amount foreground brushes (replaces IsNegative/IsPositive converter DataTriggers)
+            RecalcAmountBrushes();
+
+            // ActionStatus display (replaces DataTriggers for bg/fg/text)
+            RecalcActionStatusDisplay();
         }
 
         private string ComputeLastComment()
@@ -1024,6 +1058,107 @@ namespace RecoTool.Services.DTOs
         {
             get => _modifiedByDisplayName ?? string.Empty;
             set { if (_modifiedByDisplayName != value) { _modifiedByDisplayName = value; OnPropertyChanged(nameof(ModifiedByDisplayName)); } }
+        }
+
+        // ── MbawData display (replaces MbawHasContentConverter + MbawForegroundConverter) ──
+        private static readonly SolidColorBrush _mbawNotFoundFg = CreateFrozenBrush(0x9C, 0xA3, 0xAF);
+        private static readonly SolidColorBrush _mbawNormalFg = CreateFrozenBrush(0x1E, 0x29, 0x3B);
+
+        private Visibility _mbawIconVisibility = Visibility.Collapsed;
+        public Visibility MbawIconVisibility => _mbawIconVisibility;
+
+        private SolidColorBrush _mbawForegroundBrush;
+        public SolidColorBrush MbawForegroundBrush => _mbawForegroundBrush ?? _mbawNormalFg;
+
+        private void RecalcMbawDisplay()
+        {
+            bool hasContent = !string.IsNullOrWhiteSpace(_mbawData)
+                              && !string.Equals(_mbawData, "Not found", StringComparison.OrdinalIgnoreCase);
+            _mbawIconVisibility = hasContent ? Visibility.Visible : Visibility.Collapsed;
+            _mbawForegroundBrush = string.Equals(_mbawData, "Not found", StringComparison.OrdinalIgnoreCase)
+                ? _mbawNotFoundFg : _mbawNormalFg;
+        }
+
+        // ── Comment badge display (replaces CommentCountConverter + CommentCountToVisibilityConverter) ──
+        private string _commentCountText = "0";
+        public string CommentCountText => _commentCountText;
+
+        private Visibility _commentBadgeVisibility = Visibility.Collapsed;
+        public Visibility CommentBadgeVisibility => _commentBadgeVisibility;
+
+        private void RecalcCommentDisplay()
+        {
+            if (string.IsNullOrWhiteSpace(_comments))
+            {
+                _commentCountText = "0";
+                _commentBadgeVisibility = Visibility.Collapsed;
+                return;
+            }
+            var lines = _comments.Replace("\r\n", "\n").Split('\n');
+            int count = 0;
+            foreach (var l in lines)
+                if (!string.IsNullOrWhiteSpace(l)) count++;
+            _commentCountText = count.ToString();
+            _commentBadgeVisibility = count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        // ── Amount foreground brushes (replaces IsNegativeConverter/IsPositiveConverter DataTriggers) ──
+        private static readonly SolidColorBrush _amountNegativeFg = CreateFrozenBrush(0xDC, 0x26, 0x26); // #DC2626 red
+        private static readonly SolidColorBrush _amountPositiveFg = CreateFrozenBrush(0x16, 0xA3, 0x4A); // #16A34A green
+        private static readonly SolidColorBrush _amountZeroFg = CreateFrozenBrush(0x6B, 0x72, 0x80);     // #6B7280 gray
+
+        private SolidColorBrush _localSignedAmountFgBrush;
+        public SolidColorBrush LocalSignedAmountFgBrush => _localSignedAmountFgBrush ?? _amountZeroFg;
+
+        private SolidColorBrush _signedAmountFgBrush;
+        public SolidColorBrush SignedAmountFgBrush => _signedAmountFgBrush ?? _amountZeroFg;
+
+        private void RecalcAmountBrushes()
+        {
+            _localSignedAmountFgBrush = LocalSignedAmount < 0 ? _amountNegativeFg
+                                      : LocalSignedAmount > 0 ? _amountPositiveFg
+                                      : _amountZeroFg;
+            _signedAmountFgBrush = SignedAmount < 0 ? _amountNegativeFg
+                                 : SignedAmount > 0 ? _amountPositiveFg
+                                 : _amountZeroFg;
+        }
+
+        // ── ActionStatus display (replaces DataTriggers for background/foreground/text) ──
+        private static readonly SolidColorBrush _actionStatusDoneBg = CreateFrozenBrush(0xDC, 0xFC, 0xE7);    // #DCFCE7
+        private static readonly SolidColorBrush _actionStatusPendingBg = CreateFrozenBrush(0xFE, 0xF3, 0xC7);  // #FEF3C7
+        private static readonly SolidColorBrush _actionStatusDoneFg = CreateFrozenBrush(0x16, 0x65, 0x34);     // #166534
+        private static readonly SolidColorBrush _actionStatusPendingFg = CreateFrozenBrush(0x92, 0x40, 0x0E);  // #92400E
+
+        private SolidColorBrush _actionStatusBgBrush;
+        public SolidColorBrush ActionStatusBgBrush => _actionStatusBgBrush ?? _actionStatusPendingBg;
+
+        private SolidColorBrush _actionStatusFgBrush;
+        public SolidColorBrush ActionStatusFgBrush => _actionStatusFgBrush ?? _actionStatusPendingFg;
+
+        private string _actionStatusText;
+        public string ActionStatusText => _actionStatusText ?? "⏳ PENDING";
+
+        private void RecalcActionStatusDisplay()
+        {
+            if (_actionStatus == true)
+            {
+                _actionStatusBgBrush = _actionStatusDoneBg;
+                _actionStatusFgBrush = _actionStatusDoneFg;
+                _actionStatusText = "✓ DONE";
+            }
+            else
+            {
+                _actionStatusBgBrush = _actionStatusPendingBg;
+                _actionStatusFgBrush = _actionStatusPendingFg;
+                _actionStatusText = "⏳ PENDING";
+            }
+        }
+
+        private static SolidColorBrush CreateFrozenBrush(byte r, byte g, byte b)
+        {
+            var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
+            brush.Freeze();
+            return brush;
         }
         #endregion
 

@@ -67,9 +67,19 @@ namespace RecoTool.API
                     Width = 860,
                     Height = 660,
                     WindowStartupLocation = WindowStartupLocation.CenterScreen,
-                    ShowInTaskbar = false,
+                    ShowInTaskbar = true,
+                    Topmost = true,
                     ResizeMode = ResizeMode.NoResize,
                     WindowStyle = WindowStyle.ToolWindow
+                };
+
+                // Reset Topmost after the window has been activated once
+                // so it doesn't stay permanently on top of all other apps.
+                window.Activated += (s2, e2) =>
+                {
+                    var w = s2 as Window;
+                    if (w != null && w.Topmost)
+                        w.Topmost = false;
                 };
 
                 var webView = new WebView2();

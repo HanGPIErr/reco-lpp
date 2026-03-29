@@ -32,7 +32,7 @@ namespace RecoTool
 
             // Syncfusion Community License (free for < $1M revenue)
             // Get your key at: https://www.syncfusion.com/account/manage-trials/start-trials
-            Syncfusion.Licensing.SyncfusionLicenseProvider.RegisterLicense("Ngo9BigBOggjHTQxAR8/V1JHaF5cWWdCekxzWmFZfVhgfV9HZlZTQGYuP1ZhSXxVdkZhUH9XcXJXQmJfVU19XEE=");
+            Syncfusion.Licensing.SyncfusionLicenseProvider.RegisterLicense("Ngo9BigBOggjHTQxAR8/V1JHaF5cWWdCekx0TXxbf1x2ZFRHal5QTndWUiweQnxTdENjWn1XcXVXTmJcVkd3WkleYA==");
 
             var services = new ServiceCollection();
 
