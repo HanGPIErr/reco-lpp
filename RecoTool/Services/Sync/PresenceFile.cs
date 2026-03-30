@@ -228,11 +228,14 @@ namespace RecoTool.Services.Sync
                     WriteString(buffer, rowsBase + r * RowIdLen, RowIdLen, data.Users[i].ActiveRowIds[r]);
             }
 
-            // Use FileStream + FileShare.ReadWrite to avoid IOException when another process reads simultaneously
+            // Use FileStream + FileShare.ReadWrite to avoid IOException when another process reads simultaneously.
+            // IMPORTANT: FileMode.OpenOrCreate instead of FileMode.Create — Create truncates which
+            // requires exclusive access and fails when another process has the file open for reading.
             Directory.CreateDirectory(Path.GetDirectoryName(filePath) ?? string.Empty);
-            using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite, 4096))
+            using (var fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite, 4096))
             {
                 fs.Write(buffer, 0, buffer.Length);
+                fs.SetLength(buffer.Length); // Trim leftover bytes from previous larger write
                 fs.Flush();
             }
         }
