@@ -52,14 +52,41 @@ namespace RecoTool.Services
             }
         }
 
-        private static async Task CopyFileAsync(string sourceFileName, string destinationFileName, bool overwrite, CancellationToken cancellationToken = default)
+        /// <summary>
+        /// Copies a file asynchronously with ReadWrite sharing on the source so it works even
+        /// when Access/OLE DB (or another user) holds a write-lock on the file.
+        /// Retries up to <paramref name="maxAttempts"/> times on transient sharing violations.
+        /// </summary>
+        private static async Task CopyFileAsync(string sourceFileName, string destinationFileName, bool overwrite, CancellationToken cancellationToken = default, int maxAttempts = 5, int initialDelayMs = 300)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(destinationFileName) ?? string.Empty);
             var mode = overwrite ? FileMode.Create : FileMode.CreateNew;
-            using (var source = new FileStream(sourceFileName, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true))
-            using (var dest = new FileStream(destinationFileName, mode, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+
+            int attempt = 0;
+            int delay = Math.Max(50, initialDelayMs);
+            for (;;)
             {
-                await source.CopyToAsync(dest, 81920, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    // FileShare.ReadWrite: allow reading even while another process (Access .ldb) holds a write lock
+                    using (var source = new FileStream(sourceFileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 81920, useAsync: true))
+                    using (var dest = new FileStream(destinationFileName, mode, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+                    {
+                        await source.CopyToAsync(dest, 81920, cancellationToken).ConfigureAwait(false);
+                    }
+                    return; // success
+                }
+                catch (IOException ioex)
+                {
+                    attempt++;
+                    var msg = ioex.Message?.ToLowerInvariant() ?? string.Empty;
+                    bool isSharing = msg.Contains("being used") || msg.Contains("process cannot access") || msg.Contains("sharing violation") || msg.Contains("used by another process");
+                    if (!isSharing || attempt >= maxAttempts)
+                        throw;
+                    System.Diagnostics.Debug.WriteLine($"[CopyFileAsync][Retry] Attempt {attempt}/{maxAttempts} for '{Path.GetFileName(sourceFileName)}'. Retrying in {delay}ms...");
+                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                    delay = Math.Min(delay * 2, 5000);
+                }
             }
         }
     }

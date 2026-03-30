@@ -272,7 +272,7 @@ namespace RecoTool.Services
 
             Directory.CreateDirectory(Path.GetDirectoryName(localZipPath) ?? string.Empty);
             string tmp = localZipPath + ".tmp_copy";
-            File.Copy(networkZipPath, tmp, true);
+            await CopyFileAsync(networkZipPath, tmp, overwrite: true).ConfigureAwait(false);
             try { await FileReplaceWithRetriesAsync(tmp, localZipPath, localZipPath + ".bak", maxAttempts: 5, initialDelayMs: 200); }
             catch
             {
@@ -2377,15 +2377,8 @@ namespace RecoTool.Services
                         return false;
                     }
                     
-                    // Vérifier si la base réseau n'est pas verrouillée (import en cours)
-                    if (await IsDatabaseLockedAsync(networkDbPath))
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Base réseau verrouillée pour {countryId} (import en cours ?)");
-                        return false;
-                    }
-                    
-                    // Copier la base réseau vers le local
-                    File.Copy(networkDbPath, localDbPath, true);
+                    // Copier la base réseau vers le local (FileShare.ReadWrite pour tolérer un .ldb actif)
+                    await CopyFileAsync(networkDbPath, localDbPath, overwrite: true).ConfigureAwait(false);
                     System.Diagnostics.Debug.WriteLine($"Base réseau copiée vers le local pour {countryId}");
                 }
                 else
@@ -2848,10 +2841,6 @@ namespace RecoTool.Services
             if (!File.Exists(networkDbPath))
                 throw new FileNotFoundException($"Base réseau introuvable pour {countryId}", networkDbPath);
 
-            // Vérifier que la base réseau n'est pas verrouillée (par précaution)
-            if (await IsDatabaseLockedAsync(networkDbPath))
-                throw new IOException($"La base réseau est verrouillée: {networkDbPath}");
-
             // S'assurer que le répertoire local existe
             if (!Directory.Exists(dataDirectory))
             {
@@ -2862,7 +2851,7 @@ namespace RecoTool.Services
             string tempLocal = Path.Combine(dataDirectory, $"{countryPrefix}{countryId}.accdb.tmp_{Guid.NewGuid():N}");
             string backupLocal = Path.Combine(dataDirectory, $"{countryPrefix}{countryId}.accdb.bak");
 
-            File.Copy(networkDbPath, tempLocal, true);
+            await CopyFileAsync(networkDbPath, tempLocal, overwrite: true).ConfigureAwait(false);
 
             if (File.Exists(localDbPath))
             {
@@ -2947,9 +2936,6 @@ namespace RecoTool.Services
             if (!File.Exists(networkDbPath))
                 throw new FileNotFoundException($"Base AMBRE réseau introuvable pour {countryId}", networkDbPath);
 
-            if (await IsDatabaseLockedAsync(networkDbPath))
-                throw new IOException($"La base AMBRE réseau est verrouillée: {networkDbPath}");
-
             if (!Directory.Exists(dataDirectory)) Directory.CreateDirectory(dataDirectory);
 
             // Copier uniquement si le fichier réseau diffère du local
@@ -3004,9 +2990,6 @@ namespace RecoTool.Services
 
             if (!File.Exists(networkDbPath))
                 throw new FileNotFoundException($"Base RECON réseau introuvable pour {countryId}", networkDbPath);
-
-            if (await IsDatabaseLockedAsync(networkDbPath))
-                throw new IOException($"La base RECON réseau est verrouillée: {networkDbPath}");
 
             if (!Directory.Exists(dataDirectory)) Directory.CreateDirectory(dataDirectory);
 
@@ -3073,12 +3056,6 @@ namespace RecoTool.Services
                 if (!File.Exists(networkDbPath))
                 {
                     Debug.WriteLine($"DW: Base réseau introuvable : {networkDbPath}");
-                    return false;
-                }
-
-                if (await IsDatabaseLockedAsync(networkDbPath))
-                {
-                    Debug.WriteLine($"DW: Base réseau verrouillée : {networkDbPath}");
                     return false;
                 }
 
