@@ -197,6 +197,58 @@ namespace RecoTool.Windows
                 swEnrich.Stop();
                 System.Diagnostics.Debug.WriteLine($"[ViewDataEnricher] Enriched {totalRows} rows in {swEnrich.ElapsedMilliseconds}ms");
 
+                // ── Rules catch-up: apply rules for rows that gained a DWINGS link but have no Action yet ──
+                // Scenario: DWINGS data wasn't available on day N → rows loaded without BGI → rules couldn't match.
+                // On day N+1, DWINGS data is available → BGI is filled → re-run rules ONLY for rows where Action is still null.
+                // Safeguard: never touch rows where user already set an Action (prevents overwriting manual choices).
+                try
+                {
+                    var catchUpIds = _allViewData
+                        .Where(r => !r.IsDeleted
+                                    && !r.Action.HasValue
+                                    && (!string.IsNullOrWhiteSpace(r.DWINGS_InvoiceID)
+                                        || !string.IsNullOrWhiteSpace(r.DWINGS_GuaranteeID)
+                                        || !string.IsNullOrWhiteSpace(r.DWINGS_BGPMT)))
+                        .Select(r => r.ID)
+                        .Where(id => !string.IsNullOrWhiteSpace(id))
+                        .ToList();
+
+                    if (catchUpIds.Count > 0 && _reconciliationService != null)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[RulesCatchUp] {catchUpIds.Count} rows have DWINGS link but no Action — running rules...");
+                        var applied = await _reconciliationService.ApplyRulesNowAsync(catchUpIds, "Linking");
+                        if (applied > 0)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[RulesCatchUp] Rules applied to {applied} rows. Scheduling push.");
+                            // Reload affected rows from DB so the grid shows updated Action/KPI
+                            try
+                            {
+                                foreach (var id in catchUpIds)
+                                {
+                                    var viewRow = _allViewData.FirstOrDefault(r => string.Equals(r.ID, id, StringComparison.OrdinalIgnoreCase));
+                                    if (viewRow == null) continue;
+                                    var reco = await _reconciliationService.GetOrCreateReconciliationAsync(id);
+                                    if (reco == null) continue;
+                                    if (reco.Action.HasValue) viewRow.Action = reco.Action;
+                                    if (reco.ActionStatus.HasValue) viewRow.ActionStatus = reco.ActionStatus;
+                                    if (reco.KPI.HasValue) viewRow.KPI = reco.KPI;
+                                    if (reco.IncidentType.HasValue) viewRow.IncidentType = reco.IncidentType;
+                                    if (reco.RiskyItem.HasValue) viewRow.RiskyItem = reco.RiskyItem.Value;
+                                    if (reco.ReasonNonRisky.HasValue) viewRow.ReasonNonRisky = reco.ReasonNonRisky;
+                                }
+                            }
+                            catch { }
+                            // Re-enrich display properties after rule application
+                            try { ViewDataEnricher.EnrichAll(_allViewData, AllUserFields, AssigneeOptions); } catch { }
+                            try { ScheduleBulkPushDebounced(); } catch { }
+                        }
+                    }
+                }
+                catch (Exception exRules)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[RulesCatchUp] Error: {exRules.Message}");
+                }
+
                 // Resolve UIDs in comments to display names for DataGrid display
                 try
                 {

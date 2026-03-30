@@ -80,6 +80,22 @@ namespace RecoTool.Windows
         {
             try
             {
+                // Ignore double-clicks on scrollbar / grid chrome (only react on actual data rows)
+                var source = e.OriginalSource as DependencyObject;
+                if (source != null)
+                {
+                    // Walk up the visual tree — if we hit a ScrollBar before a row, ignore
+                    var hit = source;
+                    bool isDataRow = false;
+                    while (hit != null)
+                    {
+                        if (hit is System.Windows.Controls.Primitives.ScrollBar) return;
+                        if (hit is Syncfusion.UI.Xaml.Grid.VirtualizingCellsControl) { isDataRow = true; break; }
+                        hit = System.Windows.Media.VisualTreeHelper.GetParent(hit);
+                    }
+                    if (!isDataRow) return;
+                }
+
                 var selectedItem = ResultsDataGrid.SelectedItem as ReconciliationViewData;
                 if (selectedItem != null)
                 {

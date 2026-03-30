@@ -161,13 +161,23 @@ namespace RecoTool.Windows
             var currentUser = Environment.UserName;
 
             // Build lookup: rowId -> displayName (exclude self, resolve login → display name)
+            // A single user can have multiple active rows (multi-select)
             var rowToUser = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var u in data.Users)
             {
                 if (string.Equals(u.UserName, currentUser, StringComparison.OrdinalIgnoreCase))
                     continue;
-                if (!string.IsNullOrWhiteSpace(u.ActiveRowId))
-                    rowToUser[u.ActiveRowId] = ResolveDisplayName(u.UserName);
+                var displayName = ResolveDisplayName(u.UserName);
+                // Set DisplayName on the UserPresence object so header badges show it
+                u.DisplayName = displayName;
+                if (u.ActiveRowIds != null)
+                {
+                    foreach (var rid in u.ActiveRowIds)
+                    {
+                        if (!string.IsNullOrWhiteSpace(rid))
+                            rowToUser[rid] = displayName;
+                    }
+                }
             }
 
             // Update per-row presence (only changed rows to avoid unnecessary PropertyChanged)
@@ -217,15 +227,26 @@ namespace RecoTool.Windows
         public bool HasActiveUsers => _activeUsers.Count > 0;
 
         /// <summary>
-        /// Notifies the presence engine of the currently selected row.
+        /// Notifies the presence engine of the currently selected row IDs (multi-select).
         /// Called from SelectionChanged event handler.
         /// </summary>
         private void UpdatePresenceActiveRow()
         {
             try
             {
-                var selectedItem = ResultsDataGrid?.SelectedItem as ReconciliationViewData;
-                _syncEngine?.SetActiveRowId(selectedItem?.ID);
+                var items = ResultsDataGrid?.SelectedItems;
+                if (items == null || items.Count == 0)
+                {
+                    _syncEngine?.SetActiveRowIds(null);
+                    return;
+                }
+                var ids = new List<string>();
+                foreach (var item in items)
+                {
+                    if (item is ReconciliationViewData r && !string.IsNullOrWhiteSpace(r.ID))
+                        ids.Add(r.ID);
+                }
+                _syncEngine?.SetActiveRowIds(ids.Count > 0 ? ids : null);
             }
             catch { }
         }

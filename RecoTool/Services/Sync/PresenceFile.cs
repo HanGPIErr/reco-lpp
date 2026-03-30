@@ -9,21 +9,23 @@ namespace RecoTool.Services.Sync
 {
     /// <summary>
     /// Ultra-lightweight presence system using a single binary file per country on the network share.
-    /// No OleDb connections. File is ~500 bytes max, read/written in <1ms.
+    /// No OleDb connections. File is ~4KB max, read/written in <1ms.
     /// 
-    /// File format:
+    /// File format (v2 — multi-row):
     ///   [4 bytes] SyncVersion (uint32) - incremented after each push
     ///   [4 bytes] UserCount (int32)
-    ///   Per user (fixed 64 bytes each):
+    ///   Per user (fixed 396 bytes each):
     ///     [20 bytes] Username (UTF8, null-padded)
     ///     [8 bytes]  HeartbeatTicks (int64)
-    ///     [36 bytes] ActiveRowId (UTF8, null-padded) - currently selected row ID
+    ///     [4 bytes]  ActiveRowCount (int32, 0..MaxActiveRows)
+    ///     [MaxActiveRows * 36 bytes] ActiveRowIds (UTF8, null-padded each)
     /// </summary>
     public static class PresenceFile
     {
         private const int UserNameLen = 20;
         private const int RowIdLen = 36;
-        private const int UserBlockLen = UserNameLen + 8 + RowIdLen; // 64 bytes
+        private const int MaxActiveRows = 10;
+        private const int UserBlockLen = UserNameLen + 8 + 4 + MaxActiveRows * RowIdLen; // 20+8+4+360 = 392 bytes
         private const int HeaderLen = 8; // SyncVersion(4) + UserCount(4)
         private const int MaxUsers = 10;
         private static readonly TimeSpan StaleTimeout = TimeSpan.FromSeconds(30);
@@ -38,30 +40,47 @@ namespace RecoTool.Services.Sync
         {
             public string UserName { get; set; }
             public DateTime LastHeartbeat { get; set; }
-            public string ActiveRowId { get; set; }
+            public List<string> ActiveRowIds { get; set; } = new List<string>();
             public bool IsStale => (DateTime.UtcNow - LastHeartbeat) > StaleTimeout;
+
+            // Display name resolved on the UI side (not stored in file)
+            public string DisplayName { get; set; }
+
             public string Initials
             {
                 get
                 {
-                    if (string.IsNullOrWhiteSpace(UserName)) return "?";
-                    var parts = UserName.Split(new[] { '.', '_', '-', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    var src = !string.IsNullOrWhiteSpace(DisplayName) ? DisplayName : UserName;
+                    if (string.IsNullOrWhiteSpace(src)) return "?";
+                    var parts = src.Split(new[] { '.', '_', '-', ' ' }, StringSplitOptions.RemoveEmptyEntries);
                     if (parts.Length >= 2) return $"{char.ToUpper(parts[0][0])}{char.ToUpper(parts[1][0])}";
-                    return UserName.Length >= 2 ? UserName.Substring(0, 2).ToUpper() : UserName.ToUpper();
+                    return src.Length >= 2 ? src.Substring(0, 2).ToUpper() : src.ToUpper();
                 }
             }
         }
 
         /// <summary>
         /// Reads the presence file. Returns null if file doesn't exist or read fails.
-        /// Designed to be called every 1-2s from a background thread. Takes <1ms on LAN.
+        /// Uses FileShare.ReadWrite to avoid IOException when another process is writing.
         /// </summary>
         public static PresenceData Read(string filePath)
         {
             try
             {
                 if (!File.Exists(filePath)) return null;
-                var bytes = File.ReadAllBytes(filePath);
+
+                byte[] bytes;
+                using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 4096))
+                {
+                    bytes = new byte[fs.Length];
+                    int read = 0;
+                    while (read < bytes.Length)
+                    {
+                        int n = fs.Read(bytes, read, bytes.Length - read);
+                        if (n <= 0) break;
+                        read += n;
+                    }
+                }
                 if (bytes.Length < HeaderLen) return null;
 
                 var data = new PresenceData();
@@ -72,12 +91,25 @@ namespace RecoTool.Services.Sync
                 for (int i = 0; i < userCount && HeaderLen + (i + 1) * UserBlockLen <= bytes.Length; i++)
                 {
                     int offset = HeaderLen + i * UserBlockLen;
+                    int rowCountOffset = offset + UserNameLen + 8;
+                    int rowCount = 0;
+                    if (rowCountOffset + 4 <= bytes.Length)
+                        rowCount = Math.Min(BitConverter.ToInt32(bytes, rowCountOffset), MaxActiveRows);
+                    if (rowCount < 0) rowCount = 0;
+
                     var user = new UserPresence
                     {
                         UserName = ReadString(bytes, offset, UserNameLen),
                         LastHeartbeat = new DateTime(BitConverter.ToInt64(bytes, offset + UserNameLen), DateTimeKind.Utc),
-                        ActiveRowId = ReadString(bytes, offset + UserNameLen + 8, RowIdLen)
                     };
+                    int rowsBase = rowCountOffset + 4;
+                    for (int r = 0; r < rowCount; r++)
+                    {
+                        int rOff = rowsBase + r * RowIdLen;
+                        if (rOff + RowIdLen > bytes.Length) break;
+                        var rid = ReadString(bytes, rOff, RowIdLen);
+                        if (!string.IsNullOrWhiteSpace(rid)) user.ActiveRowIds.Add(rid);
+                    }
                     data.Users.Add(user);
                 }
 
@@ -89,12 +121,12 @@ namespace RecoTool.Services.Sync
         }
 
         /// <summary>
-        /// Updates presence for the current user (heartbeat + active row).
+        /// Updates presence for the current user (heartbeat + active rows).
         /// Reads the file, merges current user, writes back. Thread-safe via retry.
         /// </summary>
-        public static void WriteHeartbeat(string filePath, string userName, string activeRowId = null)
+        public static void WriteHeartbeat(string filePath, string userName, IList<string> activeRowIds = null)
         {
-            for (int attempt = 0; attempt < 3; attempt++)
+            for (int attempt = 0; attempt < 5; attempt++)
             {
                 try
                 {
@@ -104,12 +136,20 @@ namespace RecoTool.Services.Sync
                     data.Users.RemoveAll(u => u.IsStale || string.Equals(u.UserName, userName, StringComparison.OrdinalIgnoreCase));
 
                     // Add current user
-                    data.Users.Add(new UserPresence
+                    var entry = new UserPresence
                     {
                         UserName = userName,
                         LastHeartbeat = DateTime.UtcNow,
-                        ActiveRowId = activeRowId
-                    });
+                    };
+                    if (activeRowIds != null)
+                    {
+                        for (int i = 0; i < Math.Min(activeRowIds.Count, MaxActiveRows); i++)
+                        {
+                            if (!string.IsNullOrWhiteSpace(activeRowIds[i]))
+                                entry.ActiveRowIds.Add(activeRowIds[i]);
+                        }
+                    }
+                    data.Users.Add(entry);
 
                     // Cap to max users
                     if (data.Users.Count > MaxUsers)
@@ -118,9 +158,9 @@ namespace RecoTool.Services.Sync
                     Write(filePath, data);
                     return;
                 }
-                catch (IOException) when (attempt < 2)
+                catch (IOException) when (attempt < 4)
                 {
-                    Thread.Sleep(50); // Brief retry on file lock contention
+                    Thread.Sleep(50 + attempt * 50); // Increasing retry delay
                 }
                 catch { return; }
             }
@@ -131,7 +171,7 @@ namespace RecoTool.Services.Sync
         /// </summary>
         public static void IncrementSyncVersion(string filePath)
         {
-            for (int attempt = 0; attempt < 3; attempt++)
+            for (int attempt = 0; attempt < 5; attempt++)
             {
                 try
                 {
@@ -140,9 +180,9 @@ namespace RecoTool.Services.Sync
                     Write(filePath, data);
                     return;
                 }
-                catch (IOException) when (attempt < 2)
+                catch (IOException) when (attempt < 4)
                 {
-                    Thread.Sleep(50);
+                    Thread.Sleep(50 + attempt * 50);
                 }
                 catch { return; }
             }
@@ -181,10 +221,20 @@ namespace RecoTool.Services.Sync
                 int offset = HeaderLen + i * UserBlockLen;
                 WriteString(buffer, offset, UserNameLen, data.Users[i].UserName);
                 BitConverter.GetBytes(data.Users[i].LastHeartbeat.Ticks).CopyTo(buffer, offset + UserNameLen);
-                WriteString(buffer, offset + UserNameLen + 8, RowIdLen, data.Users[i].ActiveRowId);
+                int rowCount = Math.Min(data.Users[i].ActiveRowIds?.Count ?? 0, MaxActiveRows);
+                BitConverter.GetBytes(rowCount).CopyTo(buffer, offset + UserNameLen + 8);
+                int rowsBase = offset + UserNameLen + 8 + 4;
+                for (int r = 0; r < rowCount; r++)
+                    WriteString(buffer, rowsBase + r * RowIdLen, RowIdLen, data.Users[i].ActiveRowIds[r]);
             }
 
-            File.WriteAllBytes(filePath, buffer);
+            // Use FileStream + FileShare.ReadWrite to avoid IOException when another process reads simultaneously
+            Directory.CreateDirectory(Path.GetDirectoryName(filePath) ?? string.Empty);
+            using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite, 4096))
+            {
+                fs.Write(buffer, 0, buffer.Length);
+                fs.Flush();
+            }
         }
 
         private static string ReadString(byte[] buffer, int offset, int maxLen)

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -24,7 +25,7 @@ namespace RecoTool.Services.Sync
         private string _presenceFilePath;
         private string _currentUser;
         private string _currentCountryId;
-        private string _activeRowId;
+        private volatile List<string> _activeRowIds;
         private volatile bool _disposed;
 
         // Callbacks (invoked on background thread — caller must dispatch to UI)
@@ -87,11 +88,11 @@ namespace RecoTool.Services.Sync
         }
 
         /// <summary>
-        /// Update the currently selected row ID for presence display.
+        /// Update the currently selected row IDs for presence display (multi-select).
         /// </summary>
-        public void SetActiveRowId(string rowId)
+        public void SetActiveRowIds(List<string> rowIds)
         {
-            _activeRowId = rowId;
+            _activeRowIds = rowIds;
         }
 
         /// <summary>
@@ -119,7 +120,7 @@ namespace RecoTool.Services.Sync
                         // 1) Write heartbeat (updates our presence + active row)
                         if (!string.IsNullOrWhiteSpace(_presenceFilePath))
                         {
-                            PresenceFile.WriteHeartbeat(_presenceFilePath, _currentUser, _activeRowId);
+                            PresenceFile.WriteHeartbeat(_presenceFilePath, _currentUser, _activeRowIds);
                         }
 
                         // 2) Read presence data (includes SyncVersion + all users)
