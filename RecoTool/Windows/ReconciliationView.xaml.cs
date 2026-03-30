@@ -369,10 +369,21 @@ namespace RecoTool.Windows
             var view = CollectionViewSource.GetDefaultView(_viewData);
             var savedSorting = view?.SortDescriptions?.ToList() ?? new List<SortDescription>();
 
-            // 2️⃣  Nettoyage de la collection existante (pas de nouvelle instance)
-            _viewData.Clear();
-            foreach (var i in items)
-                _viewData.Add(i);
+            // 2️⃣  Suspend grid updates, batch-replace collection, then resume.
+            //     This avoids N+1 CollectionChanged events (1 Clear + N Add) that each
+            //     trigger a full layout pass in SfDataGrid.
+            var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+            try { sfGrid?.View?.BeginInit(); } catch { }
+            try
+            {
+                _viewData.Clear();
+                foreach (var i in items)
+                    _viewData.Add(i);
+            }
+            finally
+            {
+                try { sfGrid?.View?.EndInit(); } catch { }
+            }
 
             // 3️⃣  Restauration du tri
             var newView = CollectionViewSource.GetDefaultView(_viewData);
@@ -550,29 +561,10 @@ namespace RecoTool.Windows
             catch { }
         }
 
-        // PERF: Single ScrollToVerticalOffset instead of LineUp/LineDown loop
-        private void ResultsDataGrid_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
-        {
-            try
-            {
-                var sfGrid = sender as Syncfusion.UI.Xaml.Grid.SfDataGrid;
-                if (sfGrid == null) return;
-                if (_resultsScrollViewer == null)
-                {
-                    _resultsScrollViewer = VisualTreeHelpers.FindDescendant<ScrollViewer>(sfGrid);
-                }
-                if (_resultsScrollViewer != null)
-                {
-                    e.Handled = true;
-                    double rowsPerNotch = 3.0;
-                    double pixelDelta = (e.Delta / 120.0) * rowsPerNotch * 30.0;
-                    double newOffset = _resultsScrollViewer.VerticalOffset - pixelDelta;
-                    newOffset = Math.Max(0, Math.Min(newOffset, _resultsScrollViewer.ScrollableHeight));
-                    _resultsScrollViewer.ScrollToVerticalOffset(newOffset);
-                }
-            }
-            catch { }
-        }
+        // PERF: Removed custom pixel-based scrolling — let Syncfusion's native row-virtualized
+        // scroll handle mouse wheel for smooth, jank-free scrolling.
+        // (Handler kept as stub in case it is referenced elsewhere.)
+        private void ResultsDataGrid_PreviewMouseWheel(object sender, MouseWheelEventArgs e) { }
 
         private static string TryGetCellText(Syncfusion.UI.Xaml.Grid.GridColumn column, object dataItem)
         {

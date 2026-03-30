@@ -15,9 +15,16 @@ internal static class BrushCache
     public static readonly Brush LightBlue = Brushes.LightBlue;
     public static readonly Brush LightGreen = Brushes.LightGreen;
     public static readonly Brush LightRed = Brushes.LightCoral;
-    public static readonly Brush Red = new SolidColorBrush(Color.FromRgb(244, 67, 54));      // #F44336
-    public static readonly Brush Yellow = new SolidColorBrush(Color.FromRgb(255, 193, 7));   // #FFC107
-    public static readonly Brush Green = new SolidColorBrush(Color.FromRgb(76, 175, 80));    // #4CAF50
+    public static readonly Brush Red;
+    public static readonly Brush Yellow;
+    public static readonly Brush Green;
+
+    static BrushCache()
+    {
+        var r = new SolidColorBrush(Color.FromRgb(244, 67, 54));  r.Freeze(); Red = r;
+        var y = new SolidColorBrush(Color.FromRgb(255, 193, 7));  y.Freeze(); Yellow = y;
+        var g = new SolidColorBrush(Color.FromRgb(76, 175, 80));  g.Freeze(); Green = g;
+    }
 }
 
 namespace RecoTool.Windows
@@ -119,7 +126,10 @@ namespace RecoTool.Windows
             try
             {
                 var conv = new BrushConverter();
-                return conv.ConvertFromString(color) as Brush ?? BrushCache.Transparent;
+                var b = conv.ConvertFromString(color) as Brush;
+                if (b == null) return BrushCache.Transparent;
+                if (b.CanFreeze) b.Freeze();
+                return b;
             }
             catch { return BrushCache.Transparent; }
         }
@@ -641,6 +651,16 @@ namespace RecoTool.Windows
 
     public class ScopeToBadgeBrushConverter : IValueConverter
     {
+        private static readonly Brush BothBrush;
+        private static readonly Brush ImportBrush;
+        private static readonly Brush EditBrush;
+        static ScopeToBadgeBrushConverter()
+        {
+            var b = new SolidColorBrush(Color.FromArgb(255, 204, 229, 255)); b.Freeze(); BothBrush = b;
+            var i = new SolidColorBrush(Color.FromArgb(255, 204, 255, 204)); i.Freeze(); ImportBrush = i;
+            var e = new SolidColorBrush(Color.FromArgb(255, 255, 242, 204)); e.Freeze(); EditBrush = e;
+        }
+
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
         {
             try
@@ -650,9 +670,9 @@ namespace RecoTool.Windows
 
                 switch (s.ToUpperInvariant())
                 {
-                    case "BOTH": return new SolidColorBrush(Color.FromArgb(255, 204, 229, 255)); // light blue
-                    case "IMPORT": return new SolidColorBrush(Color.FromArgb(255, 204, 255, 204)); // light green
-                    case "EDIT": return new SolidColorBrush(Color.FromArgb(255, 255, 242, 204)); // light yellow
+                    case "BOTH": return BothBrush;
+                    case "IMPORT": return ImportBrush;
+                    case "EDIT": return EditBrush;
                     default: return Brushes.Transparent;
                 }
             }
@@ -665,18 +685,32 @@ namespace RecoTool.Windows
 
     public class PriorityToBadgeBrushConverter : IValueConverter
     {
+        private static readonly Brush RedBrush;
+        private static readonly Brush OrangeBrush;
+        private static readonly Brush YellowBrush;
+        private static readonly Brush GreenBrush;
+        private static readonly Brush GrayBrush;
+        static PriorityToBadgeBrushConverter()
+        {
+            var r = new SolidColorBrush(Color.FromArgb(255, 255, 204, 204)); r.Freeze(); RedBrush = r;
+            var o = new SolidColorBrush(Color.FromArgb(255, 255, 224, 178)); o.Freeze(); OrangeBrush = o;
+            var y = new SolidColorBrush(Color.FromArgb(255, 255, 251, 204)); y.Freeze(); YellowBrush = y;
+            var g = new SolidColorBrush(Color.FromArgb(255, 230, 244, 234)); g.Freeze(); GreenBrush = g;
+            var gr = new SolidColorBrush(Color.FromArgb(255, 240, 240, 240)); gr.Freeze(); GrayBrush = gr;
+        }
+
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
         {
             try
             {
                 int p = value is int i ? i : (int.TryParse(value?.ToString() ?? "0", out var parsed) ? parsed : 0);
 
-                if (p <= 25) return new SolidColorBrush(Color.FromArgb(255, 255, 204, 204)); // redish
-                if (p <= 50) return new SolidColorBrush(Color.FromArgb(255, 255, 224, 178)); // orange
-                if (p <= 100) return new SolidColorBrush(Color.FromArgb(255, 255, 251, 204)); // yellow
-                if (p <= 200) return new SolidColorBrush(Color.FromArgb(255, 230, 244, 234)); // pale green
+                if (p <= 25) return RedBrush;
+                if (p <= 50) return OrangeBrush;
+                if (p <= 100) return YellowBrush;
+                if (p <= 200) return GreenBrush;
 
-                return new SolidColorBrush(Color.FromArgb(255, 240, 240, 240)); // neutral gray
+                return GrayBrush;
             }
             catch { return Brushes.Transparent; }
         }

@@ -1168,8 +1168,8 @@
                               FontSize="12"
                               RowHeight="30"
                               HeaderRowHeight="36"
-                              GridLinesVisibility="Both"
-                              HeaderLinesVisibility="Both"
+                              GridLinesVisibility="Horizontal"
+                              HeaderLinesVisibility="Horizontal"
                               RowSelectionBrush="{StaticResource GridSelectionBrush}"
                               SelectionForegroundBrush="{StaticResource GridSelectionFg}"
                               HeaderStyle="{StaticResource DefaultGridHeaderStyle}"
@@ -1177,7 +1177,6 @@
                               SelectionChanged="ResultsDataGrid_SelectionChanged"
                               CurrentCellEndEdit="ResultsDataGrid_CurrentCellEndEdit"
                               CellTapped="ResultsDataGrid_CellTapped"
-                              PreviewMouseWheel="ResultsDataGrid_PreviewMouseWheel"
                               MouseDoubleClick="ResultsDataGrid_MouseDoubleClick"
                               QueryColumnDragging="ResultsDataGrid_QueryColumnDragging"
                               Grid.ColumnSpan="2" Grid.RowSpan="2">
@@ -1639,9 +1638,6 @@
                 Panel.ZIndex="1000"
                 MouseLeftButtonUp="ToastPanel_MouseLeftButtonUp"
                 Cursor="Hand">
-            <Border.Effect>
-                <DropShadowEffect Color="Black" BlurRadius="15" ShadowDepth="3" Opacity="0.5"/>
-            </Border.Effect>
             <StackPanel Orientation="Horizontal">
                 <TextBlock Text="✨" FontSize="16" Foreground="#4CAF50" VerticalAlignment="Center" Margin="0,0,8,0"/>
                 <TextBlock x:Name="ToastText" Text="" Foreground="White" FontWeight="SemiBold" TextWrapping="Wrap" MaxWidth="400"/>
