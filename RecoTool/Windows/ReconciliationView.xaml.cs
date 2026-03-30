@@ -455,7 +455,73 @@ namespace RecoTool.Windows
                 if (sender is Syncfusion.UI.Xaml.Grid.SfDataGrid sfGrid)
                 {
                     TryHookResultsGridScroll(sfGrid);
+                    // (Ctrl+C is intercepted at UserControl level via constructor PreviewKeyDown.)
                 }
+            }
+            catch { }
+        }
+
+        private void ResultsDataGrid_CopyInterceptKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            try
+            {
+                if (e.Key != System.Windows.Input.Key.C
+                    || (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) == 0)
+                    return;
+
+                var sfGrid = (sender as Syncfusion.UI.Xaml.Grid.SfDataGrid)
+                          ?? this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (sfGrid == null) return;
+
+                var col = sfGrid.CurrentColumn;
+                var item = sfGrid.CurrentItem;
+
+                if (col != null && item != null)
+                {
+                    string text = TryGetCellText(col, item);
+                    if (!string.IsNullOrEmpty(text))
+                    {
+                        try { Clipboard.SetDataObject(text, copy: true); } catch { }
+                        try { ShowToast("Copied", durationSeconds: 2); } catch { }
+                        e.Handled = true;
+                        return;
+                    }
+                }
+
+                // Fallback: copy selected rows as tab-separated text
+                try
+                {
+                    var items = sfGrid.SelectedItems?.Cast<ReconciliationViewData>().ToList();
+                    if (items != null && items.Count > 0)
+                    {
+                        var cols = sfGrid.Columns
+                            .Where(c => !c.IsHidden && !string.IsNullOrWhiteSpace(c.MappingName))
+                            .ToList();
+                        var sb = new System.Text.StringBuilder();
+                        foreach (var it in items)
+                        {
+                            var values = cols.Select(c =>
+                            {
+                                try
+                                {
+                                    var mn = c.MappingName;
+                                    if (string.IsNullOrWhiteSpace(mn)) return string.Empty;
+                                    var p = it.GetType().GetProperty(mn);
+                                    return p?.GetValue(it)?.ToString() ?? string.Empty;
+                                }
+                                catch { return string.Empty; }
+                            });
+                            sb.AppendLine(string.Join("\t", values));
+                        }
+                        var result = sb.ToString().TrimEnd();
+                        if (!string.IsNullOrEmpty(result))
+                        {
+                            try { Clipboard.SetDataObject(result, copy: true); } catch { }
+                            e.Handled = true;
+                        }
+                    }
+                }
+                catch { }
             }
             catch { }
         }
@@ -503,34 +569,6 @@ namespace RecoTool.Windows
                     double newOffset = _resultsScrollViewer.VerticalOffset - pixelDelta;
                     newOffset = Math.Max(0, Math.Min(newOffset, _resultsScrollViewer.ScrollableHeight));
                     _resultsScrollViewer.ScrollToVerticalOffset(newOffset);
-                }
-            }
-            catch { }
-        }
-
-        // Ctrl+C behavior:
-        // - If current cell is read-only, copy that cell's displayed text only (single-field copy) and handle.
-        // - Otherwise, let default bubbling handle (editors or row-level copy).
-        private void ResultsDataGrid_PreviewExecuted(object sender, ExecutedRoutedEventArgs e)
-        {
-            try
-            {
-                if (!ReferenceEquals(e.Command, ApplicationCommands.Copy)) return;
-                var sfGrid = sender as Syncfusion.UI.Xaml.Grid.SfDataGrid;
-                if (sfGrid == null) return;
-                var col = sfGrid.CurrentColumn;
-                var item = sfGrid.CurrentItem;
-                // AllowEditing=false means read-only in SfDataGrid
-                bool isReadOnlyCell = (col != null && !col.AllowEditing) || !sfGrid.AllowEditing;
-                if (isReadOnlyCell && col != null && item != null)
-                {
-                    string text = TryGetCellText(col, item);
-                    if (!string.IsNullOrEmpty(text))
-                    {
-                        try { Clipboard.SetText(text); } catch { }
-                        try { ShowToast("Copied", durationSeconds: 2); } catch { }
-                        e.Handled = true;
-                    }
                 }
             }
             catch { }
@@ -974,11 +1012,10 @@ namespace RecoTool.Windows
             SubscribeToSyncEvents();
             RefreshCompleted += (s, e) => _hasLoadedOnce = true;
             try { VM.PropertyChanged += VM_PropertyChanged; } catch { }
+            // Intercept Ctrl+C at UserControl level (tunnels before Syncfusion's OnPreviewKeyDown).
+            this.PreviewKeyDown += ResultsDataGrid_CopyInterceptKeyDown;
         }
 
-        /// <summary>
-        /// Constructeur avec services
-        /// </summary>
         public ReconciliationView(ReconciliationService reconciliationService, OfflineFirstService offlineFirstService, FreeApiService freeApi) : this()
         {
             _reconciliationService = reconciliationService;
