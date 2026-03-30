@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows;
 using System.Windows.Threading;
 using RecoTool.Services;
@@ -15,6 +17,50 @@ namespace RecoTool.Windows
     {
         private BackgroundSyncEngine _syncEngine;
         private PresenceFile.PresenceData _lastPresenceData;
+
+        // Cache login -> display name (resolved once per session via AD/GetUserNameEx)
+        private static readonly Dictionary<string, string> _displayNameCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        [DllImport("secur32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern int GetUserNameExW(int nameFormat, StringBuilder lpNameBuffer, ref int lpnSize);
+
+        /// <summary>
+        /// Resolves a Windows login name to a human-readable display name (e.g. "GDUPONT" → "Gianni Dupont").
+        /// Uses GetUserNameExW for the current user, falls back to formatting the login name for others.
+        /// </summary>
+        private static string ResolveDisplayName(string loginName)
+        {
+            if (string.IsNullOrWhiteSpace(loginName)) return loginName;
+            if (_displayNameCache.TryGetValue(loginName, out var cached)) return cached;
+
+            string resolved = null;
+
+            // For the current user, try the Win32 API (NameDisplay = 3)
+            if (string.Equals(loginName, Environment.UserName, StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var sb = new StringBuilder(256);
+                    int size = sb.Capacity;
+                    if (GetUserNameExW(3, sb, ref size) != 0 && sb.Length > 0)
+                        resolved = sb.ToString();
+                }
+                catch { }
+            }
+
+            // Fallback: format the login name nicely ("gianni.dupont" → "Gianni Dupont")
+            if (string.IsNullOrWhiteSpace(resolved))
+            {
+                var parts = loginName.Split(new[] { '.', '_', '-' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 2)
+                    resolved = string.Join(" ", parts.Select(p => char.ToUpper(p[0]) + (p.Length > 1 ? p.Substring(1).ToLower() : "")));
+                else
+                    resolved = loginName;
+            }
+
+            _displayNameCache[loginName] = resolved;
+            return resolved;
+        }
 
         // Observable list of active users for the header panel
         private ObservableCollection<PresenceFile.UserPresence> _activeUsers = new ObservableCollection<PresenceFile.UserPresence>();
@@ -114,14 +160,14 @@ namespace RecoTool.Windows
         {
             var currentUser = Environment.UserName;
 
-            // Build lookup: rowId -> userName (exclude self)
+            // Build lookup: rowId -> displayName (exclude self, resolve login → display name)
             var rowToUser = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var u in data.Users)
             {
                 if (string.Equals(u.UserName, currentUser, StringComparison.OrdinalIgnoreCase))
                     continue;
                 if (!string.IsNullOrWhiteSpace(u.ActiveRowId))
-                    rowToUser[u.ActiveRowId] = u.UserName;
+                    rowToUser[u.ActiveRowId] = ResolveDisplayName(u.UserName);
             }
 
             // Update per-row presence (only changed rows to avoid unnecessary PropertyChanged)

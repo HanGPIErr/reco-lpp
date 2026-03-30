@@ -819,11 +819,56 @@ namespace RecoTool.Services
                                         {
                                             setParts.Add("[Version] = [Version] + 1");
                                         }
-                                        using (var up = new OleDbCommand($"UPDATE [{table}] SET {string.Join(", ", setParts)} WHERE [{pkCol}] = @key", netConn, tx))
+
+                                        // Optimistic concurrency: if Version column exists, add WHERE Version = @localVer
+                                        // to detect if another user modified the row since our last pull.
+                                        string whereClause = $"[{pkCol}] = @key";
+                                        object localVersionVal = null;
+                                        if (hasVersionCol && localValues.ContainsKey("Version") && localValues["Version"] != null && localValues["Version"] != DBNull.Value)
+                                        {
+                                            whereClause += " AND [Version] = @localVer";
+                                            localVersionVal = localValues["Version"];
+                                        }
+
+                                        using (var up = new OleDbCommand($"UPDATE [{table}] SET {string.Join(", ", setParts)} WHERE {whereClause}", netConn, tx))
                                         {
                                             for (int i = 0; i < effectiveCols.Count; i++) addParam(up, $"@p{i}", localValues[effectiveCols[i]], effectiveCols[i], typeMap);
                                             addParam(up, "@key", localPkVal, pkCol, typeMap);
-                                            await execWithRetryAsync(up);
+                                            if (localVersionVal != null)
+                                                addParam(up, "@localVer", localVersionVal, "Version", typeMap);
+
+                                            // Execute with retry, but check rows affected for conflict detection
+                                            int rowsAffected = 0;
+                                            const int maxRetries = 5;
+                                            int retryAttempt = 0;
+                                            while (true)
+                                            {
+                                                try
+                                                {
+                                                    rowsAffected = await up.ExecuteNonQueryAsync();
+                                                    break;
+                                                }
+                                                catch (OleDbException ex)
+                                                {
+                                                    bool isLock = false;
+                                                    foreach (OleDbError err in ex.Errors)
+                                                    {
+                                                        if (err.NativeError == 3218 || err.NativeError == 3260 || err.NativeError == 3188) { isLock = true; break; }
+                                                    }
+                                                    if (!isLock) { var m = ex.Message?.ToLowerInvariant() ?? ""; if (m.Contains("locked") || m.Contains("verrou")) isLock = true; }
+                                                    if (isLock && retryAttempt < maxRetries) { retryAttempt++; await Task.Delay(200 * retryAttempt, token); continue; }
+                                                    throw;
+                                                }
+                                            }
+
+                                            if (rowsAffected == 0 && localVersionVal != null)
+                                            {
+                                                // Conflict: another user modified this row since our last pull.
+                                                // Skip — the next pull will bring the latest state from network.
+                                                System.Diagnostics.Debug.WriteLine($"[PUSH][{countryId}] CONFLICT on {table} PK={localPkVal} (localVer={localVersionVal}). Skipping — will resolve on next pull.");
+                                                try { LogManager.Warning($"[PUSH][{countryId}] Conflict detected on {table} PK={localPkVal}. Row skipped."); } catch { }
+                                                continue; // skip appliedIds.Add — ChangeLog entry stays unsynced for retry after pull
+                                            }
                                         }
 
                                         // Mirror Version increment locally (best-effort) so local stays aligned without a pull
