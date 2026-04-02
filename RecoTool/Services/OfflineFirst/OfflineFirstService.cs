@@ -1129,6 +1129,9 @@ namespace RecoTool.Services
 
                 try
                 {
+                    await _lockDbGate.WaitAsync(token).ConfigureAwait(false);
+                    try
+                    {
                     using (var connection = new OleDbConnection(connStr))
                     {
                         await connection.OpenAsync(token);
@@ -1234,8 +1237,13 @@ namespace RecoTool.Services
                             }
                         }
                     }
+                    }
+                    finally
+                    {
+                        _lockDbGate.Release();
+                    }
 
-                    // If we reach here, a lock is already held
+                    // If we reach here, a lock is already held (retry delay OUTSIDE semaphore)
                     if (waitBudgetSeconds == 0 || DateTime.UtcNow >= deadline)
                         throw new TimeoutException("Impossible d'acquérir le verrou global dans le délai imparti.");
 
@@ -1315,6 +1323,8 @@ namespace RecoTool.Services
             if (string.IsNullOrEmpty(_currentCountryId))
                 return false;
 
+            // Serialize access to the lock DB to prevent concurrent OleDb opens ("file in use")
+            await _lockDbGate.WaitAsync(token).ConfigureAwait(false);
             try
             {
                 string connStr = GetRemoteLockConnectionString(_currentCountryId);
@@ -1347,6 +1357,10 @@ namespace RecoTool.Services
                 // En cas d'erreur d'accès réseau, considérer qu'aucun verrou ne bloque l'IHM
                 return false;
             }
+            finally
+            {
+                _lockDbGate.Release();
+            }
         }
 
         /// <summary>
@@ -1371,6 +1385,7 @@ namespace RecoTool.Services
         public async Task SetSyncStatusAsync(string status, CancellationToken token = default)
         {
             if (string.IsNullOrEmpty(_currentCountryId)) return;
+            await _lockDbGate.WaitAsync(token).ConfigureAwait(false);
             try
             {
                 string connStr = GetRemoteLockConnectionString(_currentCountryId);
@@ -1390,6 +1405,10 @@ namespace RecoTool.Services
                 }
             }
             catch { /* best-effort */ }
+            finally
+            {
+                _lockDbGate.Release();
+            }
         }
 
         /// <summary>
@@ -1398,6 +1417,7 @@ namespace RecoTool.Services
         public async Task<string> GetCurrentSyncStatusAsync(CancellationToken token = default)
         {
             if (string.IsNullOrEmpty(_currentCountryId)) return null;
+            await _lockDbGate.WaitAsync(token).ConfigureAwait(false);
             try
             {
                 string connStr = GetRemoteLockConnectionString(_currentCountryId);
@@ -1417,6 +1437,10 @@ namespace RecoTool.Services
                 }
             }
             catch { return null; }
+            finally
+            {
+                _lockDbGate.Release();
+            }
         }
 
         #region Configuration Properties

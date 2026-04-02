@@ -330,7 +330,10 @@ namespace RecoTool.Services
             try
             {
                 await _offlineFirstService.RefreshConfigurationAsync();
-                await _offlineFirstService.SetCurrentCountryAsync(countryId, suppressPush: true);
+                // PERF: Do NOT call SetCurrentCountryAsync here — it copies DW + AMBRE from network → local,
+                // which is completely redundant since we just published local → network during import.
+                // That call alone can take several minutes for large databases over network.
+                // Instead, just update the sync anchor and invalidate caches.
                 await _offlineFirstService.SetLastSyncAnchorAsync(countryId, DateTime.UtcNow);
                 
                 // Invalidate all caches for this country after AMBRE import

@@ -337,6 +337,9 @@ FodyWeavers/
 # App.config for .NET Framework
 App.config
 
+# Local secrets (API keys, license keys — never commit)
+secrets.config
+
 # OfflineFirstAccess build artifacts
 OfflineFirstAccess/bin/
 OfflineFirstAccess/obj/

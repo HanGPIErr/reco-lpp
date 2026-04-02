@@ -570,7 +570,13 @@ namespace RecoTool.Services.Rules
                     // When lines are linked (grouped) and the balance is zero → Action = Trigger, Status = Pending
                     new TruthRule { RuleId = "Linking - Grouped Balance Zero", Scope = RuleScope.Edit, IsGrouped = true, IsAmountMatch = true, OutputActionId = 4, OutputActionDone = false, Enabled = true, Priority = 10, ApplyTo = ApplyTarget.Both, AutoApply = true, Message = "Linked lines with zero balance - Trigger pending", TriggerOnField = "Linking" },
                     // When Action = Trigger (4) and status changes to Done → KPI = Paid But Not Reconciled (18), ReasonNonRisky = Commissions already collected (30)
-                    new TruthRule { RuleId = "Trigger Done - Paid Not Reconciled", Scope = RuleScope.Edit, CurrentActionId = "4", IsActionDone = true, OutputKpiId = 18, OutputReasonNonRiskyId = 30, OutputRiskyItem = false, Enabled = true, Priority = 20, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "Trigger done - KPI set to Paid But Not Reconciled", TriggerOnField = "ActionStatus" }
+                    new TruthRule { RuleId = "Trigger Done - Paid Not Reconciled", Scope = RuleScope.Edit, CurrentActionId = "4", IsActionDone = true, OutputKpiId = 18, OutputReasonNonRiskyId = 30, OutputRiskyItem = false, Enabled = true, Priority = 20, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "Trigger done - KPI set to Paid But Not Reconciled", TriggerOnField = "ActionStatus" },
+
+                    // ── Receivable: Direct Debit fully executed ──
+                    // If PaymentRequestStatus = FULLY_EXECUTED & PaymentMethod = DIRECT_DEBIT
+                    //   → Action = Execute (5), ActionStatus = Done, KPI = Paid But Not Reconciled (18),
+                    //     ReasonNonRisky = Commission already collected as credit in the account 67P (30)
+                    new TruthRule { RuleId = "R-DIRDEB-FULLY-EXECUTED", Scope = RuleScope.Import, AccountSide = "R", TransactionType = "DIRECT_DEBIT", PaymentRequestStatus = "FULLY_EXECUTED", OutputActionId = 5, OutputActionDone = true, OutputKpiId = 18, OutputReasonNonRiskyId = 30, OutputRiskyItem = false, Enabled = true, Priority = 90, ApplyTo = ApplyTarget.Self, AutoApply = true, Message = "Direct Debit fully executed - commission already collected" }
                 };
 
                 // Only keep rules that have at least one output to apply

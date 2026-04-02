@@ -32,6 +32,11 @@ namespace RecoTool.Services.Ambre
         private readonly IFreeApiClient _freeApi;
         private TransformationService _transformationService; // Cached per import
 
+        // ── PERF: Pre-built O(1) lookup dictionaries (built once per import, avoid O(n) FirstOrDefault per row) ──
+        private Dictionary<string, DwingsInvoiceDto> _invoiceById;
+        private Dictionary<string, DwingsInvoiceDto> _invoiceByBgpmt;
+        private Dictionary<string, DwingsGuaranteeDto> _guaranteeById;
+
         public AmbreReconciliationUpdater(
             OfflineFirstService offlineFirstService,
             string currentUser,
@@ -68,6 +73,23 @@ namespace RecoTool.Services.Ambre
                 var dwGuarantees = (await _reconciliationService.GetDwingsGuaranteesAsync()).ToList();
                 dwTimer.Stop();
                 LogManager.Info($"[PERF] DWINGS data loaded: {dwInvoices.Count} invoices, {dwGuarantees.Count} guarantees in {dwTimer.ElapsedMilliseconds}ms");
+
+                // ── PERF: Build O(1) lookup dictionaries once for entire import ──
+                _invoiceById = new Dictionary<string, DwingsInvoiceDto>(dwInvoices.Count, StringComparer.OrdinalIgnoreCase);
+                _invoiceByBgpmt = new Dictionary<string, DwingsInvoiceDto>(dwInvoices.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var inv in dwInvoices)
+                {
+                    if (!string.IsNullOrWhiteSpace(inv?.INVOICE_ID))
+                        _invoiceById[inv.INVOICE_ID] = inv;
+                    if (!string.IsNullOrWhiteSpace(inv?.BGPMT))
+                        _invoiceByBgpmt[inv.BGPMT] = inv;
+                }
+                _guaranteeById = new Dictionary<string, DwingsGuaranteeDto>(dwGuarantees.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var g in dwGuarantees)
+                {
+                    if (!string.IsNullOrWhiteSpace(g?.GUARANTEE_ID))
+                        _guaranteeById[g.GUARANTEE_ID] = g;
+                }
 
                 // Préparer les enregistrements de réconciliation
                 var prepareTimer = System.Diagnostics.Stopwatch.StartNew();
@@ -473,14 +495,13 @@ namespace RecoTool.Services.Ambre
             if (!string.IsNullOrWhiteSpace(dataAmbre.Reconciliation_Num))
                 return dataAmbre.Reconciliation_Num.Trim();
 
-            // Priority 2: If guarantee type is REISSUANCE => use Guarantee ID
-            if (!string.IsNullOrWhiteSpace(guaranteeId) && dwGuarantees != null)
+            // Priority 2: If guarantee type is REISSUANCE => use Guarantee ID (O(1) lookup)
+            if (!string.IsNullOrWhiteSpace(guaranteeId))
             {
-                var guarantee = dwGuarantees.FirstOrDefault(g => 
-                    string.Equals(g?.GUARANTEE_ID, guaranteeId, StringComparison.OrdinalIgnoreCase));
-                
-                if (guarantee != null && 
-                    string.Equals(guarantee.GUARANTEE_TYPE, "REISSUANCE", StringComparison.OrdinalIgnoreCase))
+                DwingsGuaranteeDto guarantee;
+                if (_guaranteeById != null && _guaranteeById.TryGetValue(guaranteeId, out guarantee)
+                    && guarantee != null
+                    && string.Equals(guarantee.GUARANTEE_TYPE, "REISSUANCE", StringComparison.OrdinalIgnoreCase))
                 {
                     return guaranteeId.Trim();
                 }
@@ -510,8 +531,9 @@ namespace RecoTool.Services.Ambre
                 string paymentMethod = null;
                 if (!string.IsNullOrWhiteSpace(reconciliation?.DWINGS_InvoiceID))
                 {
-                    var inv = dwInvoices?.FirstOrDefault(i => string.Equals(i?.INVOICE_ID, reconciliation.DWINGS_InvoiceID, StringComparison.OrdinalIgnoreCase));
-                    paymentMethod = inv?.PAYMENT_METHOD;
+                    DwingsInvoiceDto inv;
+                    if (_invoiceById != null && _invoiceById.TryGetValue(reconciliation.DWINGS_InvoiceID, out inv))
+                        paymentMethod = inv?.PAYMENT_METHOD;
                 }
                 
                 // Map PAYMENT_METHOD to TransactionType enum
@@ -543,8 +565,9 @@ namespace RecoTool.Services.Ambre
             {
                 try
                 {
-                    var guar = dwGuarantees?.FirstOrDefault(g => string.Equals(g?.GUARANTEE_ID, reconciliation.DWINGS_GuaranteeID, StringComparison.OrdinalIgnoreCase));
-                    guaranteeType = guar?.GUARANTEE_TYPE;
+                    DwingsGuaranteeDto guar;
+                    if (_guaranteeById != null && _guaranteeById.TryGetValue(reconciliation.DWINGS_GuaranteeID, out guar))
+                        guaranteeType = guar?.GUARANTEE_TYPE;
                 }
                 catch { }
             }
@@ -581,22 +604,21 @@ namespace RecoTool.Services.Ambre
                 ? (int?)(today - reconciliation.LastClaimDate.Value.Date).TotalDays
                 : null;
 
-            // OPTIMIZATION: Use passed dwInvoices instead of reloading
+            // OPTIMIZATION: Use pre-built dictionary instead of O(n) linear scan
             string mtStatus = null;
             bool? hasCommEmail = null;
             bool? bgiInitiated = null;
             try
             {
-                if (!string.IsNullOrWhiteSpace(reconciliation?.DWINGS_InvoiceID))
+                DwingsInvoiceDto invLookup;
+                if (!string.IsNullOrWhiteSpace(reconciliation?.DWINGS_InvoiceID)
+                    && _invoiceById != null && _invoiceById.TryGetValue(reconciliation.DWINGS_InvoiceID, out invLookup)
+                    && invLookup != null)
                 {
-                    var inv = dwInvoices?.FirstOrDefault(i => string.Equals(i?.INVOICE_ID, reconciliation.DWINGS_InvoiceID, StringComparison.OrdinalIgnoreCase));
-                    if (inv != null)
-                    {
-                        mtStatus = inv.MT_STATUS;
-                        hasCommEmail = inv.COMM_ID_EMAIL;
-                        if (!string.IsNullOrWhiteSpace(inv.T_INVOICE_STATUS))
-                            bgiInitiated = string.Equals(inv.T_INVOICE_STATUS, "INITIATED", StringComparison.OrdinalIgnoreCase);
-                    }
+                    mtStatus = invLookup.MT_STATUS;
+                    hasCommEmail = invLookup.COMM_ID_EMAIL;
+                    if (!string.IsNullOrWhiteSpace(invLookup.T_INVOICE_STATUS))
+                        bgiInitiated = string.Equals(invLookup.T_INVOICE_STATUS, "INITIATED", StringComparison.OrdinalIgnoreCase);
                 }
             }
             catch { }
@@ -651,10 +673,12 @@ namespace RecoTool.Services.Ambre
                 if (string.IsNullOrWhiteSpace(bgi) && string.IsNullOrWhiteSpace(bgpmt))
                     continue;
 
-                // Find invoice and check payment method
-                var invoice = dwInvoices.FirstOrDefault(i => 
-                    (!string.IsNullOrWhiteSpace(bgi) && string.Equals(i?.INVOICE_ID, bgi, StringComparison.OrdinalIgnoreCase)) ||
-                    (!string.IsNullOrWhiteSpace(bgpmt) && string.Equals(i?.BGPMT, bgpmt, StringComparison.OrdinalIgnoreCase)));
+                // Find invoice and check payment method (O(1) dictionary lookup)
+                DwingsInvoiceDto invoice = null;
+                if (_invoiceById != null && !string.IsNullOrWhiteSpace(bgi))
+                    _invoiceById.TryGetValue(bgi, out invoice);
+                if (invoice == null && _invoiceByBgpmt != null && !string.IsNullOrWhiteSpace(bgpmt))
+                    _invoiceByBgpmt.TryGetValue(bgpmt, out invoice);
 
                 if (invoice != null && string.Equals(invoice.PAYMENT_METHOD, "DIRECT_DEBIT", StringComparison.OrdinalIgnoreCase))
                 {
@@ -984,75 +1008,80 @@ namespace RecoTool.Services.Ambre
                 if (updatedRecords == null || updatedRecords.Count == 0) return;
                 var invoices = await _reconciliationService.GetDwingsInvoicesAsync();
                 var dwList = invoices?.ToList() ?? new List<DwingsInvoiceDto>();
-                
-                // Also get guarantees for OfficialRef/PartyRef matching
+
                 var guarantees = await _reconciliationService.GetDwingsGuaranteesAsync();
                 var dwGuaranteeList = guarantees?.ToList();
 
+                // PERF: Phase 1 — resolve all references in memory (CPU-bound string matching)
+                var resolvedRefs = new List<(string Id, Ambre.DwingsTokens Refs)>();
+                foreach (var amb in updatedRecords)
+                {
+                    if (amb == null || string.IsNullOrWhiteSpace(amb.ID)) continue;
+                    bool isPivot = amb.IsPivotAccount(country.CNT_AmbrePivot);
+                    var refs = await _dwingsResolver.ResolveReferencesAsync(amb, isPivot, dwList, dwGuaranteeList);
+                    if (refs != null && (!string.IsNullOrWhiteSpace(refs.InvoiceId)
+                                      || !string.IsNullOrWhiteSpace(refs.CommissionId)
+                                      || !string.IsNullOrWhiteSpace(refs.GuaranteeId)))
+                    {
+                        resolvedRefs.Add((amb.ID, refs));
+                    }
+                }
+
+                if (resolvedRefs.Count == 0) return;
+
+                // PERF: Phase 2 — single prepared UPDATE per row (merges 3 separate UPDATEs into 1)
                 var connectionString = _offlineFirstService.GetCountryConnectionString(countryId);
                 using (var conn = new OleDbConnection(connectionString))
                 {
-                    await conn.OpenAsync();
+                    await conn.OpenAsync().ConfigureAwait(false);
                     using (var tx = conn.BeginTransaction())
                     {
                         try
                         {
                             var nowUtc = DateTime.UtcNow;
-                            foreach (var amb in updatedRecords)
+
+                            using (var cmd = new OleDbCommand(
+                                "UPDATE [T_Reconciliation] SET " +
+                                "[DWINGS_InvoiceID] = IIF(([DWINGS_InvoiceID] IS NULL OR [DWINGS_InvoiceID] = '') AND ? <> '', ?, [DWINGS_InvoiceID]), " +
+                                "[DWINGS_BGPMT] = IIF(([DWINGS_BGPMT] IS NULL OR [DWINGS_BGPMT] = '') AND ? <> '', ?, [DWINGS_BGPMT]), " +
+                                "[DWINGS_GuaranteeID] = IIF(([DWINGS_GuaranteeID] IS NULL OR [DWINGS_GuaranteeID] = '') AND ? <> '', ?, [DWINGS_GuaranteeID]), " +
+                                "[LastModified]=?, [ModifiedBy]=? " +
+                                "WHERE [ID]=?", conn, tx))
                             {
-                                if (amb == null || string.IsNullOrWhiteSpace(amb.ID)) continue;
-                                bool isPivot = amb.IsPivotAccount(country.CNT_AmbrePivot);
-                                var refs = await _dwingsResolver.ResolveReferencesAsync(amb, isPivot, dwList, dwGuaranteeList);
-                                if (refs != null)
+                                cmd.Parameters.Add("@InvCheck", OleDbType.VarWChar, 255);
+                                cmd.Parameters.Add("@InvVal", OleDbType.VarWChar, 255);
+                                cmd.Parameters.Add("@BgpmtCheck", OleDbType.VarWChar, 255);
+                                cmd.Parameters.Add("@BgpmtVal", OleDbType.VarWChar, 255);
+                                cmd.Parameters.Add("@GuarCheck", OleDbType.VarWChar, 255);
+                                cmd.Parameters.Add("@GuarVal", OleDbType.VarWChar, 255);
+                                cmd.Parameters.Add("@LastModified", OleDbType.Date);
+                                cmd.Parameters.Add("@ModifiedBy", OleDbType.VarWChar, 255);
+                                cmd.Parameters.Add("@ID", OleDbType.VarWChar, 255);
+
+                                cmd.Prepare();
+
+                                foreach (var item in resolvedRefs)
                                 {
-                                    if (!string.IsNullOrWhiteSpace(refs.InvoiceId))
-                                    {
-                                        using (var cmd = new OleDbCommand(
-                                            "UPDATE [T_Reconciliation] SET [DWINGS_InvoiceID]=?, [LastModified]=?, [ModifiedBy]=? " +
-                                            "WHERE [ID]=? AND ([DWINGS_InvoiceID] IS NULL OR [DWINGS_InvoiceID] = '')",
-                                            conn, tx))
-                                        {
-                                            cmd.Parameters.AddWithValue("@DWINGS_InvoiceID", refs.InvoiceId);
-                                            cmd.Parameters.Add("@LastModified", OleDbType.Date).Value = nowUtc;
-                                            cmd.Parameters.AddWithValue("@ModifiedBy", _currentUser);
-                                            cmd.Parameters.AddWithValue("@ID", amb.ID);
-                                            await cmd.ExecuteNonQueryAsync();
-                                        }
-                                    }
+                                    var inv = item.Refs.InvoiceId ?? string.Empty;
+                                    var bgp = item.Refs.CommissionId ?? string.Empty;
+                                    var guar = item.Refs.GuaranteeId ?? string.Empty;
 
-                                    if (!string.IsNullOrWhiteSpace(refs.CommissionId))
-                                    {
-                                        using (var cmd = new OleDbCommand(
-                                            "UPDATE [T_Reconciliation] SET [DWINGS_BGPMT]=?, [LastModified]=?, [ModifiedBy]=? " +
-                                            "WHERE [ID]=? AND ([DWINGS_BGPMT] IS NULL OR [DWINGS_BGPMT] = '')",
-                                            conn, tx))
-                                        {
-                                            cmd.Parameters.AddWithValue("@DWINGS_BGPMT", refs.CommissionId);
-                                            cmd.Parameters.Add("@LastModified", OleDbType.Date).Value = nowUtc;
-                                            cmd.Parameters.AddWithValue("@ModifiedBy", _currentUser);
-                                            cmd.Parameters.AddWithValue("@ID", amb.ID);
-                                            await cmd.ExecuteNonQueryAsync();
-                                        }
-                                    }
+                                    cmd.Parameters["@InvCheck"].Value = inv;
+                                    cmd.Parameters["@InvVal"].Value = inv;
+                                    cmd.Parameters["@BgpmtCheck"].Value = bgp;
+                                    cmd.Parameters["@BgpmtVal"].Value = bgp;
+                                    cmd.Parameters["@GuarCheck"].Value = guar;
+                                    cmd.Parameters["@GuarVal"].Value = guar;
+                                    cmd.Parameters["@LastModified"].Value = nowUtc;
+                                    cmd.Parameters["@ModifiedBy"].Value = _currentUser;
+                                    cmd.Parameters["@ID"].Value = item.Id;
 
-                                    if (!string.IsNullOrWhiteSpace(refs.GuaranteeId))
-                                    {
-                                        using (var cmd = new OleDbCommand(
-                                            "UPDATE [T_Reconciliation] SET [DWINGS_GuaranteeID]=?, [LastModified]=?, [ModifiedBy]=? " +
-                                            "WHERE [ID]=? AND ([DWINGS_GuaranteeID] IS NULL OR [DWINGS_GuaranteeID] = '')",
-                                            conn, tx))
-                                        {
-                                            cmd.Parameters.AddWithValue("@DWINGS_GuaranteeID", refs.GuaranteeId);
-                                            cmd.Parameters.Add("@LastModified", OleDbType.Date).Value = nowUtc;
-                                            cmd.Parameters.AddWithValue("@ModifiedBy", _currentUser);
-                                            cmd.Parameters.AddWithValue("@ID", amb.ID);
-                                            await cmd.ExecuteNonQueryAsync();
-                                        }
-                                    }
+                                    await cmd.ExecuteNonQueryAsync();
                                 }
                             }
 
                             tx.Commit();
+                            LogManager.Info($"[PERF] Backfilled DWINGS refs for {resolvedRefs.Count} records");
                         }
                         catch
                         {
@@ -1517,21 +1546,85 @@ namespace RecoTool.Services.Ambre
         {
             // Get existing IDs to ensure insert-only
             var existingIds = await GetExistingIdsAsync(conn, reconciliations.Select(r => r.ID).ToList());
-            
+            var toInsert = reconciliations.Where(r => !existingIds.Contains(r.ID)).ToList();
+            if (toInsert.Count == 0) return;
+
             using (var tx = conn.BeginTransaction())
             {
                 try
                 {
                     int insertedCount = 0;
-                    
-                    foreach (var rec in reconciliations.Where(r => !existingIds.Contains(r.ID)))
+
+                    // PERF: Create a single prepared command and reuse it for all inserts
+                    // (avoids 20k+ OleDbCommand allocations + parameter setup)
+                    using (var cmd = new OleDbCommand(@"INSERT INTO [T_Reconciliation] (
+                        [ID],[DWINGS_GuaranteeID],[DWINGS_InvoiceID],[DWINGS_BGPMT],
+                        [Action],[ActionStatus],[ActionDate],[Comments],[InternalInvoiceReference],[FirstClaimDate],[LastClaimDate],
+                        [ToRemind],[ToRemindDate],[ACK],[SwiftCode],[PaymentReference],[MbawData],[SpiritData],[KPI],
+                        [IncidentType],[RiskyItem],[ReasonNonRisky],[CreationDate],[ModifiedBy],[LastModified]
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", conn, tx))
                     {
-                        using (var cmd = CreateInsertCommand(conn, tx, rec))
+                        // Pre-create parameters once with explicit types
+                        cmd.Parameters.Add("@ID", OleDbType.VarWChar, 255);
+                        cmd.Parameters.Add("@DWINGS_GuaranteeID", OleDbType.VarWChar, 255);
+                        cmd.Parameters.Add("@DWINGS_InvoiceID", OleDbType.VarWChar, 255);
+                        cmd.Parameters.Add("@DWINGS_BGPMT", OleDbType.VarWChar, 255);
+                        cmd.Parameters.Add("@Action", OleDbType.Integer);
+                        cmd.Parameters.Add("@ActionStatus", OleDbType.Boolean);
+                        cmd.Parameters.Add("@ActionDate", OleDbType.Date);
+                        cmd.Parameters.Add("@Comments", OleDbType.LongVarWChar);
+                        cmd.Parameters.Add("@InternalInvoiceReference", OleDbType.VarWChar, 255);
+                        cmd.Parameters.Add("@FirstClaimDate", OleDbType.Date);
+                        cmd.Parameters.Add("@LastClaimDate", OleDbType.Date);
+                        cmd.Parameters.Add("@ToRemind", OleDbType.Boolean);
+                        cmd.Parameters.Add("@ToRemindDate", OleDbType.Date);
+                        cmd.Parameters.Add("@ACK", OleDbType.Boolean);
+                        cmd.Parameters.Add("@SwiftCode", OleDbType.VarWChar, 255);
+                        cmd.Parameters.Add("@PaymentReference", OleDbType.VarWChar, 255);
+                        cmd.Parameters.Add("@MbawData", OleDbType.LongVarWChar);
+                        cmd.Parameters.Add("@SpiritData", OleDbType.LongVarWChar);
+                        cmd.Parameters.Add("@KPI", OleDbType.Integer);
+                        cmd.Parameters.Add("@IncidentType", OleDbType.Integer);
+                        cmd.Parameters.Add("@RiskyItem", OleDbType.Boolean);
+                        cmd.Parameters.Add("@ReasonNonRisky", OleDbType.Integer);
+                        cmd.Parameters.Add("@CreationDate", OleDbType.Date);
+                        cmd.Parameters.Add("@ModifiedBy", OleDbType.VarWChar, 255);
+                        cmd.Parameters.Add("@LastModified", OleDbType.Date);
+
+                        cmd.Prepare();
+
+                        foreach (var rec in toInsert)
                         {
+                            cmd.Parameters["@ID"].Value = (object)rec.ID ?? DBNull.Value;
+                            cmd.Parameters["@DWINGS_GuaranteeID"].Value = (object)rec.DWINGS_GuaranteeID ?? DBNull.Value;
+                            cmd.Parameters["@DWINGS_InvoiceID"].Value = (object)rec.DWINGS_InvoiceID ?? DBNull.Value;
+                            cmd.Parameters["@DWINGS_BGPMT"].Value = (object)rec.DWINGS_BGPMT ?? DBNull.Value;
+                            cmd.Parameters["@Action"].Value = rec.Action.HasValue ? (object)rec.Action.Value : DBNull.Value;
+                            cmd.Parameters["@ActionStatus"].Value = rec.ActionStatus.HasValue ? (object)rec.ActionStatus.Value : DBNull.Value;
+                            cmd.Parameters["@ActionDate"].Value = rec.ActionDate.HasValue ? (object)rec.ActionDate.Value : DBNull.Value;
+                            cmd.Parameters["@Comments"].Value = (object)rec.Comments ?? DBNull.Value;
+                            cmd.Parameters["@InternalInvoiceReference"].Value = (object)rec.InternalInvoiceReference ?? DBNull.Value;
+                            cmd.Parameters["@FirstClaimDate"].Value = rec.FirstClaimDate.HasValue ? (object)rec.FirstClaimDate.Value : DBNull.Value;
+                            cmd.Parameters["@LastClaimDate"].Value = rec.LastClaimDate.HasValue ? (object)rec.LastClaimDate.Value : DBNull.Value;
+                            cmd.Parameters["@ToRemind"].Value = rec.ToRemind;
+                            cmd.Parameters["@ToRemindDate"].Value = rec.ToRemindDate.HasValue ? (object)rec.ToRemindDate.Value : DBNull.Value;
+                            cmd.Parameters["@ACK"].Value = rec.ACK;
+                            cmd.Parameters["@SwiftCode"].Value = (object)rec.SwiftCode ?? DBNull.Value;
+                            cmd.Parameters["@PaymentReference"].Value = (object)rec.PaymentReference ?? DBNull.Value;
+                            cmd.Parameters["@MbawData"].Value = (object)rec.MbawData ?? DBNull.Value;
+                            cmd.Parameters["@SpiritData"].Value = (object)rec.SpiritData ?? DBNull.Value;
+                            cmd.Parameters["@KPI"].Value = rec.KPI.HasValue ? (object)rec.KPI.Value : DBNull.Value;
+                            cmd.Parameters["@IncidentType"].Value = rec.IncidentType.HasValue ? (object)rec.IncidentType.Value : DBNull.Value;
+                            cmd.Parameters["@RiskyItem"].Value = rec.RiskyItem.HasValue ? (object)rec.RiskyItem.Value : DBNull.Value;
+                            cmd.Parameters["@ReasonNonRisky"].Value = rec.ReasonNonRisky.HasValue ? (object)rec.ReasonNonRisky.Value : DBNull.Value;
+                            cmd.Parameters["@CreationDate"].Value = rec.CreationDate.HasValue ? (object)rec.CreationDate.Value : DBNull.Value;
+                            cmd.Parameters["@ModifiedBy"].Value = (object)rec.ModifiedBy ?? DBNull.Value;
+                            cmd.Parameters["@LastModified"].Value = rec.LastModified.HasValue ? (object)rec.LastModified.Value : DBNull.Value;
+
                             insertedCount += await cmd.ExecuteNonQueryAsync();
                         }
                     }
-                    
+
                     tx.Commit();
                     LogManager.Info($"Inserted {insertedCount} new reconciliation record(s)");
                 }

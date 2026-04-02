@@ -121,6 +121,11 @@ namespace RecoTool.Services.Ambre
                     publishTimer.Stop();
                     LogManager.Info($"[PERF] Publish to network completed in {publishTimer.ElapsedMilliseconds}ms");
 
+                    // PERF: Advance pull watermark to prevent re-pulling the 20K rows we just published.
+                    // Without this, the next PullReconciliationFromNetworkAsync sees all imported rows as "new"
+                    // and re-processes them one by one (minutes of wasted work).
+                    try { _offlineFirstService.AdvancePullWatermark(countryId, DateTime.UtcNow); } catch { }
+
                     // Finalize
                     try { await _offlineFirstService.SetSyncStatusAsync("Finalizing"); } catch { }
                     var finalizeTimer = System.Diagnostics.Stopwatch.StartNew();

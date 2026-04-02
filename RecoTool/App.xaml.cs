@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using RecoTool.Services;
@@ -30,9 +31,30 @@ namespace RecoTool
         {
             base.OnStartup(e);
 
-            // Syncfusion Community License (free for < $1M revenue)
+            // Syncfusion license key — loaded from secrets.config (gitignored, never committed).
+            // To set up: copy secrets.config.template to secrets.config and fill in your key.
             // Get your key at: https://www.syncfusion.com/account/manage-trials/start-trials
-            Syncfusion.Licensing.SyncfusionLicenseProvider.RegisterLicense("Ngo9BigBOggjHTQxAR8/V1JHaF5cWWdCekx0TXxbf1x2ZFRHal5QTndWUiweQnxTdENjWn1XcXVXTmJcVkd3WkleYA==");
+            try
+            {
+                var secretsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "secrets.config");
+                if (!File.Exists(secretsPath))
+                    secretsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "secrets.config");
+                if (File.Exists(secretsPath))
+                {
+                    foreach (var line in File.ReadAllLines(secretsPath))
+                    {
+                        var trimmed = line.Trim();
+                        if (trimmed.StartsWith("SYNCFUSION_LICENSE_KEY=", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var key = trimmed.Substring("SYNCFUSION_LICENSE_KEY=".Length).Trim();
+                            if (!string.IsNullOrWhiteSpace(key))
+                                Syncfusion.Licensing.SyncfusionLicenseProvider.RegisterLicense(key);
+                            break;
+                        }
+                    }
+                }
+            }
+            catch { /* secrets.config missing or malformed — app starts without license (watermark only) */ }
 
             var services = new ServiceCollection();
 

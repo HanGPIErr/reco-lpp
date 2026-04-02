@@ -177,6 +177,17 @@ namespace RecoTool.Services
         }
 
         /// <summary>
+        /// Advances the pull watermark to the given timestamp so subsequent pulls skip rows
+        /// already known to be in sync. Called after import publishes local → network to prevent
+        /// the next pull from re-processing all imported rows (20K+ re-pull avoidance).
+        /// </summary>
+        public void AdvancePullWatermark(string countryId, DateTime utcTimestamp)
+        {
+            if (!string.IsNullOrWhiteSpace(countryId))
+                _pullWatermarks[countryId] = utcTimestamp;
+        }
+
+        /// <summary>
         /// Pull network changes for T_Reconciliation back into the local database.
         /// OPTIMIZED: caches column metadata, uses persistent LastModified watermark,
         /// skips full local map scan by using server-side WHERE filter.
@@ -271,76 +282,90 @@ namespace RecoTool.Services
                 }
                 catch { }
 
-                // ── Apply changes from network ──
-                DateTime? maxAppliedLm = watermark;
-                using (var nrd = await ncmd.ExecuteReaderAsync())
+                // ── PERF: Pre-build reusable UPDATE and INSERT commands (avoids 20K+ OleDbCommand allocations) ──
+                var setCols = meta.SelectCols.Where(c => !string.Equals(c, meta.PkCol, StringComparison.OrdinalIgnoreCase)).ToList();
+                var setParts = setCols.Select((c, i) => $"[{c}] = @p{i}").ToList();
+                var updateSql = $"UPDATE [T_Reconciliation] SET {string.Join(", ", setParts)} WHERE [{meta.PkCol}] = @key";
+                var ph = string.Join(", ", meta.SelectCols.Select((c, i) => $"@p{i}"));
+                var colListIns = string.Join(", ", meta.SelectCols.Select(c => $"[{c}]"));
+                var insertSql = $"INSERT INTO [T_Reconciliation] ({colListIns}) VALUES ({ph})";
+
+                // Create prepared commands once, reuse per row
+                using (var upCmd = new OleDbCommand(updateSql, localConn))
+                using (var insCmd = new OleDbCommand(insertSql, localConn))
                 {
-                    while (await nrd.ReadAsync())
+                    // Pre-create UPDATE parameters (setCols + key)
+                    for (int i = 0; i < setCols.Count; i++)
                     {
-                        var pkVal = nrd[meta.PkCol];
-                        if (pkVal == null || pkVal == DBNull.Value) continue;
-                        var pkStr = Convert.ToString(pkVal);
+                        meta.LocalTypes.TryGetValue(setCols[i], out var t);
+                        upCmd.Parameters.Add(new OleDbParameter($"@p{i}", t == 0 ? OleDbType.VarWChar : t));
+                    }
+                    meta.LocalTypes.TryGetValue(meta.PkCol, out var tkeyUp);
+                    upCmd.Parameters.Add(new OleDbParameter("@key", tkeyUp == 0 ? OleDbType.VarWChar : tkeyUp));
 
-                        // Track watermark for next pull
-                        if (meta.HasLM)
+                    // Pre-create INSERT parameters (all selectCols)
+                    for (int i = 0; i < meta.SelectCols.Count; i++)
+                    {
+                        meta.LocalTypes.TryGetValue(meta.SelectCols[i], out var t);
+                        insCmd.Parameters.Add(new OleDbParameter($"@p{i}", t == 0 ? OleDbType.VarWChar : t));
+                    }
+
+                    // ── Apply changes from network ──
+                    DateTime? maxAppliedLm = watermark;
+                    using (var nrd = await ncmd.ExecuteReaderAsync())
+                    {
+                        while (await nrd.ReadAsync())
                         {
-                            try
+                            var pkVal = nrd[meta.PkCol];
+                            if (pkVal == null || pkVal == DBNull.Value) continue;
+                            var pkStr = Convert.ToString(pkVal);
+
+                            // Track watermark for next pull
+                            if (meta.HasLM)
                             {
-                                var o = nrd["LastModified"];
-                                if (o != null && o != DBNull.Value)
+                                try
                                 {
-                                    var lm = Convert.ToDateTime(o);
-                                    if (!maxAppliedLm.HasValue || lm > maxAppliedLm.Value)
-                                        maxAppliedLm = lm;
+                                    var o = nrd["LastModified"];
+                                    if (o != null && o != DBNull.Value)
+                                    {
+                                        var lm = Convert.ToDateTime(o);
+                                        if (!maxAppliedLm.HasValue || lm > maxAppliedLm.Value)
+                                            maxAppliedLm = lm;
+                                    }
                                 }
+                                catch { }
                             }
-                            catch { }
-                        }
 
-                        // Build values
-                        var rowVals = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
-                        foreach (var c in meta.SelectCols) rowVals[c] = nrd[c];
+                            bool existsLocal = localIds.Contains(pkStr);
 
-                        bool existsLocal = localIds.Contains(pkStr);
-
-                        if (existsLocal)
-                        {
-                            var setCols = meta.SelectCols.Where(c => !string.Equals(c, meta.PkCol, StringComparison.OrdinalIgnoreCase)).ToList();
-                            var setParts = setCols.Select((c, i) => $"[{c}] = @p{i}").ToList();
-                            using (var up = new OleDbCommand($"UPDATE [T_Reconciliation] SET {string.Join(", ", setParts)} WHERE [{meta.PkCol}] = @key", localConn))
+                            if (existsLocal)
                             {
+                                // Reuse prepared UPDATE: just update parameter values
                                 for (int i = 0; i < setCols.Count; i++)
                                 {
                                     var c = setCols[i];
                                     meta.LocalTypes.TryGetValue(c, out var t);
-                                    up.Parameters.Add(new OleDbParameter($"@p{i}", t == 0 ? OleDbSchemaHelper.InferOleDbTypeFromValue(rowVals[c]) : t)
-                                    { Value = OleDbSchemaHelper.CoerceValueForOleDb(rowVals[c], t == 0 ? OleDbSchemaHelper.InferOleDbTypeFromValue(rowVals[c]) : t) });
+                                    var rawVal = nrd[c];
+                                    upCmd.Parameters[i].Value = OleDbSchemaHelper.CoerceValueForOleDb(rawVal, t == 0 ? OleDbSchemaHelper.InferOleDbTypeFromValue(rawVal) : t);
                                 }
-                                meta.LocalTypes.TryGetValue(meta.PkCol, out var tkey);
-                                up.Parameters.Add(new OleDbParameter("@key", tkey == 0 ? OleDbSchemaHelper.InferOleDbTypeFromValue(pkVal) : tkey)
-                                { Value = OleDbSchemaHelper.CoerceValueForOleDb(pkVal, tkey == 0 ? OleDbSchemaHelper.InferOleDbTypeFromValue(pkVal) : tkey) });
-                                await up.ExecuteNonQueryAsync();
+                                upCmd.Parameters["@key"].Value = OleDbSchemaHelper.CoerceValueForOleDb(pkVal, tkeyUp == 0 ? OleDbSchemaHelper.InferOleDbTypeFromValue(pkVal) : tkeyUp);
+                                await upCmd.ExecuteNonQueryAsync();
                             }
-                        }
-                        else
-                        {
-                            var ph = string.Join(", ", meta.SelectCols.Select((c, i) => $"@p{i}"));
-                            var colListIns = string.Join(", ", meta.SelectCols.Select(c => $"[{c}]"));
-                            using (var ins = new OleDbCommand($"INSERT INTO [T_Reconciliation] ({colListIns}) VALUES ({ph})", localConn))
+                            else
                             {
+                                // Reuse prepared INSERT: just update parameter values
                                 for (int i = 0; i < meta.SelectCols.Count; i++)
                                 {
                                     var c = meta.SelectCols[i];
                                     meta.LocalTypes.TryGetValue(c, out var t);
-                                    var v = rowVals[c];
-                                    ins.Parameters.Add(new OleDbParameter($"@p{i}", t == 0 ? OleDbSchemaHelper.InferOleDbTypeFromValue(v) : t)
-                                    { Value = OleDbSchemaHelper.CoerceValueForOleDb(v, t == 0 ? OleDbSchemaHelper.InferOleDbTypeFromValue(v) : t) });
+                                    var rawVal = nrd[c];
+                                    insCmd.Parameters[i].Value = OleDbSchemaHelper.CoerceValueForOleDb(rawVal, t == 0 ? OleDbSchemaHelper.InferOleDbTypeFromValue(rawVal) : t);
                                 }
-                                await ins.ExecuteNonQueryAsync();
+                                await insCmd.ExecuteNonQueryAsync();
+                                localIds.Add(pkStr); // track for subsequent rows in same pull
                             }
-                            localIds.Add(pkStr); // track for subsequent rows in same pull
+                            applied++;
                         }
-                        applied++;
                     }
                 }
 

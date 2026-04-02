@@ -1,10 +1,16 @@
 using System;
+using System.Threading;
 
 namespace RecoTool.Services
 {
     // Partial: lock helpers for remote control/lock database
     public partial class OfflineFirstService
     {
+        // Serialize all OleDb access to the remote lock .accdb file from this process.
+        // Without this, concurrent calls (SyncMonitorService timer + SetSyncStatusAsync + IsGlobalLockActiveAsync)
+        // open multiple connections to the same network .accdb and Access throws "file in use".
+        private static readonly SemaphoreSlim _lockDbGate = new SemaphoreSlim(1, 1);
+
         private string GetRemoteLockConnectionString(string countryId)
         {
             // Prefer a Control DB per country if configured; fallback to legacy per-country lock file next to data DBs

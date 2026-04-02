@@ -151,6 +151,12 @@ namespace RecoTool.Services.Ambre
         private IReadOnlyList<DwingsGuaranteeDto> _dwingsGuarantees;
         private string _lastResolvedGuaranteeId; // Stores GUARANTEE_ID found via OfficialRef
 
+        // ── PERF: Pre-computed alphanumeric lookup caches (built once, avoid Regex.Replace per row) ──
+        private Dictionary<string, string> _senderRefToBusinessCaseId; // senderRefAlnum → BUSINESS_CASE_ID
+        private Dictionary<string, string> _officialRefToGuaranteeId;  // officialRefAlnum → GUARANTEE_ID (latest)
+        private bool _invoiceLookupBuilt;
+        private bool _guaranteeLookupBuilt;
+
         public DwingsReferenceResolver(ReconciliationService reconciliationService)
         {
             _reconciliationService = reconciliationService;
@@ -168,14 +174,14 @@ namespace RecoTool.Services.Ambre
             // Store guarantees for use in ResolveByOfficialRef
             _dwingsGuarantees = dwGuarantees;
             _lastResolvedGuaranteeId = null; // Reset for each resolution
-            
+
             var references = new Ambre.DwingsTokens();
 
             try
             {
                 // Extract tokens from various fields
                 var tokens = ExtractTokens(dataAmbre);
-                
+
                 // Build primary BGI candidate depending on side
                 string bgiCandidate;
                 if (!isPivot)
@@ -231,8 +237,8 @@ namespace RecoTool.Services.Ambre
                 if (hit == null && !string.IsNullOrWhiteSpace(tokens.GuaranteeId))
                 {
                     var hits = DwingsLinkingHelper.ResolveInvoicesByGuarantee(
-                        dwInvoices, tokens.GuaranteeId,
-                        dataAmbre.Operation_Date ?? dataAmbre.Value_Date,
+                        dwInvoices, tokens.GuaranteeId, 
+                        dataAmbre.Operation_Date ?? dataAmbre.Value_Date, 
                         dataAmbre.SignedAmount, take: 1);
                     hit = hits?.FirstOrDefault();
                 }
@@ -459,70 +465,72 @@ namespace RecoTool.Services.Ambre
 
         /// <summary>
         /// Find GUARANTEE_ID via invoice SENDER_REFERENCE matching
-        /// Requirements: SENDER_REFERENCE matches token + BUSINESS_CASE_ID exists + amount matches
+        /// Requirements: SENDER_REFERENCE matches token + BUSINESS_CASE_ID exists
+        /// PERF: Uses pre-built dictionary (O(1) instead of O(n) linear scan with Regex per invoice)
         /// </summary>
         private string FindGuaranteeViaSenderReference(string token, decimal ambreAmt, IReadOnlyList<DwingsInvoiceDto> dwInvoices)
         {
-            var tokenAlnum = Regex.Replace(token, @"[^A-Za-z0-9]", "");
-            
-            var match = dwInvoices.FirstOrDefault(i =>
+            // Build lookup on first use (once per import)
+            if (!_invoiceLookupBuilt && dwInvoices != null)
             {
-                if (string.IsNullOrWhiteSpace(i?.SENDER_REFERENCE)) return false;
-                if (string.IsNullOrWhiteSpace(i?.BUSINESS_CASE_ID)) return false;
+                _senderRefToBusinessCaseId = new Dictionary<string, string>(dwInvoices.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var i in dwInvoices)
+                {
+                    if (string.IsNullOrWhiteSpace(i?.SENDER_REFERENCE) || string.IsNullOrWhiteSpace(i?.BUSINESS_CASE_ID)) continue;
+                    var cleaned = Regex.Replace(i.SENDER_REFERENCE, @"[^A-Za-z0-9]", "");
+                    if (!string.IsNullOrWhiteSpace(cleaned) && !_senderRefToBusinessCaseId.ContainsKey(cleaned))
+                        _senderRefToBusinessCaseId[cleaned] = i.BUSINESS_CASE_ID;
+                }
+                _invoiceLookupBuilt = true;
+            }
 
-                // Alphanumeric comparison
-                var senderRefAlnum = Regex.Replace(i.SENDER_REFERENCE, @"[^A-Za-z0-9]", "");
-                return !string.IsNullOrWhiteSpace(senderRefAlnum) 
-                    && senderRefAlnum.Equals(tokenAlnum, StringComparison.OrdinalIgnoreCase);
-            });
-
-            return match?.BUSINESS_CASE_ID;
+            if (_senderRefToBusinessCaseId == null) return null;
+            var tokenAlnum = Regex.Replace(token, @"[^A-Za-z0-9]", "");
+            _senderRefToBusinessCaseId.TryGetValue(tokenAlnum, out var result);
+            return result;
         }
 
         /// <summary>
         /// Find GUARANTEE_ID via guarantee OFFICIALREF or PARTY_REF matching
         /// Handles duplicates (recreations) by taking latest GUARANTEE_ID (descending sort)
+        /// PERF: Uses pre-built dictionary (O(1) instead of O(n) linear scan with Regex per guarantee)
         /// </summary>
         private string FindGuaranteeViaOfficialRef(string token)
         {
             if (_dwingsGuarantees == null) return null;
 
-            var tokenAlnum = Regex.Replace(token, @"[^A-Za-z0-9]", "");
-
-            var guaranteeMatches = _dwingsGuarantees
-                .Where(g => !string.IsNullOrWhiteSpace(g?.OFFICIALREF) || !string.IsNullOrWhiteSpace(g?.PARTY_REF))
-                .Where(g =>
+            // Build lookup on first use (once per import)
+            if (!_guaranteeLookupBuilt)
+            {
+                _officialRefToGuaranteeId = new Dictionary<string, string>(_dwingsGuarantees.Count * 2, StringComparer.OrdinalIgnoreCase);
+                // Process in ascending order so that later (higher) GUARANTEE_IDs overwrite earlier ones
+                // This handles duplicates/recreations: the latest GUARANTEE_ID wins
+                var sorted = _dwingsGuarantees
+                    .Where(g => !string.IsNullOrWhiteSpace(g?.GUARANTEE_ID))
+                    .OrderBy(g => g.GUARANTEE_ID, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                foreach (var g in sorted)
                 {
-                    // Alphanumeric comparison for OFFICIALREF
                     if (!string.IsNullOrWhiteSpace(g.OFFICIALREF))
                     {
-                        var officialRefAlnum = Regex.Replace(g.OFFICIALREF, @"[^A-Za-z0-9]", "");
-                        if (!string.IsNullOrWhiteSpace(officialRefAlnum) && 
-                            officialRefAlnum.Equals(tokenAlnum, StringComparison.OrdinalIgnoreCase))
-                            return true;
+                        var cleaned = Regex.Replace(g.OFFICIALREF, @"[^A-Za-z0-9]", "");
+                        if (!string.IsNullOrWhiteSpace(cleaned))
+                            _officialRefToGuaranteeId[cleaned] = g.GUARANTEE_ID; // overwrites older
                     }
-
-                    // Alphanumeric comparison for PARTY_REF
                     if (!string.IsNullOrWhiteSpace(g.PARTY_REF))
                     {
-                        var partyRefAlnum = Regex.Replace(g.PARTY_REF, @"[^A-Za-z0-9]", "");
-                        if (!string.IsNullOrWhiteSpace(partyRefAlnum) && 
-                            partyRefAlnum.Equals(tokenAlnum, StringComparison.OrdinalIgnoreCase))
-                            return true;
+                        var cleaned = Regex.Replace(g.PARTY_REF, @"[^A-Za-z0-9]", "");
+                        if (!string.IsNullOrWhiteSpace(cleaned))
+                            _officialRefToGuaranteeId[cleaned] = g.GUARANTEE_ID; // overwrites older
                     }
+                }
+                _guaranteeLookupBuilt = true;
+            }
 
-                    return false;
-                })
-                .ToList();
-
-            if (guaranteeMatches.Count == 0) return null;
-
-            // Handle duplicates (recreations): take LATEST GUARANTEE_ID (highest = most recent)
-            var bestGuarantee = guaranteeMatches
-                .OrderByDescending(g => g.GUARANTEE_ID, StringComparer.OrdinalIgnoreCase)
-                .First();
-
-            return bestGuarantee.GUARANTEE_ID;
+            if (_officialRefToGuaranteeId == null) return null;
+            var tokenAlnum = Regex.Replace(token, @"[^A-Za-z0-9]", "");
+            _officialRefToGuaranteeId.TryGetValue(tokenAlnum, out var result);
+            return result;
         }
 
         private string GetGuaranteeIdFromInvoice(string invoiceId, IReadOnlyList<DwingsInvoiceDto> dwInvoices)
