@@ -339,60 +339,61 @@ namespace RecoTool.Services.Ambre
             const int batchSize = 500;
 
             // ── Phase 1: Fast path — DWINGS resolution only (CPU-bound, no API calls) ──
-            // Uses Parallel.ForEach instead of Task.WhenAll: no async overhead, true CPU parallelism
+            // Uses Parallel.ForEach via Task.Run to avoid blocking the UI thread.
+            // IMPORTANT: progressCallback must NOT be called inside Parallel.ForEach —
+            // it dispatches to the UI thread which is blocked by ForEach → deadlock.
             progressCallback?.Invoke($"Resolving DWINGS references: 0/{fastRecords.Count}...", 42);
             LogManager.Info($"[PERF] Phase 1: {fastRecords.Count} records (DWINGS only), {freeApiRecords.Count} records (Free API)");
 
             var fastStaged = new ConcurrentBag<ReconciliationStaging>();
-            int fastProcessed = 0;
+            var fastTimer = System.Diagnostics.Stopwatch.StartNew();
 
-            Parallel.ForEach(
-                fastRecords,
-                new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
-                dataAmbre =>
-                {
-                    var reconciliation = new Reconciliation
+            await Task.Run(() =>
+            {
+                Parallel.ForEach(
+                    fastRecords,
+                    new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
+                    dataAmbre =>
                     {
-                        ID = dataAmbre.ID,
-                        CreationDate = DateTime.UtcNow,
-                        ModifiedBy = _currentUser,
-                        LastModified = DateTime.UtcNow,
-                        Version = 1
-                    };
+                        var reconciliation = new Reconciliation
+                        {
+                            ID = dataAmbre.ID,
+                            CreationDate = DateTime.UtcNow,
+                            ModifiedBy = _currentUser,
+                            LastModified = DateTime.UtcNow,
+                            Version = 1
+                        };
 
-                    bool isPivot = dataAmbre.IsPivotAccount(country.CNT_AmbrePivot);
-                    var dwingsRefs = _dwingsResolver.ResolveReferences(
-                        dataAmbre, isPivot, dwInvoices, dwGuarantees);
+                        bool isPivot = dataAmbre.IsPivotAccount(country.CNT_AmbrePivot);
+                        var dwingsRefs = _dwingsResolver.ResolveReferences(
+                            dataAmbre, isPivot, dwInvoices, dwGuarantees);
 
-                    reconciliation.DWINGS_InvoiceID = dwingsRefs.InvoiceId;
-                    reconciliation.DWINGS_BGPMT = dwingsRefs.CommissionId;
-                    reconciliation.DWINGS_GuaranteeID = dwingsRefs.GuaranteeId;
+                        reconciliation.DWINGS_InvoiceID = dwingsRefs.InvoiceId;
+                        reconciliation.DWINGS_BGPMT = dwingsRefs.CommissionId;
+                        reconciliation.DWINGS_GuaranteeID = dwingsRefs.GuaranteeId;
 
-                    if (isPivot)
-                    {
-                        reconciliation.PaymentReference = CalculatePaymentReferenceForPivot(
-                            dataAmbre, dwingsRefs.GuaranteeId, dwingsRefs.InvoiceId, dwGuarantees);
-                    }
+                        if (isPivot)
+                        {
+                            reconciliation.PaymentReference = CalculatePaymentReferenceForPivot(
+                                dataAmbre, dwingsRefs.GuaranteeId, dwingsRefs.InvoiceId, dwGuarantees);
+                        }
 
-                    fastStaged.Add(new ReconciliationStaging
-                    {
-                        Reconciliation = reconciliation,
-                        DataAmbre = dataAmbre,
-                        IsPivot = isPivot,
-                        Bgi = reconciliation.DWINGS_InvoiceID
+                        fastStaged.Add(new ReconciliationStaging
+                        {
+                            Reconciliation = reconciliation,
+                            DataAmbre = dataAmbre,
+                            IsPivot = isPivot,
+                            Bgi = reconciliation.DWINGS_InvoiceID
+                        });
                     });
+            }).ConfigureAwait(false);
 
-                    var done = Interlocked.Increment(ref fastProcessed);
-                    if (done % batchSize == 0 || done == fastRecords.Count)
-                    {
-                        int totalDone = done;
-                        int pct = 42 + (int)(33.0 * totalDone / total);
-                        progressCallback?.Invoke($"Resolving DWINGS references: {totalDone}/{total} ({totalDone * 100 / total}%)...", pct);
-                    }
-                });
+            fastTimer.Stop();
+            LogManager.Info($"[PERF] Phase 1 completed: {fastRecords.Count} records in {fastTimer.ElapsedMilliseconds}ms");
 
             staged.AddRange(fastStaged);
             processed = fastRecords.Count;
+            progressCallback?.Invoke($"DWINGS resolved: {fastRecords.Count} in {fastTimer.ElapsedMilliseconds}ms", 75);
 
             // ── Phase 2: Slow path — records needing Free API (throttled) ──
             if (freeApiRecords.Count > 0)
