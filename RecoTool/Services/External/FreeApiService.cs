@@ -58,7 +58,7 @@ namespace RecoTool.Services.External
             // SECURE: Use AsyncLazy pattern to avoid caching exceptions
             // GetOrAdd can return a Lazy whose Value failed, caching the exception forever.
             // Instead, we create a new task each time if the previous one failed.
-            if (_cache.TryGetValue(key, out var cachedTask) && cachedTask.IsCompletedSuccessfully())
+            if (_cache.TryGetValue(key, out var cachedTask) && cachedTask.Status == TaskStatus.RanToCompletion)
             {
                 return cachedTask.Result;
             }

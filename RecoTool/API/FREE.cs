@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Dynamic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -92,7 +93,7 @@ namespace RecoTool.API
         private const int AUTH_VALIDITY_MINUTES = 60; // 1 hour
         private const string BASE_URL = "https://free.group.echonet";
 
-        private readonly HttpClient _httpClient;
+        private HttpClient _httpClient; // Not readonly to allow recreation
         private readonly CookieContainer _cookieContainer;
         private HttpClientHandler _handler; // SECURE: keep reference for recreation
 
