@@ -16,6 +16,8 @@ using RecoTool.Services.Helpers;
 using RecoTool.Infrastructure.Logging;
 using System.Globalization;
 using System.Text;
+using System.Collections.Concurrent;
+using System.Threading;
 
 namespace RecoTool.Services.Ambre
 {
@@ -309,56 +311,127 @@ namespace RecoTool.Services.Ambre
         {
             // DWINGS data passed from caller to avoid reloading
             _transformationService = new TransformationService(new List<Country> { country });
-            
+
             var staged = new List<ReconciliationStaging>();
 
             GuaranteeCache.Initialise(dwGuarantees);
 
-            // Count how many lines will need Free API check (no DWINGS guarantee + FK/IPA reference)
-            int freeApiCandidates = 0;
-            try
+            // ── PERF: Build O(1) invoice lookup once for entire import ──
+            var invoiceLookup = new DwingsInvoiceLookup(dwInvoices);
+            _dwingsResolver.SetInvoiceLookup(invoiceLookup);
+            _dwingsResolver.PreBuildLookups(dwInvoices, dwGuarantees);
+
+            // ── Separate fast path (DWINGS only) from slow path (needs Free API) ──
+            var freeApiRecords = new List<DataAmbre>();
+            var fastRecords = new List<DataAmbre>();
+            foreach (var da in newRecords)
             {
-                freeApiCandidates = newRecords.Count(da =>
+                var reference = da.Reconciliation_Num ?? da.RawLabel ?? string.Empty;
+                if (reference.Contains("FK") || reference.Contains("IPA"))
+                    freeApiRecords.Add(da);
+                else
+                    fastRecords.Add(da);
+            }
+
+            int total = newRecords.Count;
+            int processed = 0;
+            var overallTimer = System.Diagnostics.Stopwatch.StartNew();
+            const int batchSize = 500;
+
+            // ── Phase 1: Fast path — DWINGS resolution only (CPU-bound, no API calls) ──
+            // Uses Parallel.ForEach instead of Task.WhenAll: no async overhead, true CPU parallelism
+            progressCallback?.Invoke($"Resolving DWINGS references: 0/{fastRecords.Count}...", 42);
+            LogManager.Info($"[PERF] Phase 1: {fastRecords.Count} records (DWINGS only), {freeApiRecords.Count} records (Free API)");
+
+            var fastStaged = new ConcurrentBag<ReconciliationStaging>();
+            int fastProcessed = 0;
+
+            Parallel.ForEach(
+                fastRecords,
+                new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
+                dataAmbre =>
                 {
-                    var reference = da.Reconciliation_Num ?? da.RawLabel ?? string.Empty;
-                    return reference.Contains("FK") || reference.Contains("IPA");
+                    var reconciliation = new Reconciliation
+                    {
+                        ID = dataAmbre.ID,
+                        CreationDate = DateTime.UtcNow,
+                        ModifiedBy = _currentUser,
+                        LastModified = DateTime.UtcNow,
+                        Version = 1
+                    };
+
+                    bool isPivot = dataAmbre.IsPivotAccount(country.CNT_AmbrePivot);
+                    var dwingsRefs = _dwingsResolver.ResolveReferences(
+                        dataAmbre, isPivot, dwInvoices, dwGuarantees);
+
+                    reconciliation.DWINGS_InvoiceID = dwingsRefs.InvoiceId;
+                    reconciliation.DWINGS_BGPMT = dwingsRefs.CommissionId;
+                    reconciliation.DWINGS_GuaranteeID = dwingsRefs.GuaranteeId;
+
+                    if (isPivot)
+                    {
+                        reconciliation.PaymentReference = CalculatePaymentReferenceForPivot(
+                            dataAmbre, dwingsRefs.GuaranteeId, dwingsRefs.InvoiceId, dwGuarantees);
+                    }
+
+                    fastStaged.Add(new ReconciliationStaging
+                    {
+                        Reconciliation = reconciliation,
+                        DataAmbre = dataAmbre,
+                        IsPivot = isPivot,
+                        Bgi = reconciliation.DWINGS_InvoiceID
+                    });
+
+                    var done = Interlocked.Increment(ref fastProcessed);
+                    if (done % batchSize == 0 || done == fastRecords.Count)
+                    {
+                        int totalDone = done;
+                        int pct = 42 + (int)(33.0 * totalDone / total);
+                        progressCallback?.Invoke($"Resolving DWINGS references: {totalDone}/{total} ({totalDone * 100 / total}%)...", pct);
+                    }
                 });
-            }
-            catch { }
 
-            if (freeApiCandidates > 0)
-            {
-                progressCallback?.Invoke($"Checking {freeApiCandidates} lines with Free API (this may take a moment)...", 82);
-                LogManager.Info($"[PERF] Free API: {freeApiCandidates} candidate lines to check out of {newRecords.Count} new records");
-            }
+            staged.AddRange(fastStaged);
+            processed = fastRecords.Count;
 
-            // OPTIMIZATION: Parallel processing of reconciliation creation
-            var freeApiTimer = System.Diagnostics.Stopwatch.StartNew();
-            var tasks = newRecords.Select(async dataAmbre =>
+            // ── Phase 2: Slow path — records needing Free API (throttled) ──
+            if (freeApiRecords.Count > 0)
             {
-                var reconciliation = await CreateReconciliationAsync(
-                    dataAmbre, country, countryId, dwInvoices, dwGuarantees);
-                    
-                return new ReconciliationStaging
+                progressCallback?.Invoke($"Free API: 0/{freeApiRecords.Count}...", 76);
+                LogManager.Info($"[PERF] Phase 2: {freeApiRecords.Count} Free API candidates");
+
+                for (int i = 0; i < freeApiRecords.Count; i += batchSize)
                 {
-                    Reconciliation = reconciliation,
-                    DataAmbre = dataAmbre,
-                    IsPivot = dataAmbre.IsPivotAccount(country.CNT_AmbrePivot),
-                    Bgi = reconciliation.DWINGS_InvoiceID
-                };
-            });
-            
-            staged = (await Task.WhenAll(tasks)).ToList();
-            freeApiTimer.Stop();
+                    var batch = freeApiRecords.Skip(i).Take(batchSize).ToList();
+                    var batchTasks = batch.Select(async dataAmbre =>
+                    {
+                        var reconciliation = await CreateReconciliationAsync(
+                            dataAmbre, country, countryId, dwInvoices, dwGuarantees);
+                        return new ReconciliationStaging
+                        {
+                            Reconciliation = reconciliation,
+                            DataAmbre = dataAmbre,
+                            IsPivot = dataAmbre.IsPivotAccount(country.CNT_AmbrePivot),
+                            Bgi = reconciliation.DWINGS_InvoiceID
+                        };
+                    });
+                    staged.AddRange(await Task.WhenAll(batchTasks));
+                    processed += batch.Count;
 
-            if (freeApiCandidates > 0)
-            {
+                    int apiDone = processed - fastRecords.Count;
+                    int pct = 76 + (int)(9.0 * apiDone / freeApiRecords.Count);
+                    progressCallback?.Invoke($"Free API: {apiDone}/{freeApiRecords.Count} ({processed}/{total} total)...", pct);
+                }
+
                 int freeApiHits = staged.Count(s => !string.IsNullOrWhiteSpace(s.Reconciliation.MbawData) && s.Reconciliation.MbawData != "Not found");
-                progressCallback?.Invoke($"Free API check complete: {freeApiHits}/{freeApiCandidates} matched in {freeApiTimer.ElapsedMilliseconds}ms", 85);
-                LogManager.Info($"[PERF] Free API check completed: {freeApiHits}/{freeApiCandidates} matched in {freeApiTimer.ElapsedMilliseconds}ms");
+                LogManager.Info($"[PERF] Free API: {freeApiHits}/{freeApiRecords.Count} matched");
             }
 
-            // Calculate KPIs (IsGrouped, MissingAmount) before applying rules
+            overallTimer.Stop();
+            progressCallback?.Invoke($"Reconciliation prepared: {total} records in {overallTimer.ElapsedMilliseconds / 1000}s", 85);
+            LogManager.Info($"[PERF] PrepareReconciliations: {total} records in {overallTimer.ElapsedMilliseconds}ms (fast={fastRecords.Count}, api={freeApiRecords.Count})");
+
+            // ── KPI calculation ──
             var kpiTimer = System.Diagnostics.Stopwatch.StartNew();
             var kpiStaging = staged.Select(s => new ReconciliationKpiCalculator.ReconciliationStaging
             {
@@ -366,9 +439,9 @@ namespace RecoTool.Services.Ambre
                 Reconciliation = s.Reconciliation,
                 IsPivot = s.IsPivot
             }).ToList();
-            
+
             ReconciliationKpiCalculator.CalculateKpis(kpiStaging);
-            
+
             // Copy calculated KPIs back to staging items
             for (int i = 0; i < staged.Count && i < kpiStaging.Count; i++)
             {
@@ -389,10 +462,10 @@ namespace RecoTool.Services.Ambre
             // 1️⃣  ReasonNonRisky automatique
             AutoSetReasonNonRisky(staged);
 
-            // 2️⃣  IT Issue → INVESTIGATE
+            // 2️⃣  IT Issue → INVESTIGATE
             EnforceItIssueAction(staged);
 
-            // 3️⃣  Fallback (seulement lors d’un import ; pour les lignes déjà en base on ne veut pas tout écraser)
+            // 3️⃣  Fallback (seulement lors d'un import ; pour les lignes déjà en base on ne veut pas tout écraser)
             ApplyFallbackRule(staged);
 
             return staged.Select(s => s.Reconciliation).ToList();
@@ -416,8 +489,8 @@ namespace RecoTool.Services.Ambre
 
             bool isPivot = dataAmbre.IsPivotAccount(country.CNT_AmbrePivot);
 
-            // Resolve DWINGS references
-            var dwingsRefs = await _dwingsResolver.ResolveReferencesAsync(
+            // Resolve DWINGS references (sync — CPU-bound O(1) lookups, no I/O)
+            var dwingsRefs = _dwingsResolver.ResolveReferences(
                 dataAmbre, isPivot, dwInvoices, dwGuarantees);
                 
             reconciliation.DWINGS_InvoiceID = dwingsRefs.InvoiceId;
@@ -1012,13 +1085,18 @@ namespace RecoTool.Services.Ambre
                 var guarantees = await _reconciliationService.GetDwingsGuaranteesAsync();
                 var dwGuaranteeList = guarantees?.ToList();
 
+                // PERF: Build lookups once before resolution loop
+                var lookup = new DwingsInvoiceLookup(dwList);
+                _dwingsResolver.SetInvoiceLookup(lookup);
+                _dwingsResolver.PreBuildLookups(dwList, dwGuaranteeList);
+
                 // PERF: Phase 1 — resolve all references in memory (CPU-bound string matching)
                 var resolvedRefs = new List<(string Id, Ambre.DwingsTokens Refs)>();
                 foreach (var amb in updatedRecords)
                 {
                     if (amb == null || string.IsNullOrWhiteSpace(amb.ID)) continue;
                     bool isPivot = amb.IsPivotAccount(country.CNT_AmbrePivot);
-                    var refs = await _dwingsResolver.ResolveReferencesAsync(amb, isPivot, dwList, dwGuaranteeList);
+                    var refs = _dwingsResolver.ResolveReferences(amb, isPivot, dwList, dwGuaranteeList);
                     if (refs != null && (!string.IsNullOrWhiteSpace(refs.InvoiceId)
                                       || !string.IsNullOrWhiteSpace(refs.CommissionId)
                                       || !string.IsNullOrWhiteSpace(refs.GuaranteeId)))

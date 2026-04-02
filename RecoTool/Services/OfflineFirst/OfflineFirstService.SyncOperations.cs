@@ -290,6 +290,9 @@ namespace RecoTool.Services
                 var colListIns = string.Join(", ", meta.SelectCols.Select(c => $"[{c}]"));
                 var insertSql = $"INSERT INTO [T_Reconciliation] ({colListIns}) VALUES ({ph})";
 
+                // ── Apply changes from network ──
+                DateTime? maxAppliedLm = watermark;
+
                 // Create prepared commands once, reuse per row
                 using (var upCmd = new OleDbCommand(updateSql, localConn))
                 using (var insCmd = new OleDbCommand(insertSql, localConn))
@@ -309,9 +312,6 @@ namespace RecoTool.Services
                         meta.LocalTypes.TryGetValue(meta.SelectCols[i], out var t);
                         insCmd.Parameters.Add(new OleDbParameter($"@p{i}", t == 0 ? OleDbType.VarWChar : t));
                     }
-
-                    // ── Apply changes from network ──
-                    DateTime? maxAppliedLm = watermark;
                     using (var nrd = await ncmd.ExecuteReaderAsync())
                     {
                         while (await nrd.ReadAsync())

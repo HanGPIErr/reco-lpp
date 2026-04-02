@@ -8,9 +8,6 @@ using RecoTool.Helpers;
 using RecoTool.Models;
 using RecoTool.Services.Ambre;
 using RecoTool.Services.DTOs;
-using System.Collections.Concurrent;
-using System.Security.Cryptography;
-using System.Text;
 using System.Threading;
 
 namespace RecoTool.Services.Ambre
@@ -147,14 +144,20 @@ namespace RecoTool.Services.Ambre
     /// </summary>
     public class DwingsReferenceResolver
     {
+        // ── PERF: Compiled Regex (avoid pattern re-parse per call — called per row × 20K rows) ──
+        private static readonly Regex RxNonAlnum = new Regex(@"[^A-Za-z0-9]", RegexOptions.Compiled);
+        private static readonly Regex RxPacs = new Regex(@"pacs(?:\.[0-9]+)+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         private readonly ReconciliationService _reconciliationService;
         private IReadOnlyList<DwingsGuaranteeDto> _dwingsGuarantees;
-        private string _lastResolvedGuaranteeId; // Stores GUARANTEE_ID found via OfficialRef
+
+        // ── PERF: Pre-built O(1) lookup (set once via SetInvoiceLookup, thread-safe for concurrent reads) ──
+        private DwingsInvoiceLookup _invoiceLookup;
 
         // ── PERF: Pre-computed alphanumeric lookup caches (built once, avoid Regex.Replace per row) ──
         private Dictionary<string, string> _senderRefToBusinessCaseId; // senderRefAlnum → BUSINESS_CASE_ID
         private Dictionary<string, string> _officialRefToGuaranteeId;  // officialRefAlnum → GUARANTEE_ID (latest)
-        private bool _invoiceLookupBuilt;
+        private bool _invoiceSenderLookupBuilt;
         private bool _guaranteeLookupBuilt;
 
         public DwingsReferenceResolver(ReconciliationService reconciliationService)
@@ -163,22 +166,77 @@ namespace RecoTool.Services.Ambre
         }
 
         /// <summary>
-        /// Résout les références DWINGS pour une ligne Ambre
+        /// Set the pre-built O(1) invoice lookup. Call once before bulk resolution.
+        /// Thread-safe: the lookup is immutable after construction.
         /// </summary>
-        public async Task<Ambre.DwingsTokens> ResolveReferencesAsync(
+        public void SetInvoiceLookup(DwingsInvoiceLookup lookup) => _invoiceLookup = lookup;
+
+        /// <summary>
+        /// Eagerly build all lazy lookup dictionaries so they are safe for concurrent reads
+        /// in Parallel.ForEach. Call once before bulk resolution.
+        /// </summary>
+        public void PreBuildLookups(IReadOnlyList<DwingsInvoiceDto> dwInvoices, IReadOnlyList<DwingsGuaranteeDto> dwGuarantees)
+        {
+            _dwingsGuarantees = dwGuarantees;
+            // Force sender-reference lookup build
+            if (!_invoiceSenderLookupBuilt && dwInvoices != null)
+            {
+                _senderRefToBusinessCaseId = new Dictionary<string, string>(dwInvoices.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var i in dwInvoices)
+                {
+                    if (string.IsNullOrWhiteSpace(i?.SENDER_REFERENCE) || string.IsNullOrWhiteSpace(i?.BUSINESS_CASE_ID)) continue;
+                    var cleaned = RxNonAlnum.Replace(i.SENDER_REFERENCE, "");
+                    if (!string.IsNullOrWhiteSpace(cleaned) && !_senderRefToBusinessCaseId.ContainsKey(cleaned))
+                        _senderRefToBusinessCaseId[cleaned] = i.BUSINESS_CASE_ID;
+                }
+                _invoiceSenderLookupBuilt = true;
+            }
+            // Force guarantee officialref lookup build
+            if (!_guaranteeLookupBuilt && dwGuarantees != null)
+            {
+                _officialRefToGuaranteeId = new Dictionary<string, string>(dwGuarantees.Count * 2, StringComparer.OrdinalIgnoreCase);
+                var sorted = dwGuarantees
+                    .Where(g => !string.IsNullOrWhiteSpace(g?.GUARANTEE_ID))
+                    .OrderBy(g => g.GUARANTEE_ID, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                foreach (var g in sorted)
+                {
+                    if (!string.IsNullOrWhiteSpace(g.OFFICIALREF))
+                    {
+                        var cleaned = RxNonAlnum.Replace(g.OFFICIALREF, "");
+                        if (!string.IsNullOrWhiteSpace(cleaned))
+                            _officialRefToGuaranteeId[cleaned] = g.GUARANTEE_ID;
+                    }
+                    if (!string.IsNullOrWhiteSpace(g.PARTY_REF))
+                    {
+                        var cleaned = RxNonAlnum.Replace(g.PARTY_REF, "");
+                        if (!string.IsNullOrWhiteSpace(cleaned))
+                            _officialRefToGuaranteeId[cleaned] = g.GUARANTEE_ID;
+                    }
+                }
+                _guaranteeLookupBuilt = true;
+            }
+        }
+
+        /// <summary>
+        /// Résout les références DWINGS pour une ligne Ambre
+        /// Thread-safe: no mutable instance state is touched during resolution.
+        /// All lookups use pre-built immutable dictionaries.
+        /// </summary>
+        public Ambre.DwingsTokens ResolveReferences(
             DataAmbre dataAmbre,
             bool isPivot,
             IReadOnlyList<DwingsInvoiceDto> dwInvoices,
             IReadOnlyList<DwingsGuaranteeDto> dwGuarantees = null)
         {
-            // Store guarantees for use in ResolveByOfficialRef
-            _dwingsGuarantees = dwGuarantees;
-            _lastResolvedGuaranteeId = null; // Reset for each resolution
-
             var references = new Ambre.DwingsTokens();
+            // Local variable instead of instance state → thread-safe for parallel execution
+            string resolvedGuaranteeId = null;
 
             try
             {
+                var lookup = _invoiceLookup; // snapshot for thread safety
+
                 // Extract tokens from various fields
                 var tokens = ExtractTokens(dataAmbre);
 
@@ -186,99 +244,77 @@ namespace RecoTool.Services.Ambre
                 string bgiCandidate;
                 if (!isPivot)
                 {
-                    // Receivable: ONLY use Reconciliation_Num (no fallback to other fields)
                     bgiCandidate = dataAmbre.Receivable_InvoiceFromAmbre?.Trim() 
                                    ?? DwingsLinkingHelper.ExtractBgiToken(dataAmbre.Reconciliation_Num);
                 }
                 else
                 {
-                    // Pivot: use extracted tokens (RawLabel -> Rec_Num -> RecOrigin_Num)
                     bgiCandidate = tokens.Bgi;
                 }
 
-                // Try to resolve an actual DW invoice (return full object so we can backfill)
+                // Try to resolve an actual DW invoice via O(1) lookup
                 DwingsInvoiceDto hit = null;
                 if (!string.IsNullOrWhiteSpace(bgiCandidate))
                 {
-                    hit = DwingsLinkingHelper.ResolveInvoiceByBgi(dwInvoices, bgiCandidate);
-                    // CRITICAL: Verify amount matches (tolerance 0.01) to avoid linking to wrong invoice
-                    if (hit != null)
-                    {
-                        var ambreAmt = dataAmbre.SignedAmount;
-                        var absAmbre = Math.Abs(ambreAmt);
-                        bool reqMatch = hit.REQUESTED_AMOUNT.HasValue && DwingsLinkingHelper.AmountMatches(absAmbre, Math.Abs(hit.REQUESTED_AMOUNT.Value), tolerance: 0.01m);
-                        bool billMatch = hit.BILLING_AMOUNT.HasValue && DwingsLinkingHelper.AmountMatches(absAmbre, Math.Abs(hit.BILLING_AMOUNT.Value), tolerance: 0.01m);
-                        if (!reqMatch && !billMatch)
-                        {
-                            hit = null; // Amount mismatch, reject this invoice
-                        }
-                    }
+                    hit = lookup != null
+                        ? DwingsLinkingHelper.ResolveInvoiceByBgi(lookup, bgiCandidate)
+                        : DwingsLinkingHelper.ResolveInvoiceByBgi(dwInvoices, bgiCandidate);
+                    if (hit != null && !VerifyAmountMatch(hit, dataAmbre.SignedAmount))
+                        hit = null;
                 }
 
-                // BGPMT path if not found yet
+                // BGPMT path
                 if (hit == null && !string.IsNullOrWhiteSpace(tokens.Bgpmt))
                 {
-                    hit = DwingsLinkingHelper.ResolveInvoiceByBgpmt(dwInvoices, tokens.Bgpmt);
-                    // CRITICAL: Verify amount matches (tolerance 0.01) to avoid linking to wrong invoice
-                    if (hit != null)
-                    {
-                        var ambreAmt = dataAmbre.SignedAmount;
-                        var absAmbre = Math.Abs(ambreAmt);
-                        bool reqMatch = hit.REQUESTED_AMOUNT.HasValue && DwingsLinkingHelper.AmountMatches(absAmbre, Math.Abs(hit.REQUESTED_AMOUNT.Value), tolerance: 0.01m);
-                        bool billMatch = hit.BILLING_AMOUNT.HasValue && DwingsLinkingHelper.AmountMatches(absAmbre, Math.Abs(hit.BILLING_AMOUNT.Value), tolerance: 0.01m);
-                        if (!reqMatch && !billMatch)
-                        {
-                            hit = null; // Amount mismatch, reject this invoice
-                        }
-                    }
+                    hit = lookup != null
+                        ? DwingsLinkingHelper.ResolveInvoiceByBgpmt(lookup, tokens.Bgpmt)
+                        : DwingsLinkingHelper.ResolveInvoiceByBgpmt(dwInvoices, tokens.Bgpmt);
+                    if (hit != null && !VerifyAmountMatch(hit, dataAmbre.SignedAmount))
+                        hit = null;
                 }
 
                 // Guarantee path
                 if (hit == null && !string.IsNullOrWhiteSpace(tokens.GuaranteeId))
                 {
-                    var hits = DwingsLinkingHelper.ResolveInvoicesByGuarantee(
-                        dwInvoices, tokens.GuaranteeId, 
-                        dataAmbre.Operation_Date ?? dataAmbre.Value_Date, 
-                        dataAmbre.SignedAmount, take: 1);
+                    var hits = lookup != null
+                        ? DwingsLinkingHelper.ResolveInvoicesByGuarantee(
+                            lookup, tokens.GuaranteeId,
+                            dataAmbre.Operation_Date ?? dataAmbre.Value_Date,
+                            dataAmbre.SignedAmount, take: 1)
+                        : DwingsLinkingHelper.ResolveInvoicesByGuarantee(
+                            dwInvoices, tokens.GuaranteeId,
+                            dataAmbre.Operation_Date ?? dataAmbre.Value_Date,
+                            dataAmbre.SignedAmount, take: 1);
                     hit = hits?.FirstOrDefault();
                 }
 
                 // Suggestions
                 if (hit == null)
                 {
-                    var suggested = GetSuggestedInvoice(dataAmbre, tokens, dwInvoices, isPivot);
+                    var suggested = GetSuggestedInvoice(dataAmbre, tokens, dwInvoices, isPivot, lookup);
                     if (!string.IsNullOrWhiteSpace(suggested))
-                        hit = dwInvoices?.FirstOrDefault(i => string.Equals(i?.INVOICE_ID, suggested, StringComparison.OrdinalIgnoreCase));
+                        hit = lookup?.FindByInvoiceId(suggested)
+                              ?? dwInvoices?.FirstOrDefault(i => string.Equals(i?.INVOICE_ID, suggested, StringComparison.OrdinalIgnoreCase));
                 }
 
-                // OfficialRef path – last resort (CRITICAL: also resolves GUARANTEE_ID via _lastResolvedGuaranteeId)
+                // OfficialRef path – last resort (returns both invoiceId and guaranteeId)
                 if (hit == null)
                 {
-                    var byOfficial = ResolveByOfficialRef(dataAmbre, dwInvoices);
-                    if (!string.IsNullOrWhiteSpace(byOfficial))
+                    var (officialInvoiceId, officialGuaranteeId) = ResolveByOfficialRef(dataAmbre, dwInvoices, lookup);
+                    resolvedGuaranteeId = officialGuaranteeId;
+                    if (!string.IsNullOrWhiteSpace(officialInvoiceId))
                     {
-                        // byOfficial can be:
-                        // - INVOICE_ID: found invoice via OfficialRef
-                        // - string.Empty: found guarantee via OfficialRef but no invoice
-                        // In both cases, _lastResolvedGuaranteeId may be set
-                        if (byOfficial != string.Empty)
-                        {
-                            hit = dwInvoices?.FirstOrDefault(i => string.Equals(i?.INVOICE_ID, byOfficial, StringComparison.OrdinalIgnoreCase));
-                        }
-                        // If byOfficial == string.Empty, hit stays null but _lastResolvedGuaranteeId is set
+                        hit = lookup?.FindByInvoiceId(officialInvoiceId)
+                              ?? dwInvoices?.FirstOrDefault(i => string.Equals(i?.INVOICE_ID, officialInvoiceId, StringComparison.OrdinalIgnoreCase));
                     }
                 }
 
-                // Fill references from tokens and resolved invoice
-                references.InvoiceId = hit?.INVOICE_ID; // only if resolvable in DWINGS
+                // Fill references
+                references.InvoiceId = hit?.INVOICE_ID;
                 references.CommissionId = !string.IsNullOrWhiteSpace(tokens.Bgpmt) ? tokens.Bgpmt : hit?.BGPMT;
-                
-                // CRITICAL: Prioritize GUARANTEE_ID from OfficialRef resolution (_lastResolvedGuaranteeId)
-                // This ensures Pivot account with OfficialRef in Reconciliation_Num gets linked to guarantee
-                // Handle duplicates: _lastResolvedGuaranteeId already contains the LATEST (highest) GUARANTEE_ID
-                references.GuaranteeId = _lastResolvedGuaranteeId  // From OfficialRef (handles duplicates)
-                                        ?? tokens.GuaranteeId       // From text extraction
-                                        ?? hit?.BUSINESS_CASE_REFERENCE  // From invoice
+                references.GuaranteeId = resolvedGuaranteeId
+                                        ?? tokens.GuaranteeId
+                                        ?? hit?.BUSINESS_CASE_REFERENCE
                                         ?? hit?.BUSINESS_CASE_ID;
             }
             catch (Exception ex)
@@ -287,6 +323,15 @@ namespace RecoTool.Services.Ambre
             }
 
             return references;
+        }
+
+        /// <summary>Verify amount matches (tolerance 0.01) — extracted to avoid duplication.</summary>
+        private static bool VerifyAmountMatch(DwingsInvoiceDto hit, decimal ambreAmt)
+        {
+            var absAmbre = Math.Abs(ambreAmt);
+            bool reqMatch = hit.REQUESTED_AMOUNT.HasValue && DwingsLinkingHelper.AmountMatches(absAmbre, Math.Abs(hit.REQUESTED_AMOUNT.Value), tolerance: 0.01m);
+            bool billMatch = hit.BILLING_AMOUNT.HasValue && DwingsLinkingHelper.AmountMatches(absAmbre, Math.Abs(hit.BILLING_AMOUNT.Value), tolerance: 0.01m);
+            return reqMatch || billMatch;
         }
 
         /// <summary>
@@ -323,97 +368,33 @@ namespace RecoTool.Services.Ambre
             };
         }
 
-        private string ResolveReceivableInvoice(
-            DataAmbre dataAmbre,
-            DwingsTokens tokens,
-            IReadOnlyList<DwingsInvoiceDto> dwInvoices)
-        {
-            // Receivable: ONLY use Reconciliation_Num (no fallback to other fields)
-            var bgi = dataAmbre.Receivable_InvoiceFromAmbre?.Trim() 
-                      ?? DwingsLinkingHelper.ExtractBgiToken(dataAmbre.Reconciliation_Num);
-            
-            if (string.IsNullOrWhiteSpace(bgi))
-                return ResolveByOfficialRef(dataAmbre, dwInvoices); // try OfficialRef exact match if no BGI
-
-            var hit = DwingsLinkingHelper.ResolveInvoiceByBgi(dwInvoices, bgi);
-            if (hit != null) return hit.INVOICE_ID;
-
-            // Fallback: OfficialRef exact match
-            return ResolveByOfficialRef(dataAmbre, dwInvoices);
-        }
-
-        private string ResolvePivotInvoice(
-            DataAmbre dataAmbre,
-            DwingsTokens tokens,
-            IReadOnlyList<DwingsInvoiceDto> dwInvoices)
-        {
-            // Try BGI first
-            if (!string.IsNullOrWhiteSpace(tokens.Bgi))
-            {
-                var hit = DwingsLinkingHelper.ResolveInvoiceByBgi(dwInvoices, tokens.Bgi);
-                if (hit != null)
-                    return hit.INVOICE_ID;
-            }
-
-            // Try BGPMT
-            if (!string.IsNullOrWhiteSpace(tokens.Bgpmt))
-            {
-                var hit = DwingsLinkingHelper.ResolveInvoiceByBgpmt(dwInvoices, tokens.Bgpmt);
-                if (hit != null)
-                    return hit.INVOICE_ID;
-            }
-
-            // Try OfficialRef (exact match on BUSINESS_CASE_REFERENCE/ID) from Reconciliation fields/label
-            var byOfficial = ResolveByOfficialRef(dataAmbre, dwInvoices);
-            if (!string.IsNullOrWhiteSpace(byOfficial))
-                return byOfficial;
-
-            // Try guarantee
-            if (!string.IsNullOrWhiteSpace(tokens.GuaranteeId))
-            {
-                var hits = DwingsLinkingHelper.ResolveInvoicesByGuarantee(
-                    dwInvoices, tokens.GuaranteeId, 
-                    dataAmbre.Operation_Date ?? dataAmbre.Value_Date, 
-                    dataAmbre.SignedAmount, take: 1);
-                    
-                return hits?.FirstOrDefault()?.INVOICE_ID;
-            }
-
-            return null;
-        }
-
         /// <summary>
         /// STEP 1: Find GUARANTEE_ID via OFFICIALREF/SENDER_REFERENCE/GUARANTEE_ID pattern matching
         /// STEP 2: Find best invoice linked to this guarantee (with amount matching)
         /// </summary>
-        private string ResolveByOfficialRef(DataAmbre dataAmbre, IReadOnlyList<DwingsInvoiceDto> dwInvoices)
+        private (string invoiceId, string guaranteeId) ResolveByOfficialRef(
+            DataAmbre dataAmbre,
+            IReadOnlyList<DwingsInvoiceDto> dwInvoices,
+            DwingsInvoiceLookup lookup)
         {
-            if (dwInvoices == null || dwInvoices.Count == 0 || dataAmbre == null) return null;
+            if ((dwInvoices == null || dwInvoices.Count == 0) && lookup == null) return (null, null);
+            if (dataAmbre == null) return (null, null);
 
-            // STEP 1: Find GUARANTEE_ID
             var guaranteeId = FindGuaranteeIdFromReferences(dataAmbre, dwInvoices);
-            if (string.IsNullOrWhiteSpace(guaranteeId)) return null;
+            if (string.IsNullOrWhiteSpace(guaranteeId)) return (null, null);
 
-            // Store the found GUARANTEE_ID
-            _lastResolvedGuaranteeId = guaranteeId;
+            var invoices = lookup != null
+                ? DwingsLinkingHelper.ResolveInvoicesByGuarantee(
+                    lookup, guaranteeId,
+                    dataAmbre.Operation_Date ?? dataAmbre.Value_Date,
+                    dataAmbre.SignedAmount, take: 5)
+                : DwingsLinkingHelper.ResolveInvoicesByGuarantee(
+                    dwInvoices, guaranteeId,
+                    dataAmbre.Operation_Date ?? dataAmbre.Value_Date,
+                    dataAmbre.SignedAmount, take: 5);
 
-            // STEP 2: Find best invoice for this guarantee (with amount + date ranking)
-            var invoices = DwingsLinkingHelper.ResolveInvoicesByGuarantee(
-                dwInvoices,
-                guaranteeId,
-                dataAmbre.Operation_Date ?? dataAmbre.Value_Date,
-                dataAmbre.SignedAmount,
-                take: 5
-            );
-
-            if (invoices == null || invoices.Count == 0)
-            {
-                // Guarantee found but no invoice => return empty string (caller will use _lastResolvedGuaranteeId)
-                return string.Empty;
-            }
-
-            // Return best invoice
-            return invoices.FirstOrDefault()?.INVOICE_ID;
+            var bestInvoiceId = invoices?.FirstOrDefault()?.INVOICE_ID;
+            return (bestInvoiceId, guaranteeId);
         }
 
         /// <summary>
@@ -456,8 +437,8 @@ namespace RecoTool.Services.Ambre
             if (string.IsNullOrWhiteSpace(s)) return null;
             // Remove pacs message-type identifiers (e.g. pacs.009.001.08, pacs.008.001.08)
             // to avoid their numeric fragments being mistaken for an OfficialRef.
-            var noPacs = Regex.Replace(s, @"pacs(?:\.[0-9]+)+", " ", RegexOptions.IgnoreCase);
-            var cleaned = Regex.Replace(noPacs, @"[^A-Za-z0-9]", "");
+            var noPacs = RxPacs.Replace(s, " ");
+            var cleaned = RxNonAlnum.Replace(noPacs, "");
             if (string.IsNullOrWhiteSpace(cleaned) || cleaned.Length < 3 || cleaned.Equals("null", StringComparison.OrdinalIgnoreCase))
                 return null;
             return cleaned;
@@ -471,22 +452,22 @@ namespace RecoTool.Services.Ambre
         private string FindGuaranteeViaSenderReference(string token, decimal ambreAmt, IReadOnlyList<DwingsInvoiceDto> dwInvoices)
         {
             // Build lookup on first use (once per import)
-            if (!_invoiceLookupBuilt && dwInvoices != null)
+            if (!_invoiceSenderLookupBuilt && dwInvoices != null)
             {
                 _senderRefToBusinessCaseId = new Dictionary<string, string>(dwInvoices.Count, StringComparer.OrdinalIgnoreCase);
                 foreach (var i in dwInvoices)
                 {
                     if (string.IsNullOrWhiteSpace(i?.SENDER_REFERENCE) || string.IsNullOrWhiteSpace(i?.BUSINESS_CASE_ID)) continue;
-                    var cleaned = Regex.Replace(i.SENDER_REFERENCE, @"[^A-Za-z0-9]", "");
+                    var cleaned = RxNonAlnum.Replace(i.SENDER_REFERENCE, "");
                     if (!string.IsNullOrWhiteSpace(cleaned) && !_senderRefToBusinessCaseId.ContainsKey(cleaned))
                         _senderRefToBusinessCaseId[cleaned] = i.BUSINESS_CASE_ID;
                 }
-                _invoiceLookupBuilt = true;
+                _invoiceSenderLookupBuilt = true;
             }
 
             if (_senderRefToBusinessCaseId == null) return null;
-            var tokenAlnum = Regex.Replace(token, @"[^A-Za-z0-9]", "");
-            _senderRefToBusinessCaseId.TryGetValue(tokenAlnum, out var result);
+            // token is already alphanumeric (from ExtractAlphanumericToken), no need to clean again
+            _senderRefToBusinessCaseId.TryGetValue(token, out var result);
             return result;
         }
 
@@ -497,55 +478,18 @@ namespace RecoTool.Services.Ambre
         /// </summary>
         private string FindGuaranteeViaOfficialRef(string token)
         {
-            if (_dwingsGuarantees == null) return null;
-
-            // Build lookup on first use (once per import)
-            if (!_guaranteeLookupBuilt)
-            {
-                _officialRefToGuaranteeId = new Dictionary<string, string>(_dwingsGuarantees.Count * 2, StringComparer.OrdinalIgnoreCase);
-                // Process in ascending order so that later (higher) GUARANTEE_IDs overwrite earlier ones
-                // This handles duplicates/recreations: the latest GUARANTEE_ID wins
-                var sorted = _dwingsGuarantees
-                    .Where(g => !string.IsNullOrWhiteSpace(g?.GUARANTEE_ID))
-                    .OrderBy(g => g.GUARANTEE_ID, StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-                foreach (var g in sorted)
-                {
-                    if (!string.IsNullOrWhiteSpace(g.OFFICIALREF))
-                    {
-                        var cleaned = Regex.Replace(g.OFFICIALREF, @"[^A-Za-z0-9]", "");
-                        if (!string.IsNullOrWhiteSpace(cleaned))
-                            _officialRefToGuaranteeId[cleaned] = g.GUARANTEE_ID; // overwrites older
-                    }
-                    if (!string.IsNullOrWhiteSpace(g.PARTY_REF))
-                    {
-                        var cleaned = Regex.Replace(g.PARTY_REF, @"[^A-Za-z0-9]", "");
-                        if (!string.IsNullOrWhiteSpace(cleaned))
-                            _officialRefToGuaranteeId[cleaned] = g.GUARANTEE_ID; // overwrites older
-                    }
-                }
-                _guaranteeLookupBuilt = true;
-            }
-
             if (_officialRefToGuaranteeId == null) return null;
-            var tokenAlnum = Regex.Replace(token, @"[^A-Za-z0-9]", "");
-            _officialRefToGuaranteeId.TryGetValue(tokenAlnum, out var result);
+            // token is already alphanumeric (from ExtractAlphanumericToken), no need to clean again
+            _officialRefToGuaranteeId.TryGetValue(token, out var result);
             return result;
-        }
-
-        private string GetGuaranteeIdFromInvoice(string invoiceId, IReadOnlyList<DwingsInvoiceDto> dwInvoices)
-        {
-            var invoice = dwInvoices?.FirstOrDefault(i => 
-                string.Equals(i?.INVOICE_ID, invoiceId, StringComparison.OrdinalIgnoreCase));
-                
-            return invoice?.BUSINESS_CASE_REFERENCE ?? invoice?.BUSINESS_CASE_ID;
         }
 
         private string GetSuggestedInvoice(
             DataAmbre dataAmbre,
             DwingsTokens tokens,
             IReadOnlyList<DwingsInvoiceDto> dwInvoices,
-            bool isPivot)
+            bool isPivot,
+            DwingsInvoiceLookup lookup = null)
         {
             // For receivable: ONLY use Reconciliation_Num
             // For pivot: use fallback chain (Rec_Num -> RecOrigin_Num -> RawLabel)
@@ -561,16 +505,28 @@ namespace RecoTool.Services.Ambre
                             ?? DwingsLinkingHelper.ExtractBgiToken(dataAmbre.RawLabel);
             }
 
-            var suggestions = DwingsLinkingHelper.SuggestInvoicesForAmbre(
-                dwInvoices,
-                rawLabel: dataAmbre.RawLabel,
-                reconciliationNum: dataAmbre.Reconciliation_Num,
-                reconciliationOriginNum: dataAmbre.ReconciliationOrigin_Num,
-                explicitBgi: dataAmbre.Receivable_InvoiceFromAmbre?.Trim() ?? bgiOrdered,
-                guaranteeId: tokens.GuaranteeId,
-                ambreDate: dataAmbre.Operation_Date ?? dataAmbre.Value_Date,
-                ambreAmount: dataAmbre.SignedAmount,
-                take: 1);
+            // Use O(1) lookup overload when available
+            var suggestions = lookup != null
+                ? DwingsLinkingHelper.SuggestInvoicesForAmbre(
+                    lookup,
+                    rawLabel: dataAmbre.RawLabel,
+                    reconciliationNum: dataAmbre.Reconciliation_Num,
+                    reconciliationOriginNum: dataAmbre.ReconciliationOrigin_Num,
+                    explicitBgi: dataAmbre.Receivable_InvoiceFromAmbre?.Trim() ?? bgiOrdered,
+                    guaranteeId: tokens.GuaranteeId,
+                    ambreDate: dataAmbre.Operation_Date ?? dataAmbre.Value_Date,
+                    ambreAmount: dataAmbre.SignedAmount,
+                    take: 1)
+                : DwingsLinkingHelper.SuggestInvoicesForAmbre(
+                    dwInvoices,
+                    rawLabel: dataAmbre.RawLabel,
+                    reconciliationNum: dataAmbre.Reconciliation_Num,
+                    reconciliationOriginNum: dataAmbre.ReconciliationOrigin_Num,
+                    explicitBgi: dataAmbre.Receivable_InvoiceFromAmbre?.Trim() ?? bgiOrdered,
+                    guaranteeId: tokens.GuaranteeId,
+                    ambreDate: dataAmbre.Operation_Date ?? dataAmbre.Value_Date,
+                    ambreAmount: dataAmbre.SignedAmount,
+                    take: 1);
                 
             return suggestions?.FirstOrDefault()?.INVOICE_ID;
         }
