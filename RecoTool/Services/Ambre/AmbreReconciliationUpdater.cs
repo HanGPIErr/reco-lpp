@@ -1194,8 +1194,6 @@ namespace RecoTool.Services.Ambre
                                 cmd.Parameters.Add("@ModifiedBy", OleDbType.VarWChar, 255);
                                 cmd.Parameters.Add("@ID", OleDbType.VarWChar, 255);
 
-                                cmd.Prepare();
-
                                 foreach (var item in resolvedRefs)
                                 {
                                     var inv = item.Refs.InvoiceId ?? string.Empty;
@@ -1490,8 +1488,6 @@ namespace RecoTool.Services.Ambre
                                 cmd.Parameters.Add("@ModifiedBy", OleDbType.VarWChar, 255);
                                 cmd.Parameters.Add("@ID", OleDbType.VarWChar, 255);
                                 
-                                cmd.Prepare(); // Prepare statement once (requires explicit sizes for VarChar)
-                                
                                 foreach (var s in staged)
                                 {
                                     var rec = s.Reconciliation;
@@ -1732,8 +1728,6 @@ namespace RecoTool.Services.Ambre
                         cmd.Parameters.Add("@ModifiedBy", OleDbType.VarWChar, 255);
                         
                         cmd.Parameters.Add("@LastModified", OleDbType.Date);
-
-                        cmd.Prepare();
 
                         foreach (var rec in toInsert)
                         {

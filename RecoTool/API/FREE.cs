@@ -593,133 +593,107 @@ namespace RecoTool.API
             if (cancellationToken.IsCancellationRequested)
                 throw new OperationCanceledException(cancellationToken);
 
-            // SECURE: Retry logic for transient failures
-            int maxAttempts = 2;
-            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            // SECURE: No retry logic. If it fails, we drop and move on.
+            string direction = "INCOMING";
+
+            // --------------------------------------------------------------
+            // 1️⃣  Calcul de la date de fin si elle n’est pas fournie
+            // --------------------------------------------------------------
+            var effectiveEnd = startDate.Date.AddDays(1).AddMinutes(-1); // 23:59 du même jour
+
+            // --------------------------------------------------------------
+            // 2️⃣  Construction du payload dynamique
+            // --------------------------------------------------------------
+            var payloadObject = BuildPayload(startDate, effectiveEnd, direction, codeSector, freeText, flowTrn);
+
+            string payload = JsonSerializer.Serialize(payloadObject, new JsonSerializerOptions
             {
-                string direction = "INCOMING";
+                PropertyNamingPolicy = null,               // conserve exactement les noms JSON attendus
+                DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+                WriteIndented = false
+            });
 
-                // --------------------------------------------------------------
-                // 1️⃣  Calcul de la date de fin si elle n’est pas fournie
-                // --------------------------------------------------------------
-                var effectiveEnd = startDate.Date.AddDays(1).AddMinutes(-1); // 23:59 du même jour
+            // --------------------------------------------------------------
+            // 3️⃣  Création de la requête HTTP
+            // --------------------------------------------------------------
+            var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                "/api/messages?pageNumber=0&pageSize=10&sortDirection=desc&sortedBy=receptionDateTime")
+            {
+                Content = new StringContent(payload, Encoding.UTF8, "application/json")
+            };
 
-                // --------------------------------------------------------------
-                // 2️⃣  Construction du payload dynamique
-                // --------------------------------------------------------------
-                var payloadObject = BuildPayload(startDate, effectiveEnd, direction, codeSector, freeText, flowTrn);
+            // En-têtes généraux (à adapter à votre contexte)
+            request.Headers.Add("Accept", "*/*");
+            request.Headers.Add("Accept-Language", "fr");
+            request.Headers.Add("Connection", "keep-alive");
+            request.Headers.Referrer = new Uri($"{_httpClient.BaseAddress}/");
+            request.Headers.Add("Origin", $"{_httpClient.BaseAddress}");
+            request.Headers.Add("Sec-Fetch-Dest", "empty");
+            request.Headers.Add("Sec-Fetch-Mode", "cors");
+            request.Headers.Add("Sec-Fetch-Site", "same-origin");
+            request.Headers.Add("X-XSRF-TOKEN", GetXSRF());
+            request.Headers.Add("X-Requested-With", "XMLHttpRequest");
 
-                string payload = JsonSerializer.Serialize(payloadObject, new JsonSerializerOptions
+            // --------------------------------------------------------------
+            // 4️⃣  Envoi et traitement de la réponse
+            // --------------------------------------------------------------
+            try
+            {
+                var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                
+                // SECURE: Handle 401/403 as auth errors - don't recreate client, let auth flow handle
+                if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
                 {
-                    PropertyNamingPolicy = null,               // conserve exactement les noms JSON attendus
-                    DefaultIgnoreCondition = JsonIgnoreCondition.Never,
-                    WriteIndented = false
-                });
-
-                // --------------------------------------------------------------
-                // 3️⃣  Création de la requête HTTP
-                // --------------------------------------------------------------
-                var request = new HttpRequestMessage(
-                    HttpMethod.Post,
-                    "/api/messages?pageNumber=0&pageSize=10&sortDirection=desc&sortedBy=receptionDateTime")
-                {
-                    Content = new StringContent(payload, Encoding.UTF8, "application/json")
-                };
-
-                // En-têtes généraux (à adapter à votre contexte)
-                request.Headers.Add("Accept", "*/*");
-                request.Headers.Add("Accept-Language", "fr");
-                request.Headers.Add("Connection", "keep-alive");
-                request.Headers.Referrer = new Uri($"{_httpClient.BaseAddress}/");
-                request.Headers.Add("Origin", $"{_httpClient.BaseAddress}");
-                request.Headers.Add("Sec-Fetch-Dest", "empty");
-                request.Headers.Add("Sec-Fetch-Mode", "cors");
-                request.Headers.Add("Sec-Fetch-Site", "same-origin");
-                request.Headers.Add("X-XSRF-TOKEN", GetXSRF());
-                request.Headers.Add("X-Requested-With", "XMLHttpRequest");
-
-                // --------------------------------------------------------------
-                // 4️⃣  Envoi et traitement de la réponse
-                // --------------------------------------------------------------
-                try
-                {
-                    var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
-                    
-                    // SECURE: Handle 401/403 as auth errors - don't recreate client, let auth flow handle
-                    if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[Free] Auth error {(int)response.StatusCode}, NOT resetting auth (tokens may still be valid)");
-                        // Don't reset _authenticatedTime - the cookies may still be valid, this could be a server-side issue
-                        return null;
-                    }
-                    
-                    response.EnsureSuccessStatusCode();
-
-                    var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-
-                    // Désérialisation minimale – adapté à votre modèle de réponse
-                    var root = JsonSerializer.Deserialize<MessageSearchRoot>(json,
-                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-
-                    if (root?.Content == null || root.Content.Count == 0)
-                        return null;
-
-                    var first = root.Content[0];
-                    var rawPayload = first.Payload ?? string.Empty;
-
-                    // Suppression éventuelle de caractères de contrôle précédant le XML
-                    var startIdx = rawPayload.IndexOf("<?", StringComparison.Ordinal);
-                    var cleaned = startIdx > 0 ? rawPayload.Substring(startIdx) : rawPayload;
-
-                    return cleaned;
-
-                    // Tentative d’analyse XML (déjà fournie dans votre implémentation)
-                    try
-                    {
-                        var doc = System.Xml.Linq.XDocument.Parse(cleaned, System.Xml.Linq.LoadOptions.PreserveWhitespace);
-                        var ustrd = ExtractUstrdAndEndToEndId(doc);
-                        if (!string.IsNullOrWhiteSpace(ustrd)) return ustrd;
-
-                        var instrInf = ExtractInstrInf(doc);
-                        if (!string.IsNullOrWhiteSpace(instrInf)) return instrInf;
-
-                        return RenderKeyValue(doc);
-                    }
-                    catch
-                    {
-                        // Si le XML ne peut pas être parsé, on renvoie le payload brut nettoyé.
-                        return cleaned;
-                    }
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (HttpRequestException ex) when (IsTransientError(ex) && attempt < maxAttempts)
-                {
-                    // SECURE: Transient error (timeout, WebSocket drop, network) - recreate client and retry
-                    System.Diagnostics.Debug.WriteLine($"[Free] Transient error on attempt {attempt}: {ex.Message} - recreating HttpClient");
-                    RecreateHttpClient();
-                    await Task.Delay(500).ConfigureAwait(false); // Small delay before retry
-                    continue;
-                }
-                catch (TaskCanceledException ex) when (attempt < maxAttempts && !cancellationToken.IsCancellationRequested)
-                {
-                    // SECURE: Timeout - recreate client and retry
-                    System.Diagnostics.Debug.WriteLine($"[Free] Timeout on attempt {attempt} - recreating HttpClient");
-                    RecreateHttpClient();
-                    await Task.Delay(500).ConfigureAwait(false);
-                    continue;
-                }
-                catch (Exception ex)
-                {
-                    // SECURE: Other errors - log and return null, but DON'T reset auth
-                    System.Diagnostics.Debug.WriteLine($"[Free] Error: {ex.Message}");
+                    System.Diagnostics.Debug.WriteLine($"[Free] Auth error {(int)response.StatusCode}, NOT resetting auth (tokens may still be valid)");
+                    // Don't reset _authenticatedTime - the cookies may still be valid, this could be a server-side issue
                     return null;
                 }
+                
+                response.EnsureSuccessStatusCode();
+
+                var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+                // Désérialisation minimale – adapté à votre modèle de réponse
+                var root = JsonSerializer.Deserialize<MessageSearchRoot>(json,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+                if (root?.Content == null || root.Content.Count == 0)
+                    return null;
+
+                var first = root.Content[0];
+                var rawPayload = first.Payload ?? string.Empty;
+
+                // Suppression éventuelle de caractères de contrôle précédant le XML
+                var startIdx = rawPayload.IndexOf("<?", StringComparison.Ordinal);
+                var cleaned = startIdx > 0 ? rawPayload.Substring(startIdx) : rawPayload;
+
+                return cleaned;
             }
-            
-            return null;
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (HttpRequestException ex) when (IsTransientError(ex))
+            {
+                // SECURE: Transient error (timeout, WebSocket drop, network)
+                System.Diagnostics.Debug.WriteLine($"[Free] Transient error: {ex.Message} - recreating HttpClient for next call");
+                RecreateHttpClient();
+                return null;
+            }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // SECURE: Timeout (HTTP Client timeout)
+                System.Diagnostics.Debug.WriteLine($"[Free] HTTP Timeout - recreating HttpClient for next call");
+                RecreateHttpClient();
+                return null;
+            }
+            catch (Exception ex)
+            {
+                // SECURE: Other errors - log and return null, but DON'T reset auth
+                System.Diagnostics.Debug.WriteLine($"[Free] Error: {ex.Message}");
+                return null;
+            }
         }
 
         /// <summary>
