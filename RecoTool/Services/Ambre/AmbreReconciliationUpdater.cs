@@ -389,11 +389,19 @@ namespace RecoTool.Services.Ambre
             }).ConfigureAwait(false);
 
             fastTimer.Stop();
-            LogManager.Info($"[PERF] Phase 1 completed: {fastRecords.Count} records in {fastTimer.ElapsedMilliseconds}ms");
-
             staged.AddRange(fastStaged);
             processed = fastRecords.Count;
-            progressCallback?.Invoke($"DWINGS resolved: {fastRecords.Count} in {fastTimer.ElapsedMilliseconds}ms", 75);
+
+            // ── Diagnostic: verify resolution hit rates ──
+            int hitInvoice = staged.Count(s => !string.IsNullOrWhiteSpace(s.Reconciliation.DWINGS_InvoiceID));
+            int hitBgpmt = staged.Count(s => !string.IsNullOrWhiteSpace(s.Reconciliation.DWINGS_BGPMT));
+            int hitGuarantee = staged.Count(s => !string.IsNullOrWhiteSpace(s.Reconciliation.DWINGS_GuaranteeID));
+            LogManager.Info($"[PERF] Phase 1: {fastRecords.Count} records in {fastTimer.ElapsedMilliseconds}ms " +
+                $"| Hits: Invoice={hitInvoice}, BGPMT={hitBgpmt}, Guarantee={hitGuarantee} " +
+                $"| Lookups: dwInvoices={dwInvoices?.Count ?? 0}, dwGuarantees={dwGuarantees?.Count ?? 0}");
+
+            progressCallback?.Invoke($"DWINGS resolved: {fastRecords.Count} in {fastTimer.ElapsedMilliseconds}ms " +
+                $"(Invoice={hitInvoice}, BGPMT={hitBgpmt}, Guarantee={hitGuarantee})", 75);
 
             // ── Phase 2: Slow path — records needing Free API (throttled) ──
             if (freeApiRecords.Count > 0)
