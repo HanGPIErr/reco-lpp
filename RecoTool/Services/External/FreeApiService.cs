@@ -13,8 +13,8 @@ namespace RecoTool.Services.External
         private readonly IFreeApiClient _inner;
         private readonly SemaphoreSlim _gate = new SemaphoreSlim(3, 3); // max 3 concurrent
         private volatile bool _isAuthenticated;
-        private readonly ConcurrentDictionary<string, Lazy<Task<string>>> _cache =
-            new ConcurrentDictionary<string, Lazy<Task<string>>>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, Task<string>> _cache =
+            new ConcurrentDictionary<string, Task<string>>(StringComparer.OrdinalIgnoreCase);
 
         public FreeApiService() : this(new Free()) { }
         public FreeApiService(IFreeApiClient inner)
@@ -54,10 +54,25 @@ namespace RecoTool.Services.External
             }
 
             var key = BuildKey(day, reference, cntServiceCode);
-            var lazy = _cache.GetOrAdd(key, k => new Lazy<Task<string>>(() => ExecuteThrottledAsync(day, reference, cntServiceCode)));
+            
+            // SECURE: Use AsyncLazy pattern to avoid caching exceptions
+            // GetOrAdd can return a Lazy whose Value failed, caching the exception forever.
+            // Instead, we create a new task each time if the previous one failed.
+            if (_cache.TryGetValue(key, out var cachedTask) && cachedTask.IsCompletedSuccessfully())
+            {
+                return cachedTask.Result;
+            }
+            
+            // Remove failed entry if exists
+            _cache.TryRemove(key, out _);
+            
+            // Start new request
+            var task = ExecuteThrottledAsync(day, reference, cntServiceCode);
+            _cache[key] = task;
+            
             try
             {
-                return await lazy.Value.ConfigureAwait(false);
+                return await task.ConfigureAwait(false);
             }
             catch
             {

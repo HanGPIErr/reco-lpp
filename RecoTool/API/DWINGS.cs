@@ -468,7 +468,8 @@ namespace RecoTool.API
                 HttpResponseMessage response;
                 try
                 {
-                    response = _client.SendAsync(request).Result;
+                    // SECURE: Use Task.Run to avoid WPF UI thread deadlock
+                    response = Task.Run(() => _client.SendAsync(request)).GetAwaiter().GetResult();
                 }
                 catch (Exception ex) when (attempt < maxAttempts)
                 {
@@ -505,7 +506,8 @@ namespace RecoTool.API
                     {
                         redirectClient.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentDefault);
 
-                        var redirectResponse = redirectClient.GetAsync(location).Result;
+                        // SECURE: Use Task.Run to avoid WPF UI thread deadlock
+                        var redirectResponse = Task.Run(() => redirectClient.GetAsync(location)).GetAwaiter().GetResult();
                         ExtractSessionCookie(redirectResponse);
 
                         // Small pause (mimic original VBA delay) then retry the **original** request
@@ -540,7 +542,8 @@ namespace RecoTool.API
                 // ---------------------------------------------------------
                 if (response.IsSuccessStatusCode)
                 {
-                    return response.Content.ReadAsStringAsync().Result;
+                    // SECURE: Use Task.Run to avoid WPF UI thread deadlock
+                    return Task.Run(() => response.Content.ReadAsStringAsync()).GetAwaiter().GetResult();
                 }
 
                 // ---------------------------------------------------------
@@ -548,7 +551,8 @@ namespace RecoTool.API
                 // ---------------------------------------------------------
                 if (attempt >= maxAttempts)
                 {
-                    var payload = response.Content.ReadAsStringAsync().Result;
+                    // SECURE: Use Task.Run to avoid WPF UI thread deadlock
+                    var payload = Task.Run(() => response.Content.ReadAsStringAsync()).GetAwaiter().GetResult();
                     throw new InvalidOperationException(
                         $"Dwings request failed after {maxAttempts} attempts. " +
                         $"Status: {(int)response.StatusCode} {response.ReasonPhrase}. " +

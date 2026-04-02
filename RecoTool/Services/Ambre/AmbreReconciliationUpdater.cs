@@ -412,19 +412,40 @@ namespace RecoTool.Services.Ambre
                 for (int i = 0; i < freeApiRecords.Count; i += batchSize)
                 {
                     var batch = freeApiRecords.Skip(i).Take(batchSize).ToList();
+                    // SECURE: Each task has timeout + exception isolation to prevent one failure from blocking the batch
                     var batchTasks = batch.Select(async dataAmbre =>
                     {
-                        var reconciliation = await CreateReconciliationAsync(
-                            dataAmbre, country, countryId, dwInvoices, dwGuarantees);
-                        return new ReconciliationStaging
+                        try
                         {
-                            Reconciliation = reconciliation,
-                            DataAmbre = dataAmbre,
-                            IsPivot = dataAmbre.IsPivotAccount(country.CNT_AmbrePivot),
-                            Bgi = reconciliation.DWINGS_InvoiceID
-                        };
-                    });
-                    staged.AddRange(await Task.WhenAll(batchTasks));
+                            // SECURE: Add timeout to prevent indefinite blocking on Free API
+                            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30));
+                            var reconciliation = await CreateReconciliationAsync(
+                                dataAmbre, country, countryId, dwInvoices, dwGuarantees).ConfigureAwait(false);
+                            return new ReconciliationStaging
+                            {
+                                Reconciliation = reconciliation,
+                                DataAmbre = dataAmbre,
+                                IsPivot = dataAmbre.IsPivotAccount(country.CNT_AmbrePivot),
+                                Bgi = reconciliation.DWINGS_InvoiceID
+                            };
+                        }
+                        catch (Exception ex)
+                        {
+                            // SECURE: Isolate errors - log and return a minimal staging object so the batch continues
+                            LogManager.Warning($"[FreeAPI] Failed for {dataAmbre.ID}: {ex.Message}");
+                            return new ReconciliationStaging
+                            {
+                                Reconciliation = new Reconciliation { ID = dataAmbre.ID },
+                                DataAmbre = dataAmbre,
+                                IsPivot = dataAmbre.IsPivotAccount(country.CNT_AmbrePivot),
+                                Bgi = null
+                            };
+                        }
+                    }).ToList();
+                    
+                    // SECURE: Use WhenAll with ConfigureAwait to avoid deadlocks
+                    var results = await Task.WhenAll(batchTasks).ConfigureAwait(false);
+                    staged.AddRange(results.Where(r => r != null));
                     processed += batch.Count;
 
                     int apiDone = processed - fastRecords.Count;

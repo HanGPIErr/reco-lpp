@@ -186,7 +186,15 @@ namespace RecoTool.Services.Sync
                             if (svc.AllowBackgroundPushes && !svc.IsAmbreImportInProgress())
                             {
                                 OnSyncStateChanged?.Invoke("syncing");
-                                var pushed = Task.Run(() => svc.PushReconciliationIfPendingAsync(_currentCountryId)).Result;
+                                // SECURE: Add timeout to prevent indefinite blocking
+                                var pushTask = Task.Run(() => svc.PushReconciliationIfPendingAsync(_currentCountryId));
+                                var completed = Task.WhenAny(pushTask, Task.Delay(TimeSpan.FromSeconds(30))).GetAwaiter().GetResult();
+                                if (completed != pushTask)
+                                {
+                                    LogManager.Warning("[BackgroundSync] Push timed out after 30s");
+                                    continue;
+                                }
+                                var pushed = pushTask.GetAwaiter().GetResult();
                                 didPush = pushed;
 
                                 // After successful push, increment SyncVersion so others detect it
@@ -208,7 +216,15 @@ namespace RecoTool.Services.Sync
                             if (!svc.IsAmbreImportInProgress())
                             {
                                 OnSyncStateChanged?.Invoke("syncing");
-                                var pulled = Task.Run(() => svc.PullReconciliationFromNetworkAsync(_currentCountryId)).Result;
+                                // SECURE: Add timeout to prevent indefinite blocking
+                                var pullTask = Task.Run(() => svc.PullReconciliationFromNetworkAsync(_currentCountryId));
+                                var completed = Task.WhenAny(pullTask, Task.Delay(TimeSpan.FromSeconds(60))).GetAwaiter().GetResult();
+                                if (completed != pullTask)
+                                {
+                                    LogManager.Warning("[BackgroundSync] Pull timed out after 60s");
+                                    continue;
+                                }
+                                var pulled = pullTask.GetAwaiter().GetResult();
                                 if (pulled > 0)
                                 {
                                     didPull = true;
