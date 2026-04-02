@@ -418,9 +418,10 @@ namespace RecoTool.Services.Ambre
                         try
                         {
                             // SECURE: Add timeout to prevent indefinite blocking on Free API
-                            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30));
+                            // Free can be slow; keep this aligned with the 5-minute Free HTTP timeout.
+                            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
                             var reconciliation = await CreateReconciliationAsync(
-                                dataAmbre, country, countryId, dwInvoices, dwGuarantees).ConfigureAwait(false);
+                                dataAmbre, country, countryId, dwInvoices, dwGuarantees, cts.Token).ConfigureAwait(false);
                             return new ReconciliationStaging
                             {
                                 Reconciliation = reconciliation,
@@ -429,10 +430,23 @@ namespace RecoTool.Services.Ambre
                                 Bgi = reconciliation.DWINGS_InvoiceID
                             };
                         }
+                        catch (OperationCanceledException)
+                        {
+                            // SECURE: Free API timeout - do not block the import; keep the record as not found.
+                            LogManager.Warning($"[FreeAPI] Timeout for {dataAmbre.ID} after 5 minutes.");
+                            return new ReconciliationStaging
+                            {
+                                Reconciliation = new Reconciliation { ID = dataAmbre.ID },
+                                DataAmbre = dataAmbre,
+                                IsPivot = dataAmbre.IsPivotAccount(country.CNT_AmbrePivot),
+                                Bgi = null
+                            };
+                        }
                         catch (Exception ex)
                         {
-                            // SECURE: Isolate errors - log and return a minimal staging object so the batch continues
-                            LogManager.Warning($"[FreeAPI] Failed for {dataAmbre.ID}: {ex.Message}");
+                            // SECURE: Best-effort enrichment only. Any Free error should not block the import
+                            // nor cause the same record to be retried forever.
+                            LogManager.Warning($"[FreeAPI] Best-effort enrichment failed for {dataAmbre.ID}: {ex.Message}");
                             return new ReconciliationStaging
                             {
                                 Reconciliation = new Reconciliation { ID = dataAmbre.ID },
@@ -506,7 +520,8 @@ namespace RecoTool.Services.Ambre
             Country country,
             string countryId,
             IReadOnlyList<DwingsInvoiceDto> dwInvoices,
-            IReadOnlyList<DwingsGuaranteeDto> dwGuarantees)
+            IReadOnlyList<DwingsGuaranteeDto> dwGuarantees,
+            CancellationToken cancellationToken = default)
         {
             var reconciliation = new Reconciliation
             {
@@ -538,7 +553,7 @@ namespace RecoTool.Services.Ambre
                     // Only call the Free API if it has not been called before (MbawData empty for new lines)
                     if (string.IsNullOrWhiteSpace(reconciliation.MbawData) && (reference.Contains("FK") || reference.Contains("IPA")))
                     {
-                        var payload = await _freeApi.SearchAsync(day, reference, serviceCode);
+                        var payload = await _freeApi.SearchAsync(day, reference, serviceCode, cancellationToken).ConfigureAwait(false);
                         // Store payload or a sentinel "Not found" to prevent future calls
                         reconciliation.MbawData = string.IsNullOrWhiteSpace(payload) ? "Not found" : payload;
 
@@ -566,7 +581,20 @@ namespace RecoTool.Services.Ambre
                         }
                     }
                 }
-                catch { /* best-effort enrichment */ }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // SECURE: Free API timeout - do not block the import; keep the record as not found.
+                    LogManager.Warning($"[FreeAPI] Timeout for {dataAmbre.ID} after 5 minutes.");
+                    reconciliation.MbawData = "Not found";
+                }
+                catch (Exception ex)
+                {
+                    // SECURE: Best-effort enrichment only. Any Free error should not block the import
+                    // nor cause the same record to be retried forever.
+                    LogManager.Warning($"[FreeAPI] Best-effort enrichment failed for {dataAmbre.ID}: {ex.Message}");
+                    if (string.IsNullOrWhiteSpace(reconciliation.MbawData))
+                        reconciliation.MbawData = "Not found";
+                }
             }
 
             // For PIVOT: Auto-fill PaymentReference for bulk trigger
@@ -1459,8 +1487,8 @@ namespace RecoTool.Services.Ambre
                                 cmd.Parameters.Add("@ToRemindDate", OleDbType.Date);
                                 cmd.Parameters.Add("@FirstClaimDate", OleDbType.Date);
                                 cmd.Parameters.Add("@LastModified", OleDbType.Date);
-                                cmd.Parameters.Add("@ModifiedBy", OleDbType.VarChar, 255);
-                                cmd.Parameters.Add("@ID", OleDbType.VarChar, 255);
+                                cmd.Parameters.Add("@ModifiedBy", OleDbType.VarWChar, 255);
+                                cmd.Parameters.Add("@ID", OleDbType.VarWChar, 255);
                                 
                                 cmd.Prepare(); // Prepare statement once (requires explicit sizes for VarChar)
                                 
@@ -1529,8 +1557,6 @@ namespace RecoTool.Services.Ambre
                     FirstClaimDate = reader["FirstClaimDate"] as DateTime?,
                     LastClaimDate = reader["LastClaimDate"] as DateTime?,
                     ToRemind = (reader["ToRemind"] as bool?) ?? false,
-                    ToRemindDate = reader["ToRemindDate"] as DateTime?,
-                    ACK = (reader["ACK"] as bool?) ?? false,
                     SwiftCode = reader["SwiftCode"]?.ToString(),
                     PaymentReference = reader["PaymentReference"]?.ToString(),
                     KPI = reader["KPI"] as int?,
@@ -1680,23 +1706,31 @@ namespace RecoTool.Services.Ambre
                         cmd.Parameters.Add("@Action", OleDbType.Integer);
                         cmd.Parameters.Add("@ActionStatus", OleDbType.Boolean);
                         cmd.Parameters.Add("@ActionDate", OleDbType.Date);
-                        cmd.Parameters.Add("@Comments", OleDbType.LongVarWChar);
+                        cmd.Parameters.Add("@Comments", OleDbType.LongVarWChar, int.MaxValue);
                         cmd.Parameters.Add("@InternalInvoiceReference", OleDbType.VarWChar, 255);
+                        
                         cmd.Parameters.Add("@FirstClaimDate", OleDbType.Date);
                         cmd.Parameters.Add("@LastClaimDate", OleDbType.Date);
                         cmd.Parameters.Add("@ToRemind", OleDbType.Boolean);
                         cmd.Parameters.Add("@ToRemindDate", OleDbType.Date);
                         cmd.Parameters.Add("@ACK", OleDbType.Boolean);
+                        
                         cmd.Parameters.Add("@SwiftCode", OleDbType.VarWChar, 255);
                         cmd.Parameters.Add("@PaymentReference", OleDbType.VarWChar, 255);
-                        cmd.Parameters.Add("@MbawData", OleDbType.LongVarWChar);
-                        cmd.Parameters.Add("@SpiritData", OleDbType.LongVarWChar);
+                        // Long text fields
+                        var pMbaw = cmd.Parameters.Add("@MbawData", OleDbType.LongVarWChar, int.MaxValue);
+                        pMbaw.Value = DBNull.Value;
+                        var pSpirit = cmd.Parameters.Add("@SpiritData", OleDbType.LongVarWChar, int.MaxValue);
+                        pSpirit.Value = DBNull.Value;
+                        
                         cmd.Parameters.Add("@KPI", OleDbType.Integer);
                         cmd.Parameters.Add("@IncidentType", OleDbType.Integer);
                         cmd.Parameters.Add("@RiskyItem", OleDbType.Boolean);
                         cmd.Parameters.Add("@ReasonNonRisky", OleDbType.Integer);
                         cmd.Parameters.Add("@CreationDate", OleDbType.Date);
+                        
                         cmd.Parameters.Add("@ModifiedBy", OleDbType.VarWChar, 255);
+                        
                         cmd.Parameters.Add("@LastModified", OleDbType.Date);
 
                         cmd.Prepare();
@@ -1707,27 +1741,42 @@ namespace RecoTool.Services.Ambre
                             cmd.Parameters["@DWINGS_GuaranteeID"].Value = (object)rec.DWINGS_GuaranteeID ?? DBNull.Value;
                             cmd.Parameters["@DWINGS_InvoiceID"].Value = (object)rec.DWINGS_InvoiceID ?? DBNull.Value;
                             cmd.Parameters["@DWINGS_BGPMT"].Value = (object)rec.DWINGS_BGPMT ?? DBNull.Value;
+                            
                             cmd.Parameters["@Action"].Value = rec.Action.HasValue ? (object)rec.Action.Value : DBNull.Value;
                             cmd.Parameters["@ActionStatus"].Value = rec.ActionStatus.HasValue ? (object)rec.ActionStatus.Value : DBNull.Value;
                             cmd.Parameters["@ActionDate"].Value = rec.ActionDate.HasValue ? (object)rec.ActionDate.Value : DBNull.Value;
                             cmd.Parameters["@Comments"].Value = (object)rec.Comments ?? DBNull.Value;
                             cmd.Parameters["@InternalInvoiceReference"].Value = (object)rec.InternalInvoiceReference ?? DBNull.Value;
-                            cmd.Parameters["@FirstClaimDate"].Value = rec.FirstClaimDate.HasValue ? (object)rec.FirstClaimDate.Value : DBNull.Value;
-                            cmd.Parameters["@LastClaimDate"].Value = rec.LastClaimDate.HasValue ? (object)rec.LastClaimDate.Value : DBNull.Value;
+                            
+                            cmd.Parameters["@FirstClaimDate"].Value = 
+                                rec.FirstClaimDate.HasValue ? (object)rec.FirstClaimDate.Value : DBNull.Value;
+                            cmd.Parameters["@LastClaimDate"].Value = 
+                                rec.LastClaimDate.HasValue ? (object)rec.LastClaimDate.Value : DBNull.Value;
                             cmd.Parameters["@ToRemind"].Value = rec.ToRemind;
-                            cmd.Parameters["@ToRemindDate"].Value = rec.ToRemindDate.HasValue ? (object)rec.ToRemindDate.Value : DBNull.Value;
+                            cmd.Parameters["@ToRemindDate"].Value = 
+                                rec.ToRemindDate.HasValue ? (object)rec.ToRemindDate.Value : DBNull.Value;
                             cmd.Parameters["@ACK"].Value = rec.ACK;
+                            
                             cmd.Parameters["@SwiftCode"].Value = (object)rec.SwiftCode ?? DBNull.Value;
                             cmd.Parameters["@PaymentReference"].Value = (object)rec.PaymentReference ?? DBNull.Value;
-                            cmd.Parameters["@MbawData"].Value = (object)rec.MbawData ?? DBNull.Value;
-                            cmd.Parameters["@SpiritData"].Value = (object)rec.SpiritData ?? DBNull.Value;
-                            cmd.Parameters["@KPI"].Value = rec.KPI.HasValue ? (object)rec.KPI.Value : DBNull.Value;
-                            cmd.Parameters["@IncidentType"].Value = rec.IncidentType.HasValue ? (object)rec.IncidentType.Value : DBNull.Value;
-                            cmd.Parameters["@RiskyItem"].Value = rec.RiskyItem.HasValue ? (object)rec.RiskyItem.Value : DBNull.Value;
-                            cmd.Parameters["@ReasonNonRisky"].Value = rec.ReasonNonRisky.HasValue ? (object)rec.ReasonNonRisky.Value : DBNull.Value;
-                            cmd.Parameters["@CreationDate"].Value = rec.CreationDate.HasValue ? (object)rec.CreationDate.Value : DBNull.Value;
+                            pMbaw.Value = rec.MbawData ?? (object)DBNull.Value;
+                            pSpirit.Value = rec.SpiritData ?? (object)DBNull.Value;
+                            
+                            cmd.Parameters["@KPI"].Value = 
+                                rec.KPI.HasValue ? (object)rec.KPI.Value : DBNull.Value;
+                            cmd.Parameters["@IncidentType"].Value = 
+                                rec.IncidentType.HasValue ? (object)rec.IncidentType.Value : DBNull.Value;
+                            cmd.Parameters["@RiskyItem"].Value = 
+                                rec.RiskyItem.HasValue ? (object)rec.RiskyItem.Value : DBNull.Value;
+                            cmd.Parameters["@ReasonNonRisky"].Value = 
+                                rec.ReasonNonRisky.HasValue ? (object)rec.ReasonNonRisky.Value : DBNull.Value;
+                            cmd.Parameters["@CreationDate"].Value = 
+                                rec.CreationDate.HasValue ? (object)rec.CreationDate.Value : DBNull.Value;
+                            
                             cmd.Parameters["@ModifiedBy"].Value = (object)rec.ModifiedBy ?? DBNull.Value;
-                            cmd.Parameters["@LastModified"].Value = rec.LastModified.HasValue ? (object)rec.LastModified.Value : DBNull.Value;
+                            
+                            cmd.Parameters["@LastModified"].Value = 
+                                rec.LastModified.HasValue ? (object)rec.LastModified.Value : DBNull.Value;
 
                             insertedCount += await cmd.ExecuteNonQueryAsync();
                         }
@@ -1787,15 +1836,16 @@ namespace RecoTool.Services.Ambre
             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", conn, tx);
 
             // Add parameters in order
-            cmd.Parameters.AddWithValue("@ID", (object)rec.ID ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@DWINGS_GuaranteeID", (object)rec.DWINGS_GuaranteeID ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@DWINGS_InvoiceID", (object)rec.DWINGS_InvoiceID ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@DWINGS_BGPMT", (object)rec.DWINGS_BGPMT ?? DBNull.Value);
+            cmd.Parameters.Add("@ID", OleDbType.VarWChar, 255).Value = (object)rec.ID ?? DBNull.Value;
+            cmd.Parameters.Add("@DWINGS_GuaranteeID", OleDbType.VarWChar, 255).Value = (object)rec.DWINGS_GuaranteeID ?? DBNull.Value;
+            cmd.Parameters.Add("@DWINGS_InvoiceID", OleDbType.VarWChar, 255).Value = (object)rec.DWINGS_InvoiceID ?? DBNull.Value;
+            cmd.Parameters.Add("@DWINGS_BGPMT", OleDbType.VarWChar, 255).Value = (object)rec.DWINGS_BGPMT ?? DBNull.Value;
+            
             cmd.Parameters.AddWithValue("@Action", (object)rec.Action ?? DBNull.Value);
             cmd.Parameters.Add("@ActionStatus", OleDbType.Boolean).Value = rec.ActionStatus.HasValue ? (object)rec.ActionStatus.Value : DBNull.Value;
             cmd.Parameters.Add("@ActionDate", OleDbType.Date).Value = rec.ActionDate.HasValue ? (object)rec.ActionDate.Value : DBNull.Value;
-            cmd.Parameters.AddWithValue("@Comments", (object)rec.Comments ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@InternalInvoiceReference", (object)rec.InternalInvoiceReference ?? DBNull.Value);
+            cmd.Parameters.Add("@Comments", OleDbType.LongVarWChar, int.MaxValue).Value = (object)rec.Comments ?? DBNull.Value;
+            cmd.Parameters.Add("@InternalInvoiceReference", OleDbType.VarWChar, 255).Value = (object)rec.InternalInvoiceReference ?? DBNull.Value;
             
             cmd.Parameters.Add("@FirstClaimDate", OleDbType.Date).Value = 
                 rec.FirstClaimDate.HasValue ? (object)rec.FirstClaimDate.Value : DBNull.Value;
@@ -1806,12 +1856,12 @@ namespace RecoTool.Services.Ambre
                 rec.ToRemindDate.HasValue ? (object)rec.ToRemindDate.Value : DBNull.Value;
             cmd.Parameters.Add("@ACK", OleDbType.Boolean).Value = rec.ACK;
             
-            cmd.Parameters.AddWithValue("@SwiftCode", (object)rec.SwiftCode ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@PaymentReference", (object)rec.PaymentReference ?? DBNull.Value);
+            cmd.Parameters.Add("@SwiftCode", OleDbType.VarWChar, 255).Value = (object)rec.SwiftCode ?? DBNull.Value;
+            cmd.Parameters.Add("@PaymentReference", OleDbType.VarWChar, 255).Value = (object)rec.PaymentReference ?? DBNull.Value;
             // Long text fields
-            var pMbaw = cmd.Parameters.Add("@MbawData", OleDbType.LongVarWChar);
+            var pMbaw = cmd.Parameters.Add("@MbawData", OleDbType.LongVarWChar, int.MaxValue);
             pMbaw.Value = rec.MbawData ?? (object)DBNull.Value;
-            var pSpirit = cmd.Parameters.Add("@SpiritData", OleDbType.LongVarWChar);
+            var pSpirit = cmd.Parameters.Add("@SpiritData", OleDbType.LongVarWChar, int.MaxValue);
             pSpirit.Value = rec.SpiritData ?? (object)DBNull.Value;
             
             cmd.Parameters.Add("@KPI", OleDbType.Integer).Value = 
@@ -1825,7 +1875,7 @@ namespace RecoTool.Services.Ambre
             cmd.Parameters.Add("@CreationDate", OleDbType.Date).Value = 
                 rec.CreationDate.HasValue ? (object)rec.CreationDate.Value : DBNull.Value;
                 
-            cmd.Parameters.AddWithValue("@ModifiedBy", (object)rec.ModifiedBy ?? DBNull.Value);
+            cmd.Parameters.Add("@ModifiedBy", OleDbType.VarWChar, 255).Value = (object)rec.ModifiedBy ?? DBNull.Value;
             
             cmd.Parameters.Add("@LastModified", OleDbType.Date).Value = 
                 rec.LastModified.HasValue ? (object)rec.LastModified.Value : DBNull.Value;

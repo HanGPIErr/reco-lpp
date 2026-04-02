@@ -121,7 +121,7 @@ namespace RecoTool.API
             _httpClient = new HttpClient(_handler)
             {
                 BaseAddress = new Uri(BASE_URL),
-                Timeout = TimeSpan.FromSeconds(120)
+                Timeout = TimeSpan.FromMinutes(5) // 5 minutes timeout
             };
 
             _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0");
@@ -147,7 +147,7 @@ namespace RecoTool.API
             var newClient = new HttpClient(_handler)
             {
                 BaseAddress = new Uri(BASE_URL),
-                Timeout = TimeSpan.FromSeconds(120)
+                Timeout = TimeSpan.FromMinutes(5) // 5 minutes timeout
             };
             newClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0");
 
@@ -156,14 +156,14 @@ namespace RecoTool.API
             System.Diagnostics.Debug.WriteLine("[Free] HttpClient recreated (cookies preserved)");
         }
 
-        private async Task EnsureAuthenticatedAsync()
+        private async Task EnsureAuthenticatedAsync(CancellationToken cancellationToken = default)
         {
             // If we already have a fresh cookie – nothing to do.
             if (!IsAuthenticationStale())
                 return;
 
             // SECURE: Use lock to serialize auth attempts and avoid race condition
-            await _authLock.WaitAsync().ConfigureAwait(false);
+            await _authLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 // Another thread might have refreshed the cookie while we were waiting.
@@ -231,7 +231,7 @@ namespace RecoTool.API
         }
 
 
-        public async Task<string?> SearchAsync(DateTime startDate, string flowTrn, string codeSector)
+        public async Task<string?> SearchAsync(DateTime startDate, string flowTrn, string codeSector, CancellationToken cancellationToken = default)
         {
             // --------------------------------------------------------------
             // 1️⃣  Acquire the *search* lock – only one thread may be here.
@@ -241,12 +241,12 @@ namespace RecoTool.API
                 // ----------------------------------------------------------
                 // 2️⃣  Try the “Expression” endpoint (payload extraction)
                 // ----------------------------------------------------------
-                string? payload = await SearchMessageAsync(codeSector, startDate, flowTrn: flowTrn)
+                string? payload = await SearchMessageAsync(codeSector, startDate, flowTrn: flowTrn, cancellationToken: cancellationToken)
                                     .ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(payload))
                     return payload;                     // payload (Ustrd) found – stop here
 
-                payload = await SearchMessageAsync(null, startDate, freeText: flowTrn)
+                payload = await SearchMessageAsync(null, startDate, freeText: flowTrn, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(payload))
                     return payload;                     // payload (Ustrd) found – stop here
@@ -271,7 +271,8 @@ namespace RecoTool.API
                     formatMessage: "MT",
                     dateDebut: startDate,
                     codeService: codeSector,
-                    referenceMessage: flowTrn)
+                    referenceMessage: flowTrn,
+                    cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
 
                 if (mtResult?.SearchDetails?.TexteMessage?.TexteExportMT != null)
@@ -284,7 +285,8 @@ namespace RecoTool.API
                     formatMessage: "MX",
                     dateDebut: startDate,
                     codeService: codeSector,
-                    referenceMessage: flowTrn)
+                    referenceMessage: flowTrn,
+                    cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
 
                 if (mxResult?.SearchDetails?.TexteMessage?.TexteExportMX != null)
@@ -317,9 +319,10 @@ namespace RecoTool.API
                                                             string formatMessage,
                                                             DateTime dateDebut,
                                                             string codeService,
-                                                            string referenceMessage)
+                                                            string referenceMessage,
+                                                            CancellationToken cancellationToken = default)
         {
-            await EnsureAuthenticatedAsync();
+            await EnsureAuthenticatedAsync(cancellationToken);
 
             // -----------------------------------------------------------------
             // 1️⃣  Build the dictionary – exactly the JSON you posted
@@ -426,7 +429,7 @@ namespace RecoTool.API
             // -----------------------------------------------------------------
             // 5️⃣  Send request & handle response (original logic)
             // -----------------------------------------------------------------
-            var response = await _httpClient.SendAsync(request);
+            var response = await _httpClient.SendAsync(request, cancellationToken);
             try
             {
                 response.EnsureSuccessStatusCode();
@@ -434,7 +437,7 @@ namespace RecoTool.API
                 var content = await response.Content.ReadAsStringAsync();
                 var liste = JsonSerializer.Deserialize<FreeSearchItems.Search>(content).Liste.FirstOrDefault();
                 if (liste != null)  
-                    liste.SearchDetails = await GetSearchDetails(liste);
+                    liste.SearchDetails = await GetSearchDetails(liste, cancellationToken);
 
                     return liste;
             }
@@ -456,7 +459,7 @@ namespace RecoTool.API
         }
 
 
-        public async Task<FreeSearchDetails.Root> GetSearchDetails(FreeSearchItems.Message fullDetails)
+        public async Task<FreeSearchDetails.Root> GetSearchDetails(FreeSearchItems.Message fullDetails, CancellationToken cancellationToken = default)
         {
             var request = new HttpRequestMessage(HttpMethod.Post, "/api/free-ombrelle/messages")
             {
@@ -474,7 +477,7 @@ namespace RecoTool.API
 
             request.Headers.Add("X-XSRF-TOKEN", GetXSRF());
 
-            var response = await _httpClient.SendAsync(request);
+            var response = await _httpClient.SendAsync(request, cancellationToken);
 
             try
             {
@@ -582,9 +585,13 @@ namespace RecoTool.API
         string? codeSector,
         DateTime startDate,
         string? freeText = null,
-        string? flowTrn = null)
+        string? flowTrn = null,
+        CancellationToken cancellationToken = default)
         {
-            await EnsureAuthenticatedAsync();
+            await EnsureAuthenticatedAsync(cancellationToken).ConfigureAwait(false);
+
+            if (cancellationToken.IsCancellationRequested)
+                throw new OperationCanceledException(cancellationToken);
 
             // SECURE: Retry logic for transient failures
             int maxAttempts = 2;
@@ -636,7 +643,7 @@ namespace RecoTool.API
                 // --------------------------------------------------------------
                 try
                 {
-                    var response = await _httpClient.SendAsync(request).ConfigureAwait(false);
+                    var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
                     
                     // SECURE: Handle 401/403 as auth errors - don't recreate client, let auth flow handle
                     if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
@@ -684,6 +691,10 @@ namespace RecoTool.API
                         return cleaned;
                     }
                 }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
                 catch (HttpRequestException ex) when (IsTransientError(ex) && attempt < maxAttempts)
                 {
                     // SECURE: Transient error (timeout, WebSocket drop, network) - recreate client and retry
@@ -692,7 +703,7 @@ namespace RecoTool.API
                     await Task.Delay(500).ConfigureAwait(false); // Small delay before retry
                     continue;
                 }
-                catch (TaskCanceledException ex) when (attempt < maxAttempts)
+                catch (TaskCanceledException ex) when (attempt < maxAttempts && !cancellationToken.IsCancellationRequested)
                 {
                     // SECURE: Timeout - recreate client and retry
                     System.Diagnostics.Debug.WriteLine($"[Free] Timeout on attempt {attempt} - recreating HttpClient");

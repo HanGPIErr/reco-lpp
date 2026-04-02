@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace RecoTool.Services.External
@@ -10,6 +11,6 @@ namespace RecoTool.Services.External
         // Expose current authentication state (best-effort)
         bool IsAuthenticated { get; }
         // Mockable search: returns a raw detail string for the given day/reference/serviceCode
-        Task<string> SearchAsync(DateTime day, string reference, string cntServiceCode);
+        Task<string> SearchAsync(DateTime day, string reference, string cntServiceCode, CancellationToken cancellationToken = default);
     }
 }

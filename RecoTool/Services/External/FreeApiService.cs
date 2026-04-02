@@ -11,7 +11,7 @@ namespace RecoTool.Services.External
     public sealed class FreeApiService : IFreeApiClient
     {
         private readonly IFreeApiClient _inner;
-        private readonly SemaphoreSlim _gate = new SemaphoreSlim(3, 3); // max 3 concurrent
+        private readonly SemaphoreSlim _gate = new SemaphoreSlim(2, 2); // max 2 concurrent
         private volatile bool _isAuthenticated;
         private readonly ConcurrentDictionary<string, Task<string>> _cache =
             new ConcurrentDictionary<string, Task<string>>(StringComparer.OrdinalIgnoreCase);
@@ -40,7 +40,7 @@ namespace RecoTool.Services.External
         }
         public bool IsAuthenticated => _isAuthenticated;
 
-        public async Task<string> SearchAsync(DateTime day, string reference, string cntServiceCode)
+        public async Task<string> SearchAsync(DateTime day, string reference, string cntServiceCode, CancellationToken cancellationToken = default)
         {
             // Ensure authenticated once
             if (!_isAuthenticated)
@@ -67,7 +67,7 @@ namespace RecoTool.Services.External
             _cache.TryRemove(key, out _);
             
             // Start new request
-            var task = ExecuteThrottledAsync(day, reference, cntServiceCode);
+            var task = ExecuteThrottledAsync(day, reference, cntServiceCode, cancellationToken);
             _cache[key] = task;
             
             try
@@ -82,12 +82,12 @@ namespace RecoTool.Services.External
             }
         }
 
-        private async Task<string> ExecuteThrottledAsync(DateTime day, string reference, string cntServiceCode)
+        private async Task<string> ExecuteThrottledAsync(DateTime day, string reference, string cntServiceCode, CancellationToken cancellationToken)
         {
-            await _gate.WaitAsync().ConfigureAwait(false);
+            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                return await _inner.SearchAsync(day, reference, cntServiceCode).ConfigureAwait(false);
+                return await _inner.SearchAsync(day, reference, cntServiceCode, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
