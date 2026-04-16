@@ -1094,6 +1094,9 @@ namespace RecoTool.Services.DTOs
 
             // ActionStatus display (replaces DataTriggers for bg/fg/text)
             RecalcActionStatusDisplay();
+
+            // Row background/foreground brushes (replaces RowBackgroundConverter/RowForegroundConverter)
+            RecalcRowBrushes();
         }
 
         private string ComputeLastComment()
@@ -1137,6 +1140,39 @@ namespace RecoTool.Services.DTOs
 
         private SolidColorBrush _actionBgBrush;
         public SolidColorBrush ActionBgBrush => _actionBgBrush ?? _transparentBrush;
+
+        // ── Row Background/Foreground brushes (replaces RowBackgroundConverter/RowForegroundConverter) ──
+        // PERF: These replace {Binding Converter=...} in the VirtualizingCellsControl row style.
+        // Previously, a converter ran for every row on every recycle during scroll. Now they are pre-computed.
+        private static readonly SolidColorBrush _rowBgDeleted = CreateFrozenBrush(0xFE, 0xF2, 0xF2);  // #FEF2F2 pink (deleted/archived)
+        private static readonly SolidColorBrush _rowBgMatchedGreen = CreateFrozenBrush(0xF0, 0xFD, 0xF4);  // #F0FDF4 subtle green (matched + balanced)
+        private static readonly SolidColorBrush _rowFgDeleted = CreateFrozenBrush(0x9C, 0xA3, 0xAF);  // #9CA3AF dim text
+        private static readonly SolidColorBrush _rowFgDefault = CreateFrozenBrush(0x1E, 0x29, 0x3B);  // #1E293B default dark
+
+        private SolidColorBrush _rowBackgroundBrush;
+        public SolidColorBrush RowBackgroundBrush => _rowBackgroundBrush ?? _transparentBrush;
+
+        private SolidColorBrush _rowForegroundBrush;
+        public SolidColorBrush RowForegroundBrush => _rowForegroundBrush ?? _rowFgDefault;
+
+        private void RecalcRowBrushes()
+        {
+            // NOTE: Matches legacy RowBackgroundConverter behavior exactly. The original
+            // converter compared `StatusColor == "Green"` (literal string) but StatusColor
+            // returns hex codes (e.g. "#4CAF50"), so the matched-green branch never fired.
+            // We preserve that behavior (only IsDeleted changes the background) to avoid
+            // unexpected visual changes. _rowBgMatchedGreen is kept as a reference.
+            if (IsDeleted)
+            {
+                _rowBackgroundBrush = _rowBgDeleted;
+                _rowForegroundBrush = _rowFgDeleted;
+            }
+            else
+            {
+                _rowBackgroundBrush = null; // transparent (default SfDataGrid row background)
+                _rowForegroundBrush = _rowFgDefault;
+            }
+        }
         #endregion
 
         #region Pre-calculated display strings (replaces converters in hot path)

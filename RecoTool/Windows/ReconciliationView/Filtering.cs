@@ -85,9 +85,21 @@ namespace RecoTool.Windows
             _filteredData = filteredList;
             _loadedCount = Math.Min(InitialPageSize, _filteredData.Count);
 
-            _viewData.Clear();
-            foreach (var item in _filteredData.Take(_loadedCount))
-                _viewData.Add(item);
+            // PERF: Suspend SfDataGrid layout while we swap the page data.
+            // Without BeginInit/EndInit, each Clear+Add triggers a full layout pass
+            // (N+1 CollectionChanged events → N+1 relayout).
+            var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+            try { sfGrid?.View?.BeginInit(); } catch { }
+            try
+            {
+                _viewData.Clear();
+                foreach (var item in _filteredData.Take(_loadedCount))
+                    _viewData.Add(item);
+            }
+            finally
+            {
+                try { sfGrid?.View?.EndInit(); } catch { }
+            }
 
             // 3️⃣  Restaurer le tri
             var newView = CollectionViewSource.GetDefaultView(_viewData);

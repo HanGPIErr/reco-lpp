@@ -739,6 +739,8 @@ namespace RecoTool.Services.Ambre
             string mtStatus = null;
             bool? hasCommEmail = null;
             bool? bgiInitiated = null;
+            string invoiceStatus = null;
+            string paymentRequestStatus = null;
             try
             {
                 DwingsInvoiceDto invLookup;
@@ -748,6 +750,8 @@ namespace RecoTool.Services.Ambre
                 {
                     mtStatus = invLookup.MT_STATUS;
                     hasCommEmail = invLookup.COMM_ID_EMAIL;
+                    invoiceStatus = invLookup.T_INVOICE_STATUS;
+                    paymentRequestStatus = invLookup.T_PAYMENT_REQUEST_STATUS;
                     if (!string.IsNullOrWhiteSpace(invLookup.T_INVOICE_STATUS))
                         bgiInitiated = string.Equals(invLookup.T_INVOICE_STATUS, "INITIATED", StringComparison.OrdinalIgnoreCase);
                 }
@@ -776,10 +780,15 @@ namespace RecoTool.Services.Ambre
                 IsNewLine = isNewLine,
                 DaysSinceReminder = daysSinceReminder,
                 CurrentActionId = reconciliation?.Action,
+                // FIX: was missing — rules with IsActionDone condition never fired during import
+                IsActionDone = reconciliation?.ActionStatus,
                 // New DWINGS-derived
                 MtStatus = mtStatus,
                 HasCommIdEmail = hasCommEmail,
-                IsBgiInitiated = bgiInitiated
+                IsBgiInitiated = bgiInitiated,
+                // FIX: were never populated — dead conditions for rules like R-DIRDEB-FULLY-EXECUTED
+                InvoiceStatus = invoiceStatus,
+                PaymentRequestStatus = paymentRequestStatus
             };
         }
 
@@ -843,12 +852,14 @@ namespace RecoTool.Services.Ambre
                                                   bool TargetIsPivot,
                                                   string RuleId,
                                                   int? ActionId,
-                                                  int? KgiId,
+                                                  int? KpiId,
                                                   int? IncidentTypeId,
                                                   bool? RiskyItem,
                                                   int? ReasonNonRiskyId,
                                                   bool? ToRemind,
-                                                  int? ToRemindDays)>();
+                                                  int? ToRemindDays,
+                                                  bool? ActionDone,
+                                                  bool? FirstClaimToday)>();
 
                 const int batchSize = 2000;                     // 2000 lignes par lot
                 var allEvalResults = new List<(ReconciliationStaging Staging,
@@ -921,12 +932,15 @@ namespace RecoTool.Services.Ambre
                             TargetIsPivot: targetIsPivot,
                             RuleId: res.Rule.RuleId,
                             ActionId: res.Rule.OutputActionId,
-                            KgiId: res.Rule.OutputKpiId,          // ← garder le même nom que votre table si vous avez ce champ
+                            KpiId: res.Rule.OutputKpiId,
                             IncidentTypeId: res.Rule.OutputIncidentTypeId,
                             RiskyItem: res.Rule.OutputRiskyItem,
                             ReasonNonRiskyId: res.Rule.OutputReasonNonRiskyId,
                             ToRemind: res.Rule.OutputToRemind,
-                            ToRemindDays: res.Rule.OutputToRemindDays));
+                            ToRemindDays: res.Rule.OutputToRemindDays,
+                            // FIX: were missing — counterpart line was not receiving ActionStatus/FirstClaim outputs
+                            ActionDone: res.Rule.OutputActionDone,
+                            FirstClaimToday: res.Rule.OutputFirstClaimToday));
                     }
                 }
 
@@ -948,29 +962,76 @@ namespace RecoTool.Services.Ambre
                         {
                             if (row.IsPivot != intent.TargetIsPivot) continue;
 
-                            if (intent.ActionId.HasValue) row.Reconciliation.Action = intent.ActionId.Value;
-                            if (intent.KgiId.HasValue) row.Reconciliation.KPI = intent.KgiId.Value;      // ou autre champ selon votre modèle
-                            if (intent.IncidentTypeId.HasValue) row.Reconciliation.IncidentType = intent.IncidentTypeId.Value;
-                            if (intent.RiskyItem.HasValue) row.Reconciliation.RiskyItem = intent.RiskyItem.Value;
-                            if (intent.ReasonNonRiskyId.HasValue) row.Reconciliation.ReasonNonRisky = intent.ReasonNonRiskyId.Value;
-                            if (intent.ToRemind.HasValue) row.Reconciliation.ToRemind = intent.ToRemind.Value;
+                            // Idempotent counterpart application: only mutate fields when value differs.
+                            bool changed = false;
+                            var reco = row.Reconciliation;
+
+                            if (intent.ActionId.HasValue && reco.Action != intent.ActionId.Value)
+                            { reco.Action = intent.ActionId.Value; changed = true; }
+
+                            if (intent.KpiId.HasValue && reco.KPI != intent.KpiId.Value)
+                            { reco.KPI = intent.KpiId.Value; changed = true; }
+
+                            if (intent.IncidentTypeId.HasValue && reco.IncidentType != intent.IncidentTypeId.Value)
+                            { reco.IncidentType = intent.IncidentTypeId.Value; changed = true; }
+
+                            if (intent.RiskyItem.HasValue && reco.RiskyItem != intent.RiskyItem.Value)
+                            { reco.RiskyItem = intent.RiskyItem.Value; changed = true; }
+
+                            if (intent.ReasonNonRiskyId.HasValue && reco.ReasonNonRisky != intent.ReasonNonRiskyId.Value)
+                            { reco.ReasonNonRisky = intent.ReasonNonRiskyId.Value; changed = true; }
+
+                            if (intent.ToRemind.HasValue && reco.ToRemind != intent.ToRemind.Value)
+                            { reco.ToRemind = intent.ToRemind.Value; changed = true; }
+
                             if (intent.ToRemindDays.HasValue)
                             {
-                                try { row.Reconciliation.ToRemindDate = DateTime.Today.AddDays(intent.ToRemindDays.Value); }
+                                try
+                                {
+                                    var target = DateTime.Today.AddDays(intent.ToRemindDays.Value);
+                                    if (reco.ToRemindDate != target) { reco.ToRemindDate = target; changed = true; }
+                                }
                                 catch { }
                             }
+
+                            // Propagate OutputActionDone to counterpart (stamps ActionStatus + ActionDate only when status changes)
+                            if (intent.ActionDone.HasValue && reco.ActionStatus != intent.ActionDone.Value)
+                            {
+                                reco.ActionStatus = intent.ActionDone.Value;
+                                try { reco.ActionDate = DateTime.Now; } catch { }
+                                changed = true;
+                            }
+
+                            // Propagate OutputFirstClaimToday to counterpart (idempotent)
+                            if (intent.FirstClaimToday == true)
+                            {
+                                var today = DateTime.Today;
+                                if (reco.FirstClaimDate.HasValue)
+                                {
+                                    if (reco.LastClaimDate != today) { reco.LastClaimDate = today; changed = true; }
+                                }
+                                else
+                                {
+                                    reco.FirstClaimDate = today; changed = true;
+                                }
+                            }
+
+                            // Skip logging if nothing actually changed (avoid log spam on re-imports)
+                            if (!changed) continue;
 
                             // Log counterpart (facultatif)
                             try
                             {
                                 var parts = new List<string>();
                                 if (intent.ActionId.HasValue) parts.Add($"Action={intent.ActionId.Value}");
-                                if (intent.KgiId.HasValue) parts.Add($"KPI={intent.KgiId.Value}");
+                                if (intent.KpiId.HasValue) parts.Add($"KPI={intent.KpiId.Value}");
                                 if (intent.IncidentTypeId.HasValue) parts.Add($"IncidentType={intent.IncidentTypeId.Value}");
                                 if (intent.RiskyItem.HasValue) parts.Add($"RiskyItem={intent.RiskyItem.Value}");
                                 if (intent.ReasonNonRiskyId.HasValue) parts.Add($"ReasonNonRisky={intent.ReasonNonRiskyId.Value}");
                                 if (intent.ToRemind.HasValue) parts.Add($"ToRemind={intent.ToRemind.Value}");
                                 if (intent.ToRemindDays.HasValue) parts.Add($"ToRemindDays={intent.ToRemindDays.Value}");
+                                if (intent.ActionDone.HasValue) parts.Add($"ActionStatus={(intent.ActionDone.Value ? "DONE" : "PENDING")}");
+                                if (intent.FirstClaimToday == true) parts.Add("FirstClaimDate=Today");
 
                                 var outStr = string.Join("; ", parts);
                                 LogHelper.WriteRuleApplied("import", countryId, row.Reconciliation?.ID,
@@ -1052,12 +1113,13 @@ namespace RecoTool.Services.Ambre
                         rec.ReasonNonRisky = systemTrigger ? REASON_COMMISSION_PAID : REASON_NOT_OBSERVED;
                     }
 
-                    /* ----- IT Issue → FORCE INVESTIGATE (DONE) ----- */
+                    /* ----- IT Issue → FORCE INVESTIGATE (DONE) — idempotent ----- */
                     if (rec.KPI.HasValue && rec.KPI.Value == KPI_IT_ISSUES)
                     {
-                        rec.Action = ACTION_INVEST;
-                        rec.ActionStatus = true;            // DONE
-                        rec.ActionDate = DateTime.Now;
+                        bool changed = false;
+                        if (rec.Action != ACTION_INVEST) { rec.Action = ACTION_INVEST; changed = true; }
+                        if (rec.ActionStatus != true) { rec.ActionStatus = true; changed = true; }
+                        if (changed) rec.ActionDate = DateTime.Now;
                     }
                 }
 
@@ -1076,14 +1138,17 @@ namespace RecoTool.Services.Ambre
 
                         // Si ActionStatus a déjà été fixé (par la règle ou le fallback) on le garde,
                         // sinon on applique la règle « NA = DONE, sinon PENDING »
+                        bool statusJustSet = false;
                         if (!rec.ActionStatus.HasValue)
                         {
                             bool isNa = !rec.Action.HasValue || UserFieldUpdateService.IsActionNA(rec.Action, allUserFields);
                             rec.ActionStatus = isNa;               // true = DONE, false = PENDING
+                            statusJustSet = true;
                         }
 
-                        // Toujours garder une date d’action lorsqu’une Action (ou un statut) existe
-                        if (rec.Action.HasValue || rec.ActionStatus.HasValue)
+                        // Stamp ActionDate only when missing or when status was just set.
+                        // Avoids overwriting user's / previous import's timestamp on each re-import (was a source of spurious diffs).
+                        if ((rec.Action.HasValue || rec.ActionStatus.HasValue) && (statusJustSet || !rec.ActionDate.HasValue))
                         {
                             rec.ActionDate = nowLocal;
                         }

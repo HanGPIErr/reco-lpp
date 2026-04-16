@@ -90,6 +90,11 @@ namespace RecoTool.Services
                    .WithColumn("RiskyItem", typeof(bool))
                    .WithColumn("ReasonNonRisky", typeof(int), "LONG")
                    .WithColumn("TriggerDate", typeof(DateTime), "DATETIME")
+                   // Audit & user-edit protection (Phase 1 robustness)
+                   .WithColumn("LastModifiedByUser", typeof(DateTime), "DATETIME")
+                   .WithColumn("UserEditedFields", typeof(string), "TEXT(255)")
+                   .WithColumn("LastRuleAppliedId", typeof(string), "TEXT(100)")
+                   .WithColumn("LastRuleAppliedAt", typeof(DateTime), "DATETIME")
                    // Champs BaseEntity
                    .WithColumn("CreationDate", typeof(DateTime), "DATETIME")
                    .WithColumn("DeleteDate", typeof(DateTime), "DATETIME")

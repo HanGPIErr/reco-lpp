@@ -20,7 +20,8 @@ namespace RecoTool.Windows
 
         public ObservableCollection<TruthRule> Rules { get; set; } = new ObservableCollection<TruthRule>();
 
-        public RuleScope[] Scopes { get; } = new[] { RuleScope.Both, RuleScope.Import, RuleScope.Edit };
+        public RuleScope[] Scopes { get; } = new[] { RuleScope.Both, RuleScope.Import, RuleScope.Edit, RuleScope.DataChanged, RuleScope.Scheduled };
+        public RuleMode[] RuleModes { get; } = new[] { RuleMode.Apply, RuleMode.Propose };
         public string[] AccountSides { get; } = new[] { "*", "P", "R" };
         public string[] Signs { get; } = new[] { "*", "C", "D" };
         public ApplyTarget[] ApplyTargets { get; } = new[] { ApplyTarget.Self, ApplyTarget.Counterpart, ApplyTarget.Both };
@@ -538,6 +539,50 @@ namespace RecoTool.Windows
             target.AutoApply = source.AutoApply;
             target.Message = source.Message;
             target.TriggerOnField = source.TriggerOnField;
+        }
+
+        private void OpenHealthCenter_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_reconciliationService == null)
+                {
+                    MessageBox.Show(this, "ReconciliationService is not available.", "Rules Health", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+                var w = new RulesHealthWindow(_reconciliationService, _offlineFirstService) { Owner = this };
+                w.Show();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Rules Health", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void PreviewImpactOnSelected_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var rule = RulesGrid.SelectedItem as TruthRule;
+                if (rule == null)
+                {
+                    StatusText.Text = "Select a rule first to preview its impact.";
+                    return;
+                }
+                if (_reconciliationService == null)
+                {
+                    MessageBox.Show(this, "ReconciliationService is not available.", "Rules Health", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+                var w = new RulesHealthWindow(_reconciliationService, _offlineFirstService) { Owner = this };
+                w.Show();
+                // Wait for window Loaded to prime internal state, then focus the Impact tab
+                w.Dispatcher.BeginInvoke(new Action(() => w.FocusImpactTabForRule(rule)), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Rules Health", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
     }
 }

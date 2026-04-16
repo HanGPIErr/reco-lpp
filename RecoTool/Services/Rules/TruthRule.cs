@@ -7,7 +7,17 @@ namespace RecoTool.Services.Rules
     {
         Import,
         Edit,
-        Both
+        Both,
+        /// <summary>
+        /// Triggered when external data (DWINGS, AMBRE refresh) changes, not necessarily a user edit.
+        /// Evaluated via background re-evaluation or explicit Run-Now.
+        /// </summary>
+        DataChanged,
+        /// <summary>
+        /// Triggered by scheduled jobs (reminders, escalations based on time elapsed).
+        /// Never fired during import or UI save.
+        /// </summary>
+        Scheduled
     }
 
     public enum ApplyTarget
@@ -15,6 +25,17 @@ namespace RecoTool.Services.Rules
         Self,
         Counterpart,
         Both
+    }
+
+    /// <summary>
+    /// Defines how a matching rule acts on the reconciliation.
+    /// </summary>
+    public enum RuleMode
+    {
+        /// <summary>Apply outputs directly to the reconciliation (classic behaviour).</summary>
+        Apply,
+        /// <summary>Create a pending proposal that a user has to accept/reject, without mutating the reconciliation.</summary>
+        Propose
     }
 
     /// <summary>
@@ -97,6 +118,25 @@ namespace RecoTool.Services.Rules
         // If set, this Edit-scope rule only fires when the edited field matches (e.g. "Linking", "ActionStatus").
         // Null or empty => fires on any edit (legacy behaviour).
         public string TriggerOnField { get; set; }
+
+        /// <summary>
+        /// If true (default), fields edited manually by a user within the protection window
+        /// (see <see cref="UserEditLockDays"/>) cannot be overwritten by this rule.
+        /// Set to false for "system of record" rules that must overrule users.
+        /// </summary>
+        public bool RespectUserEdits { get; set; } = true;
+
+        /// <summary>
+        /// Number of days during which a user-edited field is locked from rule overwrite.
+        /// Null or &lt;=0 falls back to the global default (7 days).
+        /// </summary>
+        public int? UserEditLockDays { get; set; } = 7;
+
+        /// <summary>
+        /// Apply (default) or Propose. When Propose, the matching rule creates a pending suggestion
+        /// in T_RuleProposals instead of mutating the reconciliation.
+        /// </summary>
+        public RuleMode Mode { get; set; } = RuleMode.Apply;
     }
 
     /// <summary>
@@ -139,6 +179,19 @@ namespace RecoTool.Services.Rules
         // Set by the UI to indicate which field was just edited (e.g. "Action", "ActionStatus", "Linking").
         // Used by TriggerOnField filtering in the engine.
         public string EditedField { get; set; }
+
+        /// <summary>
+        /// Pipe-separated list of field names the user has manually edited on this reconciliation
+        /// (e.g. "Action|KPI"). Consumed by <see cref="Rules.RuleApplicationHelper"/> to enforce
+        /// the per-field user-edit lock.
+        /// </summary>
+        public string UserEditedFields { get; set; }
+
+        /// <summary>
+        /// Timestamp of the last user edit (UI). Null if the row has never been edited by a user.
+        /// Used together with <see cref="Rules.TruthRule.UserEditLockDays"/> to compute the lock window.
+        /// </summary>
+        public DateTime? LastModifiedByUser { get; set; }
     }
 
     public class RuleEvaluationResult

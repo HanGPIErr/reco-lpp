@@ -44,6 +44,32 @@ namespace RecoTool.Models
         // Date of status modification (set when Action is set or status changes)
         public DateTime? ActionDate { get; set; }
 
+        // --- Audit & user-edit protection (Phase 1 robustness) ---
+
+        /// <summary>
+        /// Timestamp of the last modification made by a user through the UI (not by a rule).
+        /// Used together with <see cref="UserEditedFields"/> to enforce the user-edit lock against rules.
+        /// </summary>
+        public DateTime? LastModifiedByUser { get; set; }
+
+        /// <summary>
+        /// Pipe-separated list of fields manually edited by the user (e.g. "Action|KPI|IncidentType").
+        /// A rule with <c>RespectUserEdits = true</c> cannot overwrite any of these fields
+        /// while <see cref="LastModifiedByUser"/> is within the lock window.
+        /// </summary>
+        public string UserEditedFields { get; set; }
+
+        /// <summary>
+        /// RuleId of the last rule that modified this reconciliation (any scope).
+        /// Null if the row was never touched by a rule.
+        /// </summary>
+        public string LastRuleAppliedId { get; set; }
+
+        /// <summary>
+        /// Timestamp of the last rule application.
+        /// </summary>
+        public DateTime? LastRuleAppliedAt { get; set; }
+
         /// <summary>
         /// Effective risky flag for business logic: null is considered false.
         /// </summary>

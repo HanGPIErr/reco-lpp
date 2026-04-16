@@ -48,6 +48,9 @@
             <Button Content="Delete Selected" Click="DeleteSelected_Click"/>
             <Button Content="Seed Defaults" Click="SeedDefaults_Click" ToolTip="Insert default rules derived from legacy logic (idempotent)."/>
             <Button Content="Run Rules Now…" Click="RunRulesNow_Click" ToolTip="Execute rules immediately on all rows of the current country."/>
+            <Separator Margin="8,0"/>
+            <Button Content="🩺 Health Center" Click="OpenHealthCenter_Click" ToolTip="Open the Rules Health Center: simulate, monitor coverage, test rules, preview impact."/>
+            <Button Content="🎯 Preview Impact" Click="PreviewImpactOnSelected_Click" ToolTip="Preview the impact of the selected rule on the current dataset (dry-run)."/>
             <TextBox x:Name="SearchBox" Width="220" Margin="16,0,0,0" VerticalAlignment="Center" 
                      ToolTip="Filter by RuleId, Message or TransactionType"
                      TextChanged="SearchBox_TextChanged"/>
@@ -321,6 +324,25 @@
                 </DataGridTemplateColumn>
                 <DataGridCheckBoxColumn Header="AutoApply" Binding="{Binding AutoApply, UpdateSourceTrigger=PropertyChanged}" Width="90"/>
                 <DataGridTextColumn Header="Message" Binding="{Binding Message, UpdateSourceTrigger=PropertyChanged}" Width="200"/>
+                <!-- Phase 1 robustness: user-edit lock + proposal mode -->
+                <DataGridCheckBoxColumn Header="RespectUserEdits" Binding="{Binding RespectUserEdits, UpdateSourceTrigger=PropertyChanged}" Width="130"
+                                        ToolTipService.ToolTip="When enabled, fields manually edited by the user within the lock window are skipped by this rule."/>
+                <DataGridTextColumn Header="UserEditLockDays" Binding="{Binding UserEditLockDays, UpdateSourceTrigger=PropertyChanged}" Width="120"
+                                    ToolTipService.ToolTip="Number of days a user edit blocks the rule from overwriting a field (default 7)."/>
+                <DataGridTemplateColumn Header="Mode" Width="110"
+                                        ToolTipService.ToolTip="Apply = mutate reconciliation directly. Propose = create a pending suggestion in T_RuleProposals.">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Mode}"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                    <DataGridTemplateColumn.CellEditingTemplate>
+                        <DataTemplate>
+                            <ComboBox ItemsSource="{Binding DataContext.RuleModes, RelativeSource={RelativeSource AncestorType=Window}}"
+                                      SelectedItem="{Binding Mode, UpdateSourceTrigger=PropertyChanged}"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellEditingTemplate>
+                </DataGridTemplateColumn>
                 <DataGridTemplateColumn Header="Edit" Width="90">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>

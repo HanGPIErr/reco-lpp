@@ -166,6 +166,17 @@ namespace RecoTool.Windows
                     return;
                 }
 
+                // Stamp the user-edit protection for this field (context-menu / combobox edit).
+                // Normalise label to match the field names used by RuleApplicationHelper (e.g. "Incident Type" -> "IncidentType").
+                try
+                {
+                    string normalisedField = tag;
+                    if (string.Equals(tag, "Incident Type", StringComparison.OrdinalIgnoreCase)) normalisedField = "IncidentType";
+                    else if (string.Equals(tag, "Reason Non Risky", StringComparison.OrdinalIgnoreCase)) normalisedField = "ReasonNonRisky";
+                    RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(reco, normalisedField);
+                }
+                catch { }
+
                 // Preview rules for edit and ask confirmation if self outputs are proposed
                 var ruleApplied = await ConfirmAndApplyRuleOutputsAsync(row, reco, tag);
 
@@ -289,6 +300,21 @@ namespace RecoTool.Windows
             var oldDwingsInvoice = reco.DWINGS_InvoiceID;
             var oldDwingsGuarantee = reco.DWINGS_GuaranteeID;
 
+            // Detect which user-editable fields actually changed, so we can stamp UserEditedFields
+            // to protect them from future silent rule overwrites.
+            var userChangedFields = new System.Collections.Generic.List<string>();
+            if (reco.Action != row.Action) userChangedFields.Add("Action");
+            if (reco.ActionStatus != row.ActionStatus) userChangedFields.Add("ActionStatus");
+            if (reco.KPI != row.KPI) userChangedFields.Add("KPI");
+            if (reco.IncidentType != row.IncidentType) userChangedFields.Add("IncidentType");
+            if (reco.RiskyItem != row.RiskyItem) userChangedFields.Add("RiskyItem");
+            if (reco.ReasonNonRisky != row.ReasonNonRisky) userChangedFields.Add("ReasonNonRisky");
+            if (reco.ToRemind != row.ToRemind) userChangedFields.Add("ToRemind");
+            if (reco.ToRemindDate != row.ToRemindDate) userChangedFields.Add("ToRemindDate");
+            if (reco.FirstClaimDate != row.FirstClaimDate) userChangedFields.Add("FirstClaimDate");
+            if (reco.LastClaimDate != row.LastClaimDate) userChangedFields.Add("LastClaimDate");
+            if (!string.Equals(reco.Assignee, row.Assignee, StringComparison.Ordinal)) userChangedFields.Add("Assignee");
+
             // Map user-editable fields
             reco.Action = row.Action;
             reco.ActionStatus = row.ActionStatus;
@@ -315,6 +341,14 @@ namespace RecoTool.Windows
             reco.DWINGS_GuaranteeID = row.DWINGS_GuaranteeID;
             reco.DWINGS_InvoiceID = row.DWINGS_InvoiceID;
             reco.DWINGS_BGPMT = row.DWINGS_BGPMT;
+
+            // Stamp user-edit protection: these fields cannot be silently overwritten by rules
+            // (honouring RespectUserEdits + UserEditLockDays on each rule).
+            if (userChangedFields.Count > 0)
+            {
+                RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(reco, userChangedFields.ToArray());
+            }
+
             // Check if linking fields actually changed OR if they have a value (even if unchanged)
             // We need to recalculate when:
             // 1. The value changed (old != new)

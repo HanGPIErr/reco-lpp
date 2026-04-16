@@ -63,10 +63,23 @@ namespace RecoTool.Windows
                 int remaining = pagedSource.Count - _loadedCount;
                 if (remaining <= 0) return;
                 int take = Math.Min(InitialPageSize, remaining);
-                foreach (var item in pagedSource.Skip(_loadedCount).Take(take))
+
+                // PERF: Batch-add under BeginInit/EndInit to avoid N+1 CollectionChanged events
+                // (each event triggers a full SfDataGrid layout pass — extremely expensive with 500 items).
+                var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                try { sfGrid?.View?.BeginInit(); } catch { }
+                try
                 {
-                    ViewData.Add(item);
+                    foreach (var item in pagedSource.Skip(_loadedCount).Take(take))
+                    {
+                        ViewData.Add(item);
+                    }
                 }
+                finally
+                {
+                    try { sfGrid?.View?.EndInit(); } catch { }
+                }
+
                 _loadedCount += take;
                 UpdateStatusInfo($"{ViewData.Count} / {pagedSource.Count} lines displayed");
                 // After load, hide footer if no more data, otherwise keep visible when still at bottom

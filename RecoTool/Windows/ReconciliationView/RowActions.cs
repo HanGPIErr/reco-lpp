@@ -321,28 +321,37 @@ Do you want to apply these automatic rules?
                     var reco = await _reconciliationService.GetOrCreateReconciliationAsync(r.ID);
 
                     // ---- 8.1  Mise à jour du champ demandé ----
+                    string stampField = null;
                     if (isAction)
                     {
                         UserFieldUpdateService.ApplyAction(r, reco, newId, AllUserFields);
                         ViewDataEnricher.RefreshUserFieldDisplay(r, "Action");
+                        stampField = "Action";
                     }
                     else if (isKpi)
                     {
                         UserFieldUpdateService.ApplyKpi(r, reco, newId);
                         ViewDataEnricher.RefreshUserFieldDisplay(r, "KPI");
+                        stampField = "KPI";
                     }
                     else if (isInc)
                     {
                         UserFieldUpdateService.ApplyIncidentType(r, reco, newId);
                         ViewDataEnricher.RefreshUserFieldDisplay(r, "Incident Type");
+                        stampField = "IncidentType";
                     }
-                    else if (isReasonNonRisky)                      // ---- Reason Non‑Risky ----
+                    else if (isReasonNonRisky)                      // ---- Reason Non‑Risky ----
                     {
                         r.ReasonNonRisky = newId;
                         reco.ReasonNonRisky = newId;
                         ViewDataEnricher.RefreshUserFieldDisplay(r, "ReasonNonRisky");
                         // Si vous avez un helper dédié pour rafraîchir l’icône, appelez‑le ici.
+                        stampField = "ReasonNonRisky";
                     }
+
+                    // Stamp user-edit protection on the bulk-set field so rules won't silently overwrite.
+                    if (stampField != null)
+                        RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(reco, stampField);
 
                     // ---- 8.2  Application des règles automatiques (si demandé) ----
                     if (applyRules)
@@ -565,6 +574,8 @@ Do you want to apply these automatic rules?
                     r.ActionDate = DateTime.Now;
                     reco.ActionStatus = isDone;
                     reco.ActionDate = r.ActionDate;
+                    // Stamp user-edit protection on ActionStatus
+                    RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(reco, "ActionStatus");
                     updates.Add(reco);
                 }
                 if (updates.Count == 0) return;
@@ -595,6 +606,8 @@ Do you want to apply these automatic rules?
                     var reco = await _reconciliationService.GetOrCreateReconciliationAsync(r.ID);
                     r.Assignee = user;
                     reco.Assignee = user;
+                    // Stamp user-edit protection on Assignee
+                    RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(reco, "Assignee");
                     updates.Add(reco);
                 }
                 await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
@@ -632,6 +645,8 @@ Do you want to apply these automatic rules?
                     }
                     reco.ToRemindDate = selDate.Value;
                     reco.ToRemind = true;
+                    // Stamp user-edit protection on reminder fields
+                    RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(reco, "ToRemind", "ToRemindDate");
                     updates.Add(reco);
                 }
                 await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
@@ -831,11 +846,13 @@ Do you want to apply these automatic rules?
                         }
                         r.LastClaimDate = chosenDate.Value;
                         reco.LastClaimDate = chosenDate.Value;
+                        RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(reco, "LastClaimDate", "FirstClaimDate");
                     }
                     else
                     {
                         r.FirstClaimDate = chosenDate.Value;
                         reco.FirstClaimDate = chosenDate.Value;
+                        RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(reco, "FirstClaimDate");
                     }
                     updates.Add(reco);
                 }

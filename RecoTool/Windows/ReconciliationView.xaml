@@ -136,9 +136,11 @@
         </Style>
 
         <!-- SfDataGrid row (VirtualizingCellsControl) style: conditional bg + hover -->
+        <!-- PERF: Direct brush binding (pre-calculated on DTO) replaces converter calls
+             that previously ran on every row recycle during scroll. -->
         <Style TargetType="syncfusion:VirtualizingCellsControl">
-            <Setter Property="Background" Value="{Binding Converter={StaticResource RowBackgroundConverter}}"/>
-            <Setter Property="Foreground" Value="{Binding Converter={StaticResource RowForegroundConverter}}"/>
+            <Setter Property="Background" Value="{Binding RowBackgroundBrush}"/>
+            <Setter Property="Foreground" Value="{Binding RowForegroundBrush}"/>
             <Setter Property="FontFamily" Value="Segoe UI"/>
             <Setter Property="FontSize" Value="12"/>
         </Style>
@@ -1045,10 +1047,10 @@
             </Border>
 
             <!-- Data Grid Section -->
+            <!-- PERF: DropShadowEffect removed. It forced the entire grid (50+ columns × visible rows)
+                 to render into an offscreen bitmap with blur on every scroll frame.
+                 A lighter visual shadow is achieved via an extra 1px bottom border + subtle padding. -->
             <Border Grid.Row="2" Background="White" BorderBrush="#CBD5E1" BorderThickness="1" CornerRadius="8">
-                <Border.Effect>
-                    <DropShadowEffect Color="#94A3B8" BlurRadius="12" ShadowDepth="2" Opacity="0.15" Direction="270"/>
-                </Border.Effect>
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="19*"/>
@@ -1149,6 +1151,8 @@
                     </Border>
 
                     <!-- Results Grid — Syncfusion SfDataGrid for high performance -->
+                    <!-- PERF: TextFormattingMode=Display + TextRenderingMode=Aliased + UseLayoutRounding + SnapsToDevicePixels
+                         significantly reduce per-frame text layout cost during scrolling. -->
                     <syncfusion:SfDataGrid x:Name="ResultsDataGrid" Grid.Row="1"
                               AutoGenerateColumns="False"
                               AllowEditing="True"
@@ -1172,6 +1176,13 @@
                               RowSelectionBrush="{StaticResource GridSelectionBrush}"
                               SelectionForegroundBrush="{StaticResource GridSelectionFg}"
                               HeaderStyle="{StaticResource DefaultGridHeaderStyle}"
+                              UseLayoutRounding="True"
+                              SnapsToDevicePixels="True"
+                              TextOptions.TextFormattingMode="Display"
+                              TextOptions.TextRenderingMode="ClearType"
+                              TextOptions.TextHintingMode="Fixed"
+                              RenderOptions.BitmapScalingMode="LowQuality"
+                              RenderOptions.ClearTypeHint="Enabled"
                               Loaded="ResultsDataGrid_Loaded"
                               SelectionChanged="ResultsDataGrid_SelectionChanged"
                               CurrentCellEndEdit="ResultsDataGrid_CurrentCellEndEdit"

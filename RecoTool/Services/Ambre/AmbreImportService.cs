@@ -127,6 +127,27 @@ namespace RecoTool.Services
                     lockTimer.Stop();
                     LogManager.Info($"[PERF] Global lock acquired in {lockTimer.ElapsedMilliseconds}ms");
 
+                    // 4.b Schema drift migration (idempotent): add any column missing from T_Reconciliation
+                    // before we run UPDATE/INSERT statements that reference them. Safe under the global lock:
+                    // we mutate the LOCAL DB, and the subsequent CopyLocalToNetwork propagates the new schema
+                    // to all peers (File.Copy is atomic, the network file is fully replaced).
+                    try
+                    {
+                        var migrationTimer = System.Diagnostics.Stopwatch.StartNew();
+                        var localCs = _offlineFirstService.GetCurrentLocalConnectionString();
+                        var report = await RecoTool.Infrastructure.Migrations.ReconciliationSchemaMigrator
+                            .EnsureReconciliationColumnsAsync(localCs);
+                        migrationTimer.Stop();
+                        if (!report.IsNoOp)
+                            LogManager.Info($"[PERF] Schema migration: {report} in {migrationTimer.ElapsedMilliseconds}ms");
+                    }
+                    catch (Exception schemaEx)
+                    {
+                        // Do NOT abort: the subsequent INSERT/UPDATE will fail clearly if the column is
+                        // actually missing. We only log so we can investigate if needed.
+                        LogManager.Warning($"Schema migration skipped: {schemaEx.Message}");
+                    }
+
                     try { await _offlineFirstService.SetSyncStatusAsync("Processing"); } catch { }
 
                     // 5. Lecture et traitement des données

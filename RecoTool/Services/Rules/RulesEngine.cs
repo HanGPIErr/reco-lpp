@@ -24,7 +24,12 @@ namespace RecoTool.Services.Rules
         {
             if (offlineFirstService == null) throw new ArgumentNullException(nameof(offlineFirstService));
             _repo = new TruthTableRepository(offlineFirstService);
+            // Auto-invalidate cache when a rule is created/updated/deleted elsewhere in the process
+            // (typically through RulesAdminWindow). Weak-ref not required here: engine lifetime == process.
+            TruthTableRepository.RulesChanged += OnRulesChanged;
         }
+
+        private void OnRulesChanged(object sender, EventArgs e) => InvalidateCache();
 
         /// <summary>
         /// Invalidate the in-memory rules cache so next evaluation reloads from repository.

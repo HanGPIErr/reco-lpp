@@ -1363,17 +1363,36 @@ private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
                 }
 
                 Mouse.OverrideCursor = Cursors.Wait;
-                if (_reconciliationPage == null)
+                // Track whether we are creating the page for the first time.
+                // On subsequent navigations the page is already loaded; forcing IsLoading=true
+                // leaves the overlay stuck forever because nothing triggers a reload.
+                bool isFirstNavigation = (_reconciliationPage == null);
+                if (isFirstNavigation)
                 {
                     _reconciliationPage = App.ServiceProvider.GetRequiredService<ReconciliationPage>();
                 }
                 var reconciliationPage = _reconciliationPage;
-                // Ensure the page's loading indicator is visible immediately while data loads
-                try { reconciliationPage.IsLoading = true; } catch { }
+
+                if (isFirstNavigation)
+                {
+                    // First navigation: the page will execute its initial load; show the overlay now.
+                    try { reconciliationPage.IsLoading = true; } catch { }
+                }
+                else
+                {
+                    // Re-navigation to an already-loaded page: clear any stale loading overlay
+                    // (safety net against previous aborted loads) and just show the page.
+                    try { reconciliationPage.IsLoading = false; } catch { }
+                }
+
                 NavigateToPage(reconciliationPage);
                 UpdateNavigationButtons("Reconciliation");
-                // Wait a bit for the page to finish its initial refresh if it exposes it
-                await WaitForCurrentPageRefreshAsync(TimeSpan.FromSeconds(10));
+
+                if (isFirstNavigation)
+                {
+                    // Wait a bit for the page to finish its initial refresh if it exposes it
+                    await WaitForCurrentPageRefreshAsync(TimeSpan.FromSeconds(10));
+                }
             }
             catch (Exception ex)
             {
@@ -1456,16 +1475,30 @@ private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
                 }
 
                 Mouse.OverrideCursor = Cursors.Wait;
-                if (_reconciliationPage == null)
+                bool isFirstNavigation = (_reconciliationPage == null);
+                if (isFirstNavigation)
                 {
                     _reconciliationPage = App.ServiceProvider.GetRequiredService<ReconciliationPage>();
                 }
                 var reconciliationPage = _reconciliationPage;
-                try { reconciliationPage.IsLoading = true; } catch { }
+
+                if (isFirstNavigation)
+                {
+                    try { reconciliationPage.IsLoading = true; } catch { }
+                }
+                else
+                {
+                    try { reconciliationPage.IsLoading = false; } catch { }
+                }
+
                 NavigateToPage(reconciliationPage);
                 UpdateNavigationButtons("Reconciliation");
-                // Allow the page to initialize, then apply ToDo and open a view
-                await WaitForCurrentPageRefreshAsync(TimeSpan.FromSeconds(10));
+
+                if (isFirstNavigation)
+                {
+                    // Allow the page to initialize before opening the ToDo view
+                    await WaitForCurrentPageRefreshAsync(TimeSpan.FromSeconds(10));
+                }
                 await reconciliationPage.OpenViewForTodoAsync(todo);
             }
             catch (Exception ex)

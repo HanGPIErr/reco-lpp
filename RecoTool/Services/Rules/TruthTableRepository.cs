@@ -26,6 +26,18 @@ namespace RecoTool.Services.Rules
         private readonly OfflineFirstService _offlineFirstService;
         private readonly ReferentialService _referentialService;
 
+        /// <summary>
+        /// Process-wide event raised when a rule is created, updated or deleted.
+        /// Static so any RulesEngine instance (there may be more than one: ReconciliationService,
+        /// AmbreReconciliationUpdater) can subscribe and invalidate its in-memory cache.
+        /// </summary>
+        public static event EventHandler RulesChanged;
+
+        private static void RaiseRulesChanged()
+        {
+            try { RulesChanged?.Invoke(null, EventArgs.Empty); } catch { }
+        }
+
         public TruthTableRepository(OfflineFirstService offlineFirstService)
         {
             _offlineFirstService = offlineFirstService ?? throw new ArgumentNullException(nameof(offlineFirstService));
@@ -134,7 +146,11 @@ namespace RecoTool.Services.Rules
                                     ApplyTo = ParseApplyTo(GetString(row, table, "ApplyTo") ?? "Self"),
                                     AutoApply = table.Columns.Contains("AutoApply") && row["AutoApply"] != DBNull.Value ? Convert.ToBoolean(row["AutoApply"]) : true,
                                     Message = GetString(row, table, "Message"),
-                                    TriggerOnField = GetString(row, table, "TriggerOnField")
+                                    TriggerOnField = GetString(row, table, "TriggerOnField"),
+                                    // Phase 1 robustness: user-edit lock + proposal mode
+                                    RespectUserEdits = table.Columns.Contains("RespectUserEdits") && row["RespectUserEdits"] != DBNull.Value ? Convert.ToBoolean(row["RespectUserEdits"]) : true,
+                                    UserEditLockDays = GetNullableInt(row, table, "UserEditLockDays"),
+                                    Mode = ParseRuleMode(GetString(row, table, "Mode") ?? "Apply")
                                 };
                                 list.Add(rule);
                             }
@@ -224,7 +240,11 @@ namespace RecoTool.Services.Rules
                         OutputFirstClaimToday INTEGER,
                         ApplyTo TEXT(12),
                         AutoApply YESNO,
-                        Message LONGTEXT
+                        Message LONGTEXT,
+                        TriggerOnField TEXT(100),
+                        RespectUserEdits YESNO,
+                        UserEditLockDays INTEGER,
+                        Mode TEXT(20)
                     )";
                     using (var cmd = new OleDbCommand(sql, conn))
                     {
@@ -280,7 +300,11 @@ namespace RecoTool.Services.Rules
                 ("BgiStatusInitiated", "INTEGER"),
                 ("OutputActionDone", "INTEGER"),
                 ("OutputFirstClaimToday", "INTEGER"),
-                ("TriggerOnField", "TEXT(100)")
+                ("TriggerOnField", "TEXT(100)"),
+                // Phase 1 robustness
+                ("RespectUserEdits", "YESNO"),
+                ("UserEditLockDays", "INTEGER"),
+                ("Mode", "TEXT(20)")
             };
             foreach (var (name, ddl) in need)
             {
@@ -348,6 +372,7 @@ namespace RecoTool.Services.Rules
                     int.TryParse(Convert.ToString(obj), out count);
                 }
 
+                bool success;
                 if (count > 0)
                 {
                     // UPDATE
@@ -360,13 +385,14 @@ namespace RecoTool.Services.Rules
                         OperationDaysAgoMin=?, OperationDaysAgoMax=?,
                         IsMatched=?, HasManualMatch=?, IsFirstRequest=?, IsNewLine=?, DaysSinceReminderMin=?, DaysSinceReminderMax=?, CurrentActionId=?, IsActionDone=?, PaymentRequestStatus=?,
                         OutputActionId=?, OutputKpiId=?, OutputIncidentTypeId=?, OutputRiskyItem=?, OutputReasonNonRiskyId=?,
-                        OutputToRemind=?, OutputToRemindDays=?, OutputActionDone=?, OutputFirstClaimToday=?, ApplyTo=?, AutoApply=?, Message=?, TriggerOnField=?
+                        OutputToRemind=?, OutputToRemindDays=?, OutputActionDone=?, OutputFirstClaimToday=?, ApplyTo=?, AutoApply=?, Message=?, TriggerOnField=?,
+                        RespectUserEdits=?, UserEditLockDays=?, Mode=?
                         WHERE RuleId=?";
                     using (var cmd = new OleDbCommand(sql, conn))
                     {
                         AddRuleParams(cmd, rule, includeRuleIdAtEnd: true);
                         var n = await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false);
-                        return n == 1;
+                        success = n == 1;
                     }
                 }
                 else
@@ -381,15 +407,18 @@ namespace RecoTool.Services.Rules
                         OperationDaysAgoMin, OperationDaysAgoMax,
                         IsMatched, HasManualMatch, IsFirstRequest, IsNewLine, DaysSinceReminderMin, DaysSinceReminderMax, CurrentActionId, IsActionDone, PaymentRequestStatus,
                         OutputActionId, OutputKpiId, OutputIncidentTypeId, OutputRiskyItem, OutputReasonNonRiskyId,
-                        OutputToRemind, OutputToRemindDays, OutputActionDone, OutputFirstClaimToday, ApplyTo, AutoApply, Message, TriggerOnField)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+                        OutputToRemind, OutputToRemindDays, OutputActionDone, OutputFirstClaimToday, ApplyTo, AutoApply, Message, TriggerOnField,
+                        RespectUserEdits, UserEditLockDays, Mode)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
                     using (var cmd = new OleDbCommand(sql, conn))
                     {
                         AddRuleParams(cmd, rule, includeRuleIdAtEnd: false);
                         var n = await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false);
-                        return n == 1;
+                        success = n == 1;
                     }
                 }
+                if (success) RaiseRulesChanged();
+                return success;
             }
             finally
             {
@@ -411,6 +440,7 @@ namespace RecoTool.Services.Rules
                 {
                     cmd.Parameters.AddWithValue("@p1", ruleId);
                     var n = await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+                    if (n > 0) RaiseRulesChanged();
                     return n;
                 }
             }
@@ -466,6 +496,10 @@ namespace RecoTool.Services.Rules
             cmd.Parameters.Add("@AutoApply", OleDbType.Boolean).Value = (object)r.AutoApply;
             cmd.Parameters.AddWithValue("@Message", (object)r.Message ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@TriggerOnField", (object)r.TriggerOnField ?? DBNull.Value);
+            // Phase 1 robustness
+            cmd.Parameters.Add("@RespectUserEdits", OleDbType.Boolean).Value = (object)r.RespectUserEdits;
+            cmd.Parameters.Add("@UserEditLockDays", OleDbType.Integer).Value = (object)(r.UserEditLockDays.HasValue ? r.UserEditLockDays.Value : (int?)null) ?? DBNull.Value;
+            cmd.Parameters.AddWithValue("@Mode", (object)r.Mode.ToString() ?? DBNull.Value);
             if (includeRuleIdAtEnd) cmd.Parameters.AddWithValue("@RuleId", (object)r.RuleId ?? DBNull.Value);
         }
 
@@ -504,6 +538,12 @@ namespace RecoTool.Services.Rules
             if (string.IsNullOrWhiteSpace(s)) return ApplyTarget.Self;
             if (Enum.TryParse<ApplyTarget>(s.Trim(), true, out var e)) return e;
             return ApplyTarget.Self;
+        }
+        private static RuleMode ParseRuleMode(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return RuleMode.Apply;
+            if (Enum.TryParse<RuleMode>(s.Trim(), true, out var e)) return e;
+            return RuleMode.Apply;
         }
         private static string NormalizeWildcard(string s)
         {

@@ -32,7 +32,7 @@ namespace RecoTool.Services
     /// Service principal de réconciliation
     /// Gère les opérations de réconciliation, règles automatiques, Actions/KPI
     /// </summary>
-    public class ReconciliationService
+    public partial class ReconciliationService
     {
         private readonly string _connectionString;
         private readonly string _currentUser;
@@ -41,6 +41,29 @@ namespace RecoTool.Services
         private readonly Infrastructure.DataAccess.OleDbQueryExecutor _queryExecutor;
         private DwingsService _dwingsService;
         private RulesEngine _rulesEngine;
+        private Rules.RuleProposalRepository _proposalRepository;
+
+        /// <summary>
+        /// Lazy-initialized repository for T_RuleProposals. Safe to call repeatedly.
+        /// Creates the table on first access if it does not exist yet.
+        /// </summary>
+        public Rules.RuleProposalRepository ProposalRepository
+        {
+            get
+            {
+                if (_proposalRepository == null && !string.IsNullOrWhiteSpace(_connectionString))
+                {
+                    try
+                    {
+                        _proposalRepository = new Rules.RuleProposalRepository(_connectionString);
+                        // Fire-and-forget table creation
+                        _ = _proposalRepository.EnsureTableAsync();
+                    }
+                    catch { _proposalRepository = null; }
+                }
+                return _proposalRepository;
+            }
+        }
 
         private (string dwEsc, string ambreEsc) GetEscapedPaths(string countryId)
         {
@@ -865,7 +888,7 @@ namespace RecoTool.Services
                             var ctx = await BuildRuleContextAsync(amb, r, country, currentCountryId, isPivot).ConfigureAwait(false);
                             ctx.EditedField = editedField;
                             var res = await _rulesEngine.EvaluateAsync(ctx, RuleScope.Edit).ConfigureAwait(false);
-                            RuleApplicationHelper.ApplyAndLog(res, r, _currentUser, "run-now", currentCountryId, RaiseRuleApplied);
+                            RuleApplicationHelper.ApplyAndLog(res, r, _currentUser, "run-now", currentCountryId, RaiseRuleApplied, ProposalRepository);
                             if (res?.NewActionIdSelf.HasValue == true) EnsureActionDefaults(r);
                         }
                     }
@@ -948,6 +971,89 @@ namespace RecoTool.Services
         }
 
         /// <summary>
+        /// Run rules in a dry-run fashion against a set of IDs (or all active rows if ids is null).
+        /// Never writes to the database: only evaluates and returns the result per row.
+        /// Rules are evaluated in the provided scope (Import is useful to simulate what would happen during an import).
+        /// Uses <see cref="RulesEngine.EvaluateAllForDebugAsync"/> so dead rules and non-matching reasons can be surfaced.
+        /// </summary>
+        public async Task<List<RuleSimulationRow>> SimulateRulesAsync(
+            IEnumerable<string> ids,
+            RuleScope scope,
+            IProgress<(int done, int total)> progress = null,
+            CancellationToken ct = default)
+        {
+            var result = new List<RuleSimulationRow>();
+            try
+            {
+                var currentCountryId = _offlineFirstService?.CurrentCountryId;
+                if (string.IsNullOrWhiteSpace(currentCountryId) || _rulesEngine == null) return result;
+                if (_countries == null || !_countries.TryGetValue(currentCountryId, out var country) || country == null) return result;
+
+                List<string> targetIds;
+                if (ids != null)
+                {
+                    targetIds = ids.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                }
+                else
+                {
+                    // All active rows in current country
+                    var view = await GetReconciliationViewAsync(currentCountryId, null, false).ConfigureAwait(false);
+                    targetIds = (view ?? new List<ReconciliationViewData>())
+                        .Where(v => v != null && !v.IsDeleted && !string.IsNullOrWhiteSpace(v.ID))
+                        .Select(v => v.ID).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                }
+                if (targetIds.Count == 0) return result;
+
+                // Pre-warm DWINGS caches to avoid per-row loads
+                await EnsureDwingsCachesInitializedAsync().ConfigureAwait(false);
+
+                int done = 0;
+                int total = targetIds.Count;
+                foreach (var id in targetIds)
+                {
+                    if (ct.IsCancellationRequested) break;
+                    try
+                    {
+                        var amb = await GetAmbreRowByIdAsync(currentCountryId, id).ConfigureAwait(false);
+                        if (amb == null || amb.IsDeleted) continue;
+
+                        var reco = await GetOrCreateReconciliationAsync(id).ConfigureAwait(false);
+                        if (reco == null) continue;
+
+                        bool isPivot = amb.IsPivotAccount(country.CNT_AmbrePivot);
+                        var ctx = await BuildRuleContextAsync(amb, reco, country, currentCountryId, isPivot).ConfigureAwait(false);
+
+                        var res = await _rulesEngine.EvaluateAsync(ctx, scope, ct).ConfigureAwait(false);
+                        result.Add(new RuleSimulationRow
+                        {
+                            ReconciliationId = id,
+                            IsPivot = isPivot,
+                            MatchedRuleId = res?.Rule?.RuleId,
+                            MatchedRulePriority = res?.Rule?.Priority,
+                            ProposedActionId = res?.NewActionIdSelf,
+                            ProposedKpiId = res?.NewKpiIdSelf,
+                            ApplyTo = res?.Rule?.ApplyTo,
+                            CurrentActionId = reco.Action,
+                            CurrentKpiId = reco.KPI,
+                            UserMessage = res?.UserMessage
+                        });
+                    }
+                    catch { /* swallow per-row */ }
+                    finally
+                    {
+                        done++;
+                        try { progress?.Report((done, total)); } catch { }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"SimulateRulesAsync failed: {ex.Message}");
+            }
+            return result;
+        }
+
+        /// <summary>
         /// Get detailed debug information about all rules and their evaluation for a specific line.
         /// Used for debugging UI to show which conditions passed/failed.
         /// </summary>
@@ -1024,7 +1130,7 @@ namespace RecoTool.Services
                                                     bool isPivot = amb.IsPivotAccount(countryCtx.CNT_AmbrePivot);
                                                     var ctx = await BuildRuleContextAsync(amb, reconciliation, countryCtx, currentCountryId, isPivot).ConfigureAwait(false);
                                                     var res = await _rulesEngine.EvaluateAsync(ctx, RuleScope.Edit).ConfigureAwait(false);
-                                                    RuleApplicationHelper.ApplyAndLog(res, reconciliation, _currentUser, "edit", currentCountryId, RaiseRuleApplied);
+                                                    RuleApplicationHelper.ApplyAndLog(res, reconciliation, _currentUser, "edit", currentCountryId, RaiseRuleApplied, ProposalRepository);
                                                     if (res?.NewActionIdSelf.HasValue == true) EnsureActionDefaults(reconciliation);
                                                 }
                                             }
@@ -1167,7 +1273,8 @@ namespace RecoTool.Services
                                 [FirstClaimDate], [LastClaimDate], [ToRemind], [ToRemindDate],
                                 [ACK], [SwiftCode], [PaymentReference], [KPI],
                                 [IncidentType], [RiskyItem], [ReasonNonRisky], [IncNumber],
-                                [MbawData], [SpiritData], [TriggerDate]
+                                [MbawData], [SpiritData], [TriggerDate],
+                                [LastModifiedByUser], [UserEditedFields], [LastRuleAppliedId], [LastRuleAppliedAt]
                               FROM T_Reconciliation WHERE [ID] = ?", connection, transaction);
                     selectCmd.Parameters.AddWithValue("@ID", reconciliation.ID);
                     using (var rdr = await selectCmd.ExecuteReaderAsync().ConfigureAwait(false))
@@ -1216,6 +1323,11 @@ namespace RecoTool.Services
                             if (!Equal(DbVal(21), (object)reconciliation.MbawData)) changed.Add("MbawData");
                             if (!Equal(DbVal(22), (object)reconciliation.SpiritData)) changed.Add("SpiritData");
                             if (!Equal(DbVal(23), reconciliation.TriggerDate.HasValue ? (object)reconciliation.TriggerDate.Value : null)) changed.Add("TriggerDate");
+                            // Audit & user-edit protection columns (ordinals 24..27)
+                            if (!Equal(DbVal(24), reconciliation.LastModifiedByUser.HasValue ? (object)reconciliation.LastModifiedByUser.Value : null)) changed.Add("LastModifiedByUser");
+                            if (!Equal(DbVal(25), (object)reconciliation.UserEditedFields)) changed.Add("UserEditedFields");
+                            if (!Equal(DbVal(26), (object)reconciliation.LastRuleAppliedId)) changed.Add("LastRuleAppliedId");
+                            if (!Equal(DbVal(27), reconciliation.LastRuleAppliedAt.HasValue ? (object)reconciliation.LastRuleAppliedAt.Value : null)) changed.Add("LastRuleAppliedAt");
 
                             if (changed.Count == 0)
                             {
@@ -1366,6 +1478,24 @@ namespace RecoTool.Services
                                         p.Value = reconciliation.TriggerDate.HasValue ? (object)reconciliation.TriggerDate.Value : DBNull.Value;
                                         break;
                                     }
+                                case "LastModifiedByUser":
+                                    {
+                                        var p = cmd.Parameters.Add("@LastModifiedByUser", OleDbType.Date);
+                                        p.Value = reconciliation.LastModifiedByUser.HasValue ? (object)reconciliation.LastModifiedByUser.Value : DBNull.Value;
+                                        break;
+                                    }
+                                case "UserEditedFields":
+                                    cmd.Parameters.AddWithValue("@UserEditedFields", reconciliation.UserEditedFields ?? (object)DBNull.Value);
+                                    break;
+                                case "LastRuleAppliedId":
+                                    cmd.Parameters.AddWithValue("@LastRuleAppliedId", reconciliation.LastRuleAppliedId ?? (object)DBNull.Value);
+                                    break;
+                                case "LastRuleAppliedAt":
+                                    {
+                                        var p = cmd.Parameters.Add("@LastRuleAppliedAt", OleDbType.Date);
+                                        p.Value = reconciliation.LastRuleAppliedAt.HasValue ? (object)reconciliation.LastRuleAppliedAt.Value : DBNull.Value;
+                                        break;
+                                    }
                             }
                         }
 
@@ -1411,8 +1541,10 @@ namespace RecoTool.Services
                              ([ID], [DWINGS_GuaranteeID], [DWINGS_InvoiceID], [DWINGS_BGPMT],
                               [Action], [ActionStatus], [ActionDate], [Assignee], [Comments], [InternalInvoiceReference], [FirstClaimDate], [LastClaimDate],
                               [ToRemind], [ToRemindDate], [ACK], [SwiftCode], [PaymentReference], [MbawData], [SpiritData], [KPI],
-                              [IncidentType], [RiskyItem], [ReasonNonRisky], [TriggerDate], [CreationDate], [ModifiedBy], [LastModified])
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                              [IncidentType], [RiskyItem], [ReasonNonRisky], [TriggerDate],
+                              [LastModifiedByUser], [UserEditedFields], [LastRuleAppliedId], [LastRuleAppliedAt],
+                              [CreationDate], [ModifiedBy], [LastModified])
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
                     using (var cmd = new OleDbCommand(insertQuery, connection, transaction))
                     {
@@ -1477,6 +1609,14 @@ namespace RecoTool.Services
 
             if (isInsert)
             {
+                // Audit & user-edit protection (positions match the INSERT statement order)
+                var pLmbu = cmd.Parameters.Add("@LastModifiedByUser", OleDbType.Date);
+                pLmbu.Value = reconciliation.LastModifiedByUser.HasValue ? (object)reconciliation.LastModifiedByUser.Value : DBNull.Value;
+                cmd.Parameters.AddWithValue("@UserEditedFields", reconciliation.UserEditedFields ?? (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@LastRuleAppliedId", reconciliation.LastRuleAppliedId ?? (object)DBNull.Value);
+                var pLra = cmd.Parameters.Add("@LastRuleAppliedAt", OleDbType.Date);
+                pLra.Value = reconciliation.LastRuleAppliedAt.HasValue ? (object)reconciliation.LastRuleAppliedAt.Value : DBNull.Value;
+
                 var pCreate = cmd.Parameters.Add("@CreationDate", OleDbType.Date);
                 pCreate.Value = reconciliation.CreationDate.HasValue ? (object)reconciliation.CreationDate.Value : DBNull.Value;
             }
