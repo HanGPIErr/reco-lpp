@@ -8,6 +8,7 @@ using OfflineFirstAccess.Models;
 using RecoTool.Helpers;
 using RecoTool.Models;
 using RecoTool.Services.DTOs;
+using RecoTool.Services.Snapshots;
 
 namespace RecoTool.Services.Ambre
 {
@@ -18,12 +19,14 @@ namespace RecoTool.Services.Ambre
     {
         private readonly OfflineFirstService _offlineFirstService;
         private readonly string _currentUser;
+        private readonly SnapshotService _snapshotService;
         private ReconciliationService _reconciliationService;
 
         public AmbreDatabaseSynchronizer(OfflineFirstService offlineFirstService, string currentUser)
         {
             _offlineFirstService = offlineFirstService ?? throw new ArgumentNullException(nameof(offlineFirstService));
             _currentUser = currentUser;
+            _snapshotService = new SnapshotService(_offlineFirstService);
         }
 
         /// <summary>
@@ -53,13 +56,26 @@ namespace RecoTool.Services.Ambre
             bool assumeGlobalLockHeld = false,
             Action<string, int> progressCallback = null)
         {
+            // Snapshot: captures the pre-import state of AMBRE+DW+Reco so the UI can compute
+            // "what changed since last import" on demand. Runs BEFORE any DB load so the .accdb
+            // files are closed and File.Copy cannot hit a sharing violation.
+            SnapshotHandle snapshot = null;
+            try { snapshot = await _snapshotService.BeginAsync(countryId, RunKind.AmbreImport, _currentUser).ConfigureAwait(false); }
+            catch (Exception snapEx) { LogManager.Warning($"Snapshot (begin) failed for {countryId}: {snapEx.Message}"); }
+
+            bool runSucceeded = false;
+            int newCount = 0, updCount = 0, arcCount = 0;
+            string errorMsg = null;
             try
             {
                 // 1. Charger les données existantes et calculer les changements
                 var existingData = await LoadExistingDataAsync(countryId);
                 var changes = CalculateChanges(existingData, newData);
-                
-                LogManager.Info($"Calculated changes for {countryId} - New: {changes.ToAdd.Count}, Updated: {changes.ToUpdate.Count}, Deleted: {changes.ToArchive.Count}");
+                newCount = changes.ToAdd.Count;
+                updCount = changes.ToUpdate.Count;
+                arcCount = changes.ToArchive.Count;
+
+                LogManager.Info($"Calculated changes for {countryId} - New: {newCount}, Updated: {updCount}, Deleted: {arcCount}");
 
                 // 2. Appliquer les changements
                 await ExecuteChangesAsync(changes, countryId, assumeGlobalLockHeld, progressCallback);
@@ -70,12 +86,20 @@ namespace RecoTool.Services.Ambre
                     await PerformNetworkSyncAsync(countryId);
                 }
 
-                return (changes.ToAdd.Count, changes.ToUpdate.Count, changes.ToArchive.Count);
+                runSucceeded = true;
+                return (newCount, updCount, arcCount);
             }
             catch (Exception ex)
             {
+                errorMsg = ex.Message;
                 LogManager.Error($"Error during database synchronization for {countryId}", ex);
                 throw new InvalidOperationException($"Database synchronization failed: {ex.Message}", ex);
+            }
+            finally
+            {
+                // Always finalise — gives the UI a success flag + final counts even on failure.
+                try { await _snapshotService.CompleteAsync(snapshot, newCount, updCount, arcCount, runSucceeded, errorMsg).ConfigureAwait(false); }
+                catch (Exception endEx) { LogManager.Warning($"Snapshot (complete) failed for {countryId}: {endEx.Message}"); }
             }
         }
 
@@ -104,12 +128,6 @@ namespace RecoTool.Services.Ambre
                     await UpdateReconciliationTableAsync(changes, countryId, progressCallback);
                     recoTimer.Stop();
                     LogManager.Info($"[PERF] UpdateReconciliationTable completed in {recoTimer.ElapsedMilliseconds}ms");
-
-                    // Snapshot KPIs - DISABLED for performance (not needed during import)
-                    // var kpiTimer = System.Diagnostics.Stopwatch.StartNew();
-                    // await CreateKpiSnapshotAsync(countryId);
-                    // kpiTimer.Stop();
-                    // LogManager.Info($"[PERF] CreateKpiSnapshot completed in {kpiTimer.ElapsedMilliseconds}ms");
 
                     // Publish to network
                     try { await _offlineFirstService.SetSyncStatusAsync("Publishing"); } catch { }

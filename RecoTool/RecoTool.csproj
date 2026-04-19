@@ -145,6 +145,7 @@
     <PackageReference Include="System.Data.OleDb" Version="7.0.0" />
     <PackageReference Include="LiveCharts.Wpf" Version="0.9.7" />
     <PackageReference Include="Syncfusion.SfGrid.WPF" Version="33.1.45" />
+    <PackageReference Include="ClosedXML" Version="0.102.3" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="API\DWINGS.cs" />
@@ -184,6 +185,9 @@
     <Compile Include="Services\Ambre\AmbreImportService.cs" />
     <Compile Include="Services\Ambre\AmbreImportValidator.cs" />
     <Compile Include="Services\Ambre\AmbreReconciliationUpdater.cs" />
+    <Compile Include="Services\Ambre\AmbreReconciliationUpdater.Preparation.cs" />
+    <Compile Include="Services\Ambre\AmbreReconciliationUpdater.Rules.cs" />
+    <Compile Include="Services\Ambre\AmbreReconciliationUpdater.Persistence.cs" />
     <Compile Include="Services\Ambre\DwingsReferenceResolver.cs" />
     <Compile Include="Services\Analytics\DashboardAnalyticsService.cs" />
     <Compile Include="Services\BackgroundTaskQueue.cs" />
@@ -201,7 +205,10 @@
     <Compile Include="Services\Enums\RiskReason.cs" />
     <Compile Include="Services\Enums\TransactionType.cs" />
     <Compile Include="Services\Enums\TriggerStatus.cs" />
-    <Compile Include="Services\ExportService.cs" />
+    <Compile Include="Services\DTOs\ChangeJournal.cs" />
+    <Compile Include="Services\Snapshots\SnapshotService.cs" />
+    <Compile Include="Services\Snapshots\SnapshotComparisonService.cs" />
+    <Compile Include="Services\DashboardExportService.cs" />
     <Compile Include="Models\ImportChanges.cs" />
     <Compile Include="Models\UserFieldsPreference.cs" />
     <Compile Include="Services\DTOs\ImportResult.cs" />
@@ -215,10 +222,12 @@
     <Compile Include="Services\KpiSnapshotService.cs" />
     <Compile Include="Services\LookupService.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.ChangeLog.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.Configuration.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.CountryContext.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.Diagnostics.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.Events.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.Referentials.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.IO.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.Locks.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.Maintenance.cs" />
@@ -252,6 +261,9 @@
     <Compile Include="Services\UserFieldUpdateService.cs" />
     <Compile Include="Services\UserFilterService.cs" />
     <Compile Include="Services\DTOs\ReconciliationViewData.cs" />
+    <Compile Include="Services\DTOs\ReconciliationViewData.Activity.cs" />
+    <Compile Include="Services\DTOs\ReconciliationViewData.Caches.cs" />
+    <Compile Include="Services\DTOs\ReconciliationViewData.DwingsSync.cs" />
     <Compile Include="Services\DTOs\StatusCountsDto.cs" />
     <Compile Include="Services\TransformationService.cs" />
     <Compile Include="UI\Converters\BoolToPendingDoneConverter.cs" />
@@ -259,6 +271,10 @@
     <Compile Include="UI\Interfaces\IRefreshable.cs" />
     <Compile Include="UI\Models\OptionItem.cs" />
     <Compile Include="UI\Models\UserOption.cs" />
+    <Compile Include="UI\Mvvm\AsyncRelayCommand.cs" />
+    <Compile Include="UI\Mvvm\IAppLogger.cs" />
+    <Compile Include="UI\Mvvm\ObservableObject.cs" />
+    <Compile Include="UI\Mvvm\RelayCommand.cs" />
     <Compile Include="UI\ViewModels\HomePageViewModel.cs" />
     <Compile Include="UI\ViewModels\ReconciliationPageViewModel.cs" />
     <Compile Include="UI\ViewModels\ReconciliationViewViewModel.cs" />
@@ -276,9 +292,6 @@
     <Compile Include="Windows\InvoiceFinderWindow.xaml.cs">
       <DependentUpon>InvoiceFinderWindow.xaml</DependentUpon>
     </Compile>
-    <Compile Include="Windows\ReconciliationView\ActivityLog.cs" />
-    <Compile Include="Windows\ReconciliationView\Mentions.cs" />
-    <Compile Include="Windows\ReconciliationView\QuickSearch.cs" />
     <Compile Include="Windows\SpiritGeneSearchWindow.xaml.cs">
       <DependentUpon>SpiritGeneSearchWindow.xaml</DependentUpon>
     </Compile>
@@ -298,6 +311,9 @@
     <Compile Include="Services\ReconciliationMatchingService.cs" />
     <Compile Include="Services\ReconciliationService.cs" />
     <Compile Include="Services\ReconciliationService.AmbreSim.cs" />
+    <Compile Include="Services\ReconciliationService.Events.cs" />
+    <Compile Include="Services\ReconciliationService.Delegates.cs" />
+    <Compile Include="Services\ReconciliationService.Crud.cs" />
     <Compile Include="Windows\HomePage.xaml.cs">
       <DependentUpon>HomePage.xaml</DependentUpon>
     </Compile>
@@ -325,7 +341,31 @@
     <Compile Include="Windows\FilterPickerWindow.xaml.cs">
       <DependentUpon>FilterPickerWindow.xaml</DependentUpon>
     </Compile>
-    <Compile Include="Windows\ReconciliationView\Converters.cs" />
+    <Compile Include="Windows\RuleDebugWindow.xaml.cs">
+      <DependentUpon>RuleDebugWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\RuleEditorWindow.xaml.cs">
+      <DependentUpon>RuleEditorWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\RulesAdminWindow.xaml.cs">
+      <DependentUpon>RulesAdminWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\RulesHealthWindow.xaml.cs">
+      <DependentUpon>RulesHealthWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\RulesHealthWindow.Handlers.cs">
+      <DependentUpon>RulesHealthWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\TodoListSessionWarning.xaml.cs">
+      <DependentUpon>TodoListSessionWarning.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Windows\ReconciliationView\Activity.cs" />
+    <Compile Include="Windows\ReconciliationView\ActivityLog.cs" />
+    <Compile Include="Windows\ReconciliationView\Mentions.cs" />
+    <Compile Include="Windows\ReconciliationView\QuickSearch.cs" />
+    <Compile Include="Windows\ReconciliationView\Converters\UserFieldConverters.cs" />
+    <Compile Include="Windows\ReconciliationView\Converters\RuleDisplayConverters.cs" />
+    <Compile Include="Windows\ReconciliationView\Converters\CellChangeConverters.cs" />
     <Compile Include="Windows\ReconciliationView\DataLoading.cs" />
     <Compile Include="Windows\ReconciliationView\Editing.cs" />
     <Compile Include="Windows\ReconciliationView\Events.cs" />
@@ -346,27 +386,6 @@
     <Compile Include="Windows\ReconciliationView\SyncAndTimers.cs" />
     <Compile Include="Windows\ReconciliationView\Presence.cs" />
     <Compile Include="Windows\ReconciliationView\Title.cs" />
-    <Compile Include="Windows\ReportsWindow.xaml.cs">
-      <DependentUpon>ReportsWindow.xaml</DependentUpon>
-    </Compile>
-    <Compile Include="Windows\RuleDebugWindow.xaml.cs">
-      <DependentUpon>RuleDebugWindow.xaml</DependentUpon>
-    </Compile>
-    <Compile Include="Windows\RuleEditorWindow.xaml.cs">
-      <DependentUpon>RuleEditorWindow.xaml</DependentUpon>
-    </Compile>
-    <Compile Include="Windows\RulesAdminWindow.xaml.cs">
-      <DependentUpon>RulesAdminWindow.xaml</DependentUpon>
-    </Compile>
-    <Compile Include="Windows\RulesHealthWindow.xaml.cs">
-      <DependentUpon>RulesHealthWindow.xaml</DependentUpon>
-    </Compile>
-    <Compile Include="Windows\RulesHealthWindow.Handlers.cs">
-      <DependentUpon>RulesHealthWindow.xaml</DependentUpon>
-    </Compile>
-    <Compile Include="Windows\TodoListSessionWarning.xaml.cs">
-      <DependentUpon>TodoListSessionWarning.xaml</DependentUpon>
-    </Compile>
     <Page Include="App.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
@@ -427,10 +446,6 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
-    <Page Include="Windows\ReportsWindow.xaml">
-      <Generator>MSBuild:Compile</Generator>
-      <SubType>Designer</SubType>
-    </Page>
     <Page Include="Windows\RuleDebugWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
@@ -448,6 +463,18 @@
       <SubType>Designer</SubType>
     </Page>
     <Page Include="Windows\TodoListSessionWarning.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\ReconciliationView\Resources\SharedResources.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\ReconciliationView\Resources\GridHeaderStyles.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\ReconciliationView\Resources\GridRowStyles.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>

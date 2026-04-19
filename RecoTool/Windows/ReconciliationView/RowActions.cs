@@ -100,13 +100,13 @@ namespace RecoTool.Windows
             catch { return Enumerable.Empty<UserField>(); }
         }
 
-        // Open full conversation and allow appending a new comment line
-        private async void CommentsCell_Click(object sender, MouseButtonEventArgs e)
+        // Open full conversation and allow appending a new comment line.
+        // PERF: Called directly by CellTapped (Editing.cs) — the old PreviewMouseLeftButtonUp
+        // on the cell template was re-attached on every row recycle during scroll.
+        internal async Task OpenCommentsDialogForAsync(ReconciliationViewData row)
         {
             try
             {
-                var fe = sender as FrameworkElement;
-                var row = fe?.DataContext as ReconciliationViewData;
                 if (row == null || _reconciliationService == null) return;
 
                 var dlg = new CommentsDialog

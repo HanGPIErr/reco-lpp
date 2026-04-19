@@ -9,261 +9,23 @@ using RecoTool.Services;
 namespace RecoTool.Services.DTOs
 {
     /// <summary>
-    /// Vue combinée pour l'affichage des données de réconciliation
+    /// Combined row view rendered by the reconciliation grid. Inherits the raw Ambre fields from
+    /// <see cref="DataAmbre"/> and layers the Reconciliation + DWINGS columns plus a set of cached
+    /// display-state properties (pre-computed strings and brushes) used during fast scroll.
+    /// <para>
+    /// The class is <c>partial</c>; related members live alongside this file:
+    /// <list type="bullet">
+    /// <item><c>ReconciliationViewData.Caches.cs</c> — static brush cache + static DWINGS lookup caches and their init/clear API.</item>
+    /// <item><c>ReconciliationViewData.DwingsSync.cs</c> — <c>RefreshDwingsData</c> + <c>Populate*</c>/<c>NotifyAll*</c> helpers.</item>
+    /// </list>
+    /// This main file holds the instance columns (<c>DWINGS_*</c>, <c>Action</c>, <c>KPI</c>, <c>Comments</c>…)
+    /// together with the cached display derivations their setters trigger.
+    /// </para>
     /// </summary>
-    public class ReconciliationViewData : DataAmbre, INotifyPropertyChanged
+    public partial class ReconciliationViewData : DataAmbre, INotifyPropertyChanged
     {
         public event PropertyChangedEventHandler PropertyChanged;
         protected void OnPropertyChanged(string propertyName) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-
-        #region Static Brush Cache (eliminates string→Brush conversion during scroll)
-        private static readonly Dictionary<string, SolidColorBrush> _brushCache = new Dictionary<string, SolidColorBrush>(StringComparer.OrdinalIgnoreCase);
-        private static readonly SolidColorBrush _transparentBrush;
-        private static readonly SolidColorBrush _defaultBorderBrush;
-
-        static ReconciliationViewData()
-        {
-            _transparentBrush = new SolidColorBrush(Colors.Transparent); _transparentBrush.Freeze();
-            _defaultBorderBrush = GetCachedBrush("#DDDDDD");
-        }
-
-        private static SolidColorBrush GetCachedBrush(string hex)
-        {
-            if (string.IsNullOrEmpty(hex) || string.Equals(hex, "Transparent", StringComparison.OrdinalIgnoreCase))
-                return _transparentBrush;
-            if (_brushCache.TryGetValue(hex, out var cached)) return cached;
-            try
-            {
-                var c = (Color)ColorConverter.ConvertFromString(hex);
-                var b = new SolidColorBrush(c); b.Freeze();
-                _brushCache[hex] = b;
-                return b;
-            }
-            catch { return _transparentBrush; }
-        }
-        #endregion
-
-        // Static cache for DWINGS data (shared across all instances)
-        private static Dictionary<string, DwingsInvoiceDto> _dwingsInvoiceCache;
-        private static Dictionary<string, DwingsGuaranteeDto> _dwingsGuaranteeCache;
-
-        private static readonly object _dwingsCacheLock = new object();
-
-        /// <summary>
-        /// Initialize DWINGS caches (called once during data load)
-        /// </summary>
-        public static void InitializeDwingsCaches(IEnumerable<DwingsInvoiceDto> invoices, IEnumerable<DwingsGuaranteeDto> guarantees)
-        {
-            lock (_dwingsCacheLock)
-            {
-                _dwingsInvoiceCache = new Dictionary<string, DwingsInvoiceDto>(StringComparer.OrdinalIgnoreCase);
-                _dwingsGuaranteeCache = new Dictionary<string, DwingsGuaranteeDto>(StringComparer.OrdinalIgnoreCase);
-
-                if (invoices != null)
-                {
-                    foreach (var inv in invoices)
-                    {
-                        if (!string.IsNullOrWhiteSpace(inv.INVOICE_ID))
-                        {
-                            // NOTE: INVOICE_ID is NOT unique - keep first occurrence
-                            if (!_dwingsInvoiceCache.ContainsKey(inv.INVOICE_ID))
-                            {
-                                _dwingsInvoiceCache[inv.INVOICE_ID] = inv;
-                            }
-                        }
-                    }
-                }
-
-                if (guarantees != null)
-                {
-                    foreach (var guar in guarantees)
-                    {
-                        if (!string.IsNullOrWhiteSpace(guar.GUARANTEE_ID))
-                        {
-                            // NOTE: GUARANTEE_ID should be unique, but check anyway
-                            if (!_dwingsGuaranteeCache.ContainsKey(guar.GUARANTEE_ID))
-                            {
-                                _dwingsGuaranteeCache[guar.GUARANTEE_ID] = guar;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        /// <summary>
-        /// Clear DWINGS caches (called when country changes)
-        /// </summary>
-        public static void ClearDwingsCaches()
-        {
-            lock (_dwingsCacheLock)
-            {
-                _dwingsInvoiceCache?.Clear();
-                _dwingsGuaranteeCache?.Clear();
-            }
-        }
-        
-        /// <summary>
-        /// Refresh DWINGS data when user manually changes DWINGS_InvoiceID or DWINGS_GuaranteeID
-        /// Call this after user edits to recalculate all DWINGS-linked properties
-        /// </summary>
-        public void RefreshDwingsData()
-        {
-            DwingsInvoiceDto invoice = null;
-            DwingsGuaranteeDto guarantee = null;
-
-            // Thread-safe cache access
-            lock (_dwingsCacheLock)
-            {
-                // Reload invoice data
-                if (!string.IsNullOrWhiteSpace(DWINGS_InvoiceID) && _dwingsInvoiceCache != null)
-                {
-                    _dwingsInvoiceCache.TryGetValue(DWINGS_InvoiceID, out invoice);
-                }
-
-                // Reload guarantee data
-                if (!string.IsNullOrWhiteSpace(DWINGS_GuaranteeID) && _dwingsGuaranteeCache != null)
-                {
-                    _dwingsGuaranteeCache.TryGetValue(DWINGS_GuaranteeID, out guarantee);
-                }
-            }
-
-            // Update all invoice properties (outside lock to minimize lock time)
-            PopulateInvoiceProperties(invoice);
-
-            // Update all guarantee properties
-            PopulateGuaranteeProperties(guarantee);
-
-            // Notify all dependent properties
-            NotifyAllDwingsProperties();
-        }
-
-        /// <summary>
-        /// Initialize DWINGS properties from invoice data (called once during load or after user edit)
-        /// </summary>
-        internal void PopulateInvoiceProperties(DwingsInvoiceDto invoice)
-        {
-            I_REQUESTED_INVOICE_AMOUNT = invoice?.REQUESTED_AMOUNT?.ToString();
-            I_SENDER_NAME = invoice?.SENDER_NAME;
-            I_RECEIVER_NAME = invoice?.RECEIVER_NAME;
-            I_SENDER_REFERENCE = invoice?.SENDER_REFERENCE;
-            I_RECEIVER_REFERENCE = invoice?.RECEIVER_REFERENCE;
-            I_T_INVOICE_STATUS = invoice?.T_INVOICE_STATUS;
-            _hasEmail = invoice?.COMM_ID_EMAIL;
-            I_BILLING_AMOUNT = invoice?.BILLING_AMOUNT?.ToString();
-            I_BILLING_CURRENCY = invoice?.BILLING_CURRENCY;
-            I_START_DATE = invoice?.START_DATE?.ToString("yyyy-MM-dd");
-            I_END_DATE = invoice?.END_DATE?.ToString("yyyy-MM-dd");
-            I_FINAL_AMOUNT = invoice?.FINAL_AMOUNT?.ToString();
-            I_BUSINESS_CASE_REFERENCE = invoice?.BUSINESS_CASE_REFERENCE;
-            I_BUSINESS_CASE_ID = invoice?.BUSINESS_CASE_ID;
-            I_SENDER_ACCOUNT_NUMBER = invoice?.SENDER_ACCOUNT_NUMBER;
-            I_SENDER_ACCOUNT_BIC = invoice?.SENDER_ACCOUNT_BIC;
-            I_REQUESTED_AMOUNT = invoice?.REQUESTED_AMOUNT?.ToString();
-            I_REQUESTED_EXECUTION_DATE = invoice?.REQUESTED_EXECUTION_DATE?.ToString("yyyy-MM-dd");
-            I_T_PAYMENT_REQUEST_STATUS = invoice?.T_PAYMENT_REQUEST_STATUS;
-            I_BGPMT = invoice?.BGPMT;
-            I_MT_STATUS = invoice?.MT_STATUS;
-            I_ERROR_MESSAGE = invoice?.ERROR_MESSAGE;
-            I_PAYMENT_METHOD = invoice?.PAYMENT_METHOD;
-            I_DEBTOR_PARTY_NAME = invoice?.DEBTOR_PARTY_NAME;
-        }
-        
-        /// <summary>
-        /// Initialize DWINGS properties from guarantee data (called once during load or after user edit)
-        /// </summary>
-        internal void PopulateGuaranteeProperties(DwingsGuaranteeDto guarantee)
-        {
-            if (I_RECEIVER_NAME == null)
-                I_RECEIVER_NAME = guarantee?.NAME2;
-            G_GUARANTEE_TYPE = guarantee?.GUARANTEE_TYPE;
-            G_NATURE = guarantee?.NATURE;
-            G_EVENT_STATUS = guarantee?.EVENT_STATUS;
-            G_EVENT_EFFECTIVEDATE = guarantee?.EVENT_EFFECTIVEDATE?.ToString("yyyy-MM-dd");
-            G_ISSUEDATE = guarantee?.ISSUEDATE?.ToString("yyyy-MM-dd");
-            G_OFFICIALREF = guarantee?.OFFICIALREF ?? guarantee?.GUARANTEE_ID;
-            G_UNDERTAKINGEVENT = guarantee?.UNDERTAKINGEVENT;
-            G_PROCESS = guarantee?.PROCESS;
-            G_EXPIRYDATETYPE = guarantee?.EXPIRYDATETYPE;
-            G_EXPIRYDATE = guarantee?.EXPIRYDATE?.ToString("yyyy-MM-dd");
-            G_PARTY_ID = guarantee?.PARTY_ID;
-            G_PARTY_REF = guarantee?.PARTY_REF;
-            G_SECONDARY_OBLIGOR = guarantee?.SECONDARY_OBLIGOR;
-            G_SECONDARY_OBLIGOR_NATURE = guarantee?.SECONDARY_OBLIGOR_NATURE;
-            G_ROLE = guarantee?.ROLE;
-            G_COUNTRY = guarantee?.COUNTRY;
-            G_CENTRAL_PARTY_CODE = guarantee?.CENTRAL_PARTY_CODE;
-            G_NAME1 = guarantee?.NAME1;
-            G_NAME2 = guarantee?.NAME2;
-            G_GROUPE = guarantee?.GROUPE;
-            G_PREMIUM = guarantee?.PREMIUM?.ToString();
-            G_BRANCH_CODE = guarantee?.BRANCH_CODE;
-            G_BRANCH_NAME = guarantee?.BRANCH_NAME;
-            G_OUTSTANDING_AMOUNT_IN_BOOKING_CURRENCY = guarantee?.OUTSTANDING_AMOUNT_IN_BOOKING_CURRENCY?.ToString();
-            G_CANCELLATIONDATE = guarantee?.CANCELLATIONDATE?.ToString("yyyy-MM-dd");
-            G_CONTROLER = guarantee?.CONTROLER;
-            G_AUTOMATICBOOKOFF = guarantee?.AUTOMATICBOOKOFF;
-            G_NATUREOFDEAL = guarantee?.NATUREOFDEAL;
-        }
-        
-        private void NotifyAllDwingsProperties()
-        {
-            // Invoice properties
-            OnPropertyChanged(nameof(I_REQUESTED_INVOICE_AMOUNT));
-            OnPropertyChanged(nameof(I_SENDER_NAME));
-            OnPropertyChanged(nameof(I_RECEIVER_NAME));
-            OnPropertyChanged(nameof(I_SENDER_REFERENCE));
-            OnPropertyChanged(nameof(I_RECEIVER_REFERENCE));
-            OnPropertyChanged(nameof(I_T_INVOICE_STATUS));
-            OnPropertyChanged(nameof(HasEmail));
-            OnPropertyChanged(nameof(I_BILLING_AMOUNT));
-            OnPropertyChanged(nameof(I_BILLING_CURRENCY));
-            OnPropertyChanged(nameof(I_START_DATE));
-            OnPropertyChanged(nameof(I_END_DATE));
-            OnPropertyChanged(nameof(I_FINAL_AMOUNT));
-            OnPropertyChanged(nameof(I_BUSINESS_CASE_REFERENCE));
-            OnPropertyChanged(nameof(I_BUSINESS_CASE_ID));
-            OnPropertyChanged(nameof(I_SENDER_ACCOUNT_NUMBER));
-            OnPropertyChanged(nameof(I_SENDER_ACCOUNT_BIC));
-            OnPropertyChanged(nameof(I_REQUESTED_AMOUNT));
-            OnPropertyChanged(nameof(I_REQUESTED_EXECUTION_DATE));
-            OnPropertyChanged(nameof(I_T_PAYMENT_REQUEST_STATUS));
-            OnPropertyChanged(nameof(I_BGPMT));
-            OnPropertyChanged(nameof(I_MT_STATUS));
-            OnPropertyChanged(nameof(I_ERROR_MESSAGE));
-            OnPropertyChanged(nameof(I_PAYMENT_METHOD));
-            OnPropertyChanged(nameof(I_DEBTOR_PARTY_NAME));
-            
-            // Guarantee properties
-            OnPropertyChanged(nameof(G_GUARANTEE_TYPE));
-            OnPropertyChanged(nameof(G_NATURE));
-            OnPropertyChanged(nameof(G_EVENT_STATUS));
-            OnPropertyChanged(nameof(G_EVENT_EFFECTIVEDATE));
-            OnPropertyChanged(nameof(G_ISSUEDATE));
-            OnPropertyChanged(nameof(G_OFFICIALREF));
-            OnPropertyChanged(nameof(G_UNDERTAKINGEVENT));
-            OnPropertyChanged(nameof(G_PROCESS));
-            OnPropertyChanged(nameof(G_EXPIRYDATETYPE));
-            OnPropertyChanged(nameof(G_EXPIRYDATE));
-            OnPropertyChanged(nameof(G_PARTY_ID));
-            OnPropertyChanged(nameof(G_PARTY_REF));
-            OnPropertyChanged(nameof(G_SECONDARY_OBLIGOR));
-            OnPropertyChanged(nameof(G_SECONDARY_OBLIGOR_NATURE));
-            OnPropertyChanged(nameof(G_ROLE));
-            OnPropertyChanged(nameof(G_COUNTRY));
-            OnPropertyChanged(nameof(G_CENTRAL_PARTY_CODE));
-            OnPropertyChanged(nameof(G_NAME1));
-            OnPropertyChanged(nameof(G_NAME2));
-            OnPropertyChanged(nameof(G_GROUPE));
-            OnPropertyChanged(nameof(G_PREMIUM));
-            OnPropertyChanged(nameof(G_BRANCH_CODE));
-            OnPropertyChanged(nameof(G_BRANCH_NAME));
-            OnPropertyChanged(nameof(G_OUTSTANDING_AMOUNT_IN_BOOKING_CURRENCY));
-            OnPropertyChanged(nameof(G_CANCELLATIONDATE));
-            OnPropertyChanged(nameof(G_CONTROLER));
-            OnPropertyChanged(nameof(G_AUTOMATICBOOKOFF));
-            OnPropertyChanged(nameof(G_NATUREOFDEAL));
-        }
 
         // Propriétés de Reconciliation
         private string _dwingsGuaranteeID;
@@ -644,7 +406,11 @@ namespace RecoTool.Services.DTOs
         public string AccountSide { get; set; }
 
         // ── Real-time presence: who is currently viewing/editing this row ──
+        // PERF: Initials and Visibility are now cached (computed only when the user name changes),
+        // not recomputed on every binding read during scroll recycle.
         private string _presenceUserName;
+        private string _cachedPresenceInitials;
+        private Visibility _cachedPresenceVisibility = Visibility.Collapsed;
         public string PresenceUserName
         {
             get => _presenceUserName;
@@ -653,23 +419,24 @@ namespace RecoTool.Services.DTOs
                 if (_presenceUserName != value)
                 {
                     _presenceUserName = value;
+                    _cachedPresenceInitials = ComputePresenceInitials(value);
+                    _cachedPresenceVisibility = string.IsNullOrWhiteSpace(value) ? Visibility.Collapsed : Visibility.Visible;
                     OnPropertyChanged(nameof(PresenceUserName));
                     OnPropertyChanged(nameof(PresenceInitials));
                     OnPropertyChanged(nameof(PresenceVisibility));
                 }
             }
         }
-        public string PresenceInitials
+        public string PresenceInitials => _cachedPresenceInitials;
+        public Visibility PresenceVisibility => _cachedPresenceVisibility;
+
+        private static string ComputePresenceInitials(string userName)
         {
-            get
-            {
-                if (string.IsNullOrWhiteSpace(_presenceUserName)) return null;
-                var parts = _presenceUserName.Split(new[] { '.', '_', '-', ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length >= 2) return $"{char.ToUpper(parts[0][0])}{char.ToUpper(parts[1][0])}";
-                return _presenceUserName.Length >= 2 ? _presenceUserName.Substring(0, 2).ToUpper() : _presenceUserName.ToUpper();
-            }
+            if (string.IsNullOrWhiteSpace(userName)) return null;
+            var parts = userName.Split(new[] { '.', '_', '-', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2) return $"{char.ToUpper(parts[0][0])}{char.ToUpper(parts[1][0])}";
+            return userName.Length >= 2 ? userName.Substring(0, 2).ToUpper() : userName.ToUpper();
         }
-        public Visibility PresenceVisibility => string.IsNullOrWhiteSpace(_presenceUserName) ? Visibility.Collapsed : Visibility.Visible;
 
         // True if the reference (DWINGS_InvoiceID or InternalInvoiceReference) exists on both accounts
         private bool _isMatchedAcrossAccounts;

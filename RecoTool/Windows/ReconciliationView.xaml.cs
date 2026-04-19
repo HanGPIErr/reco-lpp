@@ -756,7 +756,10 @@ namespace RecoTool.Windows
                     var addRuleItem = new MenuItem { Header = "Add Rule based on this line…", Tag = "__AddRuleFromLine__", DataContext = rowData, IsEnabled = !isArchived };
                     addRuleItem.Click += QuickAddRuleFromLineMenuItem_Click;
                     cm.Items.Add(addRuleItem);
-                    var commentItem = new MenuItem { Header = "Set Comment…", Tag = "__SetComment__", IsEnabled = !isArchived };
+                    // Comments remain editable on archived rows — single business-approved
+                    // exception. QuickSetCommentMenuItem_Click only writes to Comments, so mixed
+                    // selections (some archived, some live) are safe.
+                    var commentItem = new MenuItem { Header = "Set Comment…", Tag = "__SetComment__" };
                     commentItem.Click += QuickSetCommentMenuItem_Click;
                     cm.Items.Add(commentItem);
 
@@ -784,7 +787,8 @@ namespace RecoTool.Windows
                     {
                         Header = "Check with Free …",
                         Tag = "__CheckWithFree__",
-                        DataContext = rowData               // la ligne sur laquelle on a cliqué
+                        DataContext = rowData,              // la ligne sur laquelle on a cliqué
+                        IsEnabled = !isArchived              // writes DWINGS_* / MbawData — skip for archived
                     };
                     checkFreeItem.Click += QuickCheckWithFreeMenuItem_Click;
                     cm.Items.Add(checkFreeItem);
@@ -858,6 +862,10 @@ namespace RecoTool.Windows
             {
                 ct.ThrowIfCancellationRequested();
                 var row = rows[i];
+
+                // Skip archived rows so we don't waste an API call + dirty the in-memory DTO
+                // just for SaveEditedRowAsync to short-circuit them downstream.
+                if (row == null || row.IsDeleted) continue;
 
                 try
                 {
@@ -1733,7 +1741,8 @@ namespace RecoTool.Windows
                             Actual = c.Actual,
                             IsMet = c.IsMet,
                             Status = c.IsMet ? "✓" : "✗"
-                        }).ToList()
+                        }).ToList(),
+                        Rule = eval.Rule
                     };
                     debugItems.Add(item);
                 }

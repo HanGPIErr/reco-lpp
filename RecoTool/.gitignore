@@ -343,3 +343,18 @@ secrets.config
 # OfflineFirstAccess build artifacts
 OfflineFirstAccess/bin/
 OfflineFirstAccess/obj/
+
+# WPF temporary project files (created by VS during XAML design)
+*_wpftmp.csproj
+*_wpftmp.sln
+*_MSBuildTmp.sln
+
+# Rider/ReSharper user caches
+.idea/
+
+# JetBrains
+*.iml
+
+# Progress files (often created locally during long-running tasks)
+progress.txt
+*.progress.md

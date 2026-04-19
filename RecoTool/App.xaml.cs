@@ -111,7 +111,6 @@ namespace RecoTool
                 return new ReconciliationPage(recoSvc, offline, repo, freeApi);
             });
             services.AddTransient<ReconciliationView>();
-            services.AddTransient<ReportsWindow>();
 
             ServiceProvider = services.BuildServiceProvider();
             ServiceLocator.Initialize(ServiceProvider);

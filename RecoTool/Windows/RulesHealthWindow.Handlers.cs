@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
@@ -16,124 +16,6 @@ namespace RecoTool.Windows
 {
     public partial class RulesHealthWindow
     {
-        // =================================================================================
-        //                                SIMULATOR TAB
-        // =================================================================================
-
-        private RuleScope GetSelectedSimScope()
-        {
-            var tag = (SimScopeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString();
-            return tag == "Edit" ? RuleScope.Edit : tag == "Both" ? RuleScope.Both : RuleScope.Import;
-        }
-
-        private async void RunSimulation_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                if (string.IsNullOrWhiteSpace(_offlineFirstService?.CurrentCountry?.CNT_Id))
-                {
-                    MessageBox.Show(this, "Please select a country first.", "Rules Health", MessageBoxButton.OK, MessageBoxImage.Information);
-                    return;
-                }
-                _cts = new CancellationTokenSource();
-                SetBusy(true, "Collecting rows…");
-                var scope = GetSelectedSimScope();
-                var progress = BuildProgress();
-
-                var report = await Task.Run(() => _diagnostics.SimulateAsync(scope, progress, _cts.Token)).ConfigureAwait(true);
-                _lastSimReport = report;
-
-                _simRows.Clear();
-                foreach (var h in report.RuleHits) _simRows.Add(h);
-
-                SimTotalText.Text = report.TotalRows.ToString();
-                SimMatchedText.Text = report.MatchedRows.ToString();
-                SimUnmatchedText.Text = report.UnmatchedRows.ToString();
-                SimDeadText.Text = report.RuleHits.Count(h => h.Applicable && h.Enabled && h.HitCount == 0).ToString();
-                SimActiveText.Text = report.RuleHits.Count(h => h.Enabled && h.HitCount > 0).ToString();
-                SimRunAtText.Text = $"Simulated at {report.SimulatedAt:yyyy-MM-dd HH:mm:ss}";
-                SimSummaryText.Text = report.Summary
-                    + (report.UnmatchedRows > 0
-                       ? $" — {report.UnmatchedRows} rows would fallback to INVESTIGATE in production."
-                       : string.Empty);
-
-                ExportSimBtn.IsEnabled = true;
-                StatusText.Text = $"Simulation complete: {report.Summary}";
-            }
-            catch (OperationCanceledException)
-            {
-                StatusText.Text = "Simulation cancelled.";
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, $"Simulation failed: {ex.Message}", "Rules Health", MessageBoxButton.OK, MessageBoxImage.Error);
-                StatusText.Text = $"Error: {ex.Message}";
-            }
-            finally { SetBusy(false); }
-        }
-
-        private bool SimRowFilter(object item)
-        {
-            if (item is RuleHitStats r)
-            {
-                var q = SimFilterBox?.Text?.Trim();
-                if (string.IsNullOrEmpty(q)) return true;
-                return (r.RuleId?.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0)
-                       || (r.Message?.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0);
-            }
-            return true;
-        }
-
-        private void SimFilter_TextChanged(object sender, TextChangedEventArgs e)
-        {
-            try { System.Windows.Data.CollectionViewSource.GetDefaultView(SimGrid.ItemsSource)?.Refresh(); } catch { }
-        }
-
-        private void SimGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (_lastSimReport == null) return;
-            if (SimGrid.SelectedItem is RuleHitStats stats && stats.SampleRecoIds != null && stats.SampleRecoIds.Count > 0)
-            {
-                StatusText.Text = $"Sample reco IDs for {stats.RuleId}: {string.Join(", ", stats.SampleRecoIds.Take(5))}";
-            }
-        }
-
-        private void ExportSimulation_Click(object sender, RoutedEventArgs e)
-        {
-            if (_lastSimReport == null) return;
-            var dlg = new SaveFileDialog
-            {
-                Filter = "CSV files (*.csv)|*.csv",
-                FileName = $"rules-simulation-{DateTime.Now:yyyyMMdd-HHmmss}.csv"
-            };
-            if (dlg.ShowDialog(this) != true) return;
-            try
-            {
-                var sb = new StringBuilder();
-                sb.AppendLine("RuleId;Priority;Scope;Enabled;AutoApply;Hits;CoveragePercent;LastApplied;SampleRecoIds;Message");
-                foreach (var h in _lastSimReport.RuleHits)
-                {
-                    sb.Append(Csv(h.RuleId)).Append(';')
-                      .Append(h.Priority).Append(';')
-                      .Append(h.Scope).Append(';')
-                      .Append(h.Enabled).Append(';')
-                      .Append(h.AutoApply).Append(';')
-                      .Append(h.HitCount).Append(';')
-                      .Append(h.CoveragePercent.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)).Append(';')
-                      .Append(h.LastAppliedDisplay).Append(';')
-                      .Append(Csv(string.Join("|", h.SampleRecoIds ?? new List<string>()))).Append(';')
-                      .Append(Csv(h.Message))
-                      .AppendLine();
-                }
-                sb.AppendLine();
-                sb.AppendLine($"# Total rows: {_lastSimReport.TotalRows}");
-                sb.AppendLine($"# Matched: {_lastSimReport.MatchedRows}");
-                sb.AppendLine($"# Unmatched: {_lastSimReport.UnmatchedRows}");
-                File.WriteAllText(dlg.FileName, sb.ToString(), Encoding.UTF8);
-                StatusText.Text = $"Exported to {dlg.FileName}";
-            }
-            catch (Exception ex) { MessageBox.Show(this, $"Export failed: {ex.Message}", "Rules Health", MessageBoxButton.OK, MessageBoxImage.Error); }
-        }
 
         private static string Csv(string s)
         {
@@ -213,165 +95,69 @@ namespace RecoTool.Windows
         }
 
         // =================================================================================
-        //                                TESTER TAB
-        // =================================================================================
-
-        private RuleContext BuildTesterContext()
-        {
-            var ctx = new RuleContext
-            {
-                CountryId = TestCountryBox.Text?.Trim(),
-                IsPivot = TestIsPivotChk.IsChecked == true,
-                GuaranteeType = TesterValueOrNull(TestGuaranteeCombo.Text),
-                TransactionType = TesterValueOrNull(TestTransactionCombo.Text),
-                HasDwingsLink = TestHasDwingsChk.IsChecked,
-                IsGrouped = TestIsGroupedChk.IsChecked,
-                IsAmountMatch = TestIsAmountMatchChk.IsChecked,
-                Sign = (TestSignCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
-                MtStatus = TesterValueOrNull((TestMtStatusCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString()),
-                HasCommIdEmail = TestCommIdEmailChk.IsChecked,
-                IsBgiInitiated = TestBgiInitiatedChk.IsChecked,
-                PaymentRequestStatus = TesterValueOrNull(TestPaymentStatusBox.Text),
-                InvoiceStatus = TesterValueOrNull(TestInvoiceStatusBox.Text),
-                IsFirstRequest = TestIsFirstRequestChk.IsChecked,
-                IsNewLine = TestIsNewLineChk.IsChecked,
-                IsActionDone = TestIsActionDoneChk.IsChecked
-            };
-            if (int.TryParse(TestDaysSinceReminderBox.Text, out var dsr)) ctx.DaysSinceReminder = dsr;
-            if (int.TryParse(TestCurrentActionBox.Text, out var ca)) ctx.CurrentActionId = ca;
-            return ctx;
-        }
-
-        private static string TesterValueOrNull(string s)
-        {
-            if (string.IsNullOrWhiteSpace(s)) return null;
-            if (s.Trim().Equals("(null)", StringComparison.OrdinalIgnoreCase)) return null;
-            return s.Trim();
-        }
-
-        private async void RunTest_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                SetBusy(true, "Evaluating…");
-                var ctx = BuildTesterContext();
-                var scopeTag = (TestScopeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString();
-                var scope = scopeTag == "Import" ? RuleScope.Import : RuleScope.Edit;
-
-                var results = await _diagnostics.TestAsync(ctx, scope).ConfigureAwait(true);
-
-                // Sort: matching rules first (by Priority), then non-matching
-                var ordered = results
-                    .OrderByDescending(r => r.IsMatch)
-                    .ThenBy(r => r.Rule?.Priority ?? int.MaxValue)
-                    .ThenBy(r => r.Rule?.RuleId, StringComparer.OrdinalIgnoreCase)
-                    .Select((r, i) => new TesterRow { Order = i + 1, Rule = r.Rule, IsEnabled = r.IsEnabled, IsMatch = r.IsMatch, Conditions = r.Conditions })
-                    .ToList();
-                TestGrid.ItemsSource = ordered;
-
-                var winner = ordered.FirstOrDefault(r => r.IsMatch);
-                if (winner != null)
-                {
-                    TestHeroBox.Background = (System.Windows.Media.Brush)new System.Windows.Media.BrushConverter().ConvertFrom("#D5F5E3");
-                    TestHeroText.Text = $"✓ Matched: {winner.Rule.RuleId}"
-                        + (winner.Rule.OutputActionId.HasValue ? $"  |  Action={winner.Rule.OutputActionId}" : string.Empty)
-                        + (winner.Rule.OutputKpiId.HasValue ? $"  |  KPI={winner.Rule.OutputKpiId}" : string.Empty)
-                        + (!string.IsNullOrWhiteSpace(winner.Rule.Message) ? $"\nMessage: {winner.Rule.Message}" : string.Empty);
-                }
-                else
-                {
-                    TestHeroBox.Background = (System.Windows.Media.Brush)new System.Windows.Media.BrushConverter().ConvertFrom("#FADBD8");
-                    TestHeroText.Text = "✗ No rule matched this context — in production this row would fallback to INVESTIGATE.";
-                }
-                StatusText.Text = $"Evaluated {results.Count} rules; {ordered.Count(r => r.IsMatch)} match.";
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, $"Evaluation failed: {ex.Message}", "Rules Health", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-            finally { SetBusy(false); }
-        }
-
-        private async void LoadContextFromLine_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                var id = Microsoft.VisualBasic.Interaction.InputBox("Enter a reconciliation ID to load its context:", "Load context from line", string.Empty);
-                if (string.IsNullOrWhiteSpace(id)) return;
-                var (ctx, _) = await _reconciliationService.GetRuleDebugInfoAsync(id.Trim()).ConfigureAwait(true);
-                if (ctx == null) { StatusText.Text = "Line not found."; return; }
-                ApplyContextToTesterForm(ctx);
-                StatusText.Text = $"Loaded context from line {id}.";
-            }
-            catch (Exception ex) { MessageBox.Show(this, ex.Message, "Load context", MessageBoxButton.OK, MessageBoxImage.Error); }
-        }
-
-        private void ApplyContextToTesterForm(RuleContext ctx)
-        {
-            TestCountryBox.Text = ctx.CountryId;
-            TestIsPivotChk.IsChecked = ctx.IsPivot;
-            TestGuaranteeCombo.Text = ctx.GuaranteeType ?? "(null)";
-            TestTransactionCombo.Text = ctx.TransactionType ?? "(null)";
-            TestHasDwingsChk.IsChecked = ctx.HasDwingsLink;
-            TestIsGroupedChk.IsChecked = ctx.IsGrouped;
-            TestIsAmountMatchChk.IsChecked = ctx.IsAmountMatch;
-            SelectComboByTag(TestSignCombo, ctx.Sign ?? "");
-            SelectComboByTag(TestMtStatusCombo, ctx.MtStatus ?? "");
-            TestCommIdEmailChk.IsChecked = ctx.HasCommIdEmail;
-            TestBgiInitiatedChk.IsChecked = ctx.IsBgiInitiated;
-            TestPaymentStatusBox.Text = ctx.PaymentRequestStatus;
-            TestInvoiceStatusBox.Text = ctx.InvoiceStatus;
-            TestIsFirstRequestChk.IsChecked = ctx.IsFirstRequest;
-            TestIsNewLineChk.IsChecked = ctx.IsNewLine;
-            TestDaysSinceReminderBox.Text = ctx.DaysSinceReminder?.ToString() ?? string.Empty;
-            TestCurrentActionBox.Text = ctx.CurrentActionId?.ToString() ?? string.Empty;
-            TestIsActionDoneChk.IsChecked = ctx.IsActionDone;
-        }
-
-        private static void SelectComboByTag(ComboBox combo, string tag)
-        {
-            foreach (ComboBoxItem it in combo.Items)
-            {
-                if (string.Equals(it.Tag?.ToString() ?? string.Empty, tag ?? string.Empty, StringComparison.OrdinalIgnoreCase))
-                {
-                    combo.SelectedItem = it;
-                    return;
-                }
-            }
-        }
-
-        private void ResetTesterForm_Click(object sender, RoutedEventArgs e)
-        {
-            TestCountryBox.Text = _offlineFirstService?.CurrentCountry?.CNT_Id ?? string.Empty;
-            TestIsPivotChk.IsChecked = false;
-            TestGuaranteeCombo.SelectedIndex = 0;
-            TestTransactionCombo.SelectedIndex = 0;
-            TestHasDwingsChk.IsChecked = null;
-            TestIsGroupedChk.IsChecked = null;
-            TestIsAmountMatchChk.IsChecked = null;
-            TestSignCombo.SelectedIndex = 0;
-            TestMtStatusCombo.SelectedIndex = 0;
-            TestCommIdEmailChk.IsChecked = null;
-            TestBgiInitiatedChk.IsChecked = null;
-            TestPaymentStatusBox.Clear();
-            TestInvoiceStatusBox.Clear();
-            TestIsFirstRequestChk.IsChecked = null;
-            TestIsNewLineChk.IsChecked = null;
-            TestDaysSinceReminderBox.Clear();
-            TestCurrentActionBox.Clear();
-            TestIsActionDoneChk.IsChecked = null;
-            TestGrid.ItemsSource = null;
-            TestHeroText.Text = "Fill the context and click Evaluate.";
-            TestHeroBox.Background = (System.Windows.Media.Brush)new System.Windows.Media.BrushConverter().ConvertFrom("#ECF0F1");
-        }
-
-        // =================================================================================
         //                                IMPACT PREVIEW TAB
         // =================================================================================
 
+        // In-memory draft kept for the Impact Preview tab. Never persisted — only consumed by
+        // PreviewImpactAsync. Reset whenever the user picks a different rule so a stale edit on
+        // rule A can never leak into a preview of rule B.
+        private TruthRule _impactDraft;
+
         private void ImpactRuleCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            // no-op for now, could preview the rule expression
+            // Enable the "Edit draft" button only when a rule is selected.
+            try { EditImpactDraftButton.IsEnabled = ImpactRuleCombo.SelectedItem is TruthRule; } catch { }
+
+            // Swapping to another rule invalidates any previously held draft.
+            if (_impactDraft != null)
+            {
+                var selectedId = (ImpactRuleCombo.SelectedItem as TruthRule)?.RuleId;
+                if (!string.Equals(selectedId, _impactDraft.RuleId, StringComparison.OrdinalIgnoreCase))
+                {
+                    ClearImpactDraftInternal();
+                }
+            }
+        }
+
+        private void EditImpactDraft_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (!(ImpactRuleCombo.SelectedItem is TruthRule selected))
+                {
+                    MessageBox.Show(this, "Pick a rule first.", "Impact Preview", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                // Seed the editor with the current draft when one exists (so repeated edits stack),
+                // otherwise start from the saved rule.
+                var seed = _impactDraft != null && string.Equals(_impactDraft.RuleId, selected.RuleId, StringComparison.OrdinalIgnoreCase)
+                    ? _impactDraft
+                    : selected;
+
+                var editor = new RuleEditorWindow(seed, _offlineFirstService) { Owner = this };
+                if (editor.ShowDialog() == true && editor.ResultRule != null)
+                {
+                    // Keep the draft identity (RuleId) aligned with the selected rule — PreviewImpactAsync
+                    // swaps in the draft by matching RuleId.
+                    _impactDraft = editor.ResultRule;
+                    ClearImpactDraftButton.IsEnabled = true;
+                    ImpactDraftStatusText.Text = $"✏️ Draft ready for '{_impactDraft.RuleId}'. Click 'Run Preview' to evaluate impact.";
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Edit draft failed: {ex.Message}", "Impact Preview", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void ClearImpactDraft_Click(object sender, RoutedEventArgs e) => ClearImpactDraftInternal();
+
+        private void ClearImpactDraftInternal()
+        {
+            _impactDraft = null;
+            try { ClearImpactDraftButton.IsEnabled = false; } catch { }
+            try { ImpactDraftStatusText.Text = "No draft — preview will compare the saved rule against itself (no-op). Click 'Edit draft…' to modify a copy."; } catch { }
         }
 
         private async void RunImpact_Click(object sender, RoutedEventArgs e)
@@ -383,11 +169,19 @@ namespace RecoTool.Windows
                     MessageBox.Show(this, "Pick a rule to preview.", "Impact Preview", MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
+
+                // Prefer the in-memory draft (if its RuleId still matches the selected rule).
+                // Otherwise fall back to the saved rule — this is still useful as a sanity check
+                // showing BEFORE == AFTER across all rows.
+                var previewTarget = (_impactDraft != null && string.Equals(_impactDraft.RuleId, rule.RuleId, StringComparison.OrdinalIgnoreCase))
+                    ? _impactDraft
+                    : rule;
+
                 _cts = new CancellationTokenSource();
-                SetBusy(true, "Running impact preview (double evaluation)…");
+                SetBusy(true, _impactDraft != null ? "Running impact preview (draft vs saved)…" : "Running impact preview (saved vs saved — no-op check)…");
                 var scope = (ImpactScopeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() == "Edit" ? RuleScope.Edit : RuleScope.Import;
                 var progress = BuildProgress();
-                var report = await Task.Run(() => _diagnostics.PreviewImpactAsync(rule, scope, progress, _cts.Token)).ConfigureAwait(true);
+                var report = await Task.Run(() => _diagnostics.PreviewImpactAsync(previewTarget, scope, progress, _cts.Token)).ConfigureAwait(true);
 
                 ImpactBeforeText.Text = report.BeforeMatchCount.ToString();
                 ImpactAfterText.Text = report.AfterMatchCount.ToString();
@@ -417,7 +211,8 @@ namespace RecoTool.Windows
         public void FocusImpactTabForRule(TruthRule rule)
         {
             if (rule == null) return;
-            MainTabs.SelectedIndex = 3;
+            // Tab order: 0=Coverage, 1=Impact Preview, 2=Proposals, 3=Simulate AMBRE
+            MainTabs.SelectedIndex = 1;
             var match = _allRules?.FirstOrDefault(r => string.Equals(r.RuleId, rule.RuleId, StringComparison.OrdinalIgnoreCase));
             ImpactRuleCombo.SelectedItem = match ?? rule;
         }
@@ -425,6 +220,13 @@ namespace RecoTool.Windows
         // =================================================================================
         //                                PROPOSALS TAB
         // =================================================================================
+
+        // Full list from the last DB load — kept so the rule-filter combo can slice it client-side
+        // without re-hitting T_RuleProposals on every selection change.
+        private List<RuleProposal> _loadedProposals = new List<RuleProposal>();
+        // Sentinel tag used by the "(all rules)" item in the PropRuleCombo. Any non-null string works
+        // as long as no real RuleId can collide with it; we use a value forbidden by the schema.
+        private const string PropRuleComboAllTag = "__ALL__";
 
         private async void ReloadProposals_Click(object sender, RoutedEventArgs e)
         {
@@ -444,8 +246,10 @@ namespace RecoTool.Windows
                 if (!string.IsNullOrWhiteSpace(tag) && Enum.TryParse<ProposalStatus>(tag, true, out var s)) filter = s;
 
                 var list = await repo.LoadAsync(filter).ConfigureAwait(true);
-                PropGrid.ItemsSource = list;
-                PropStatusText.Text = $"{list.Count} proposal(s) loaded.";
+                _loadedProposals = list ?? new List<RuleProposal>();
+                RebuildPropRuleCombo();
+                ApplyProposalRuleFilter();
+                PropStatusText.Text = $"{_loadedProposals.Count} proposal(s) loaded.";
                 StatusText.Text = PropStatusText.Text;
             }
             catch (Exception ex)
@@ -454,6 +258,107 @@ namespace RecoTool.Windows
                 MessageBox.Show(this, ex.Message, "Proposals", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally { SetBusy(false); }
+        }
+
+        /// <summary>
+        /// Rebuilds the rule-filter combo from the distinct RuleIds currently in memory.
+        /// Preserves the previously selected rule (by string) when it still exists, otherwise
+        /// falls back to "(all rules)".
+        /// </summary>
+        private void RebuildPropRuleCombo()
+        {
+            try
+            {
+                var previouslySelected = (PropRuleCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString();
+                PropRuleCombo.Items.Clear();
+                PropRuleCombo.Items.Add(new ComboBoxItem { Content = "(all rules)", Tag = PropRuleComboAllTag });
+                foreach (var rid in _loadedProposals
+                    .Select(p => p?.RuleId)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                {
+                    PropRuleCombo.Items.Add(new ComboBoxItem { Content = rid, Tag = rid });
+                }
+
+                // Restore previous selection if still available.
+                int idx = 0;
+                if (!string.IsNullOrWhiteSpace(previouslySelected) && previouslySelected != PropRuleComboAllTag)
+                {
+                    for (int i = 1; i < PropRuleCombo.Items.Count; i++)
+                    {
+                        var tag = (PropRuleCombo.Items[i] as ComboBoxItem)?.Tag?.ToString();
+                        if (string.Equals(tag, previouslySelected, StringComparison.OrdinalIgnoreCase)) { idx = i; break; }
+                    }
+                }
+                PropRuleCombo.SelectedIndex = idx;
+            }
+            catch { }
+        }
+
+        private void PropRuleCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (PropGrid == null) return;
+            ApplyProposalRuleFilter();
+        }
+
+        private void ApplyProposalRuleFilter()
+        {
+            try
+            {
+                var tag = (PropRuleCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString();
+                IEnumerable<RuleProposal> view = _loadedProposals;
+                if (!string.IsNullOrWhiteSpace(tag) && tag != PropRuleComboAllTag)
+                {
+                    view = _loadedProposals.Where(p => string.Equals(p?.RuleId, tag, StringComparison.OrdinalIgnoreCase));
+                }
+                var list = view.ToList();
+                PropGrid.ItemsSource = list;
+                PropStatusText.Text = $"{list.Count} proposal(s) displayed (of {_loadedProposals.Count} loaded).";
+            }
+            catch { }
+        }
+
+        private void ExportProposals_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // Export what's currently displayed (after status + rule filters), not the raw loaded list.
+                var items = (PropGrid.ItemsSource as IEnumerable<RuleProposal>)?.ToList() ?? new List<RuleProposal>();
+                if (items.Count == 0) { PropStatusText.Text = "Nothing to export."; return; }
+
+                var dlg = new SaveFileDialog
+                {
+                    Filter = "CSV files (*.csv)|*.csv",
+                    FileName = $"rule-proposals-{DateTime.Now:yyyyMMdd-HHmmss}.csv"
+                };
+                if (dlg.ShowDialog(this) != true) return;
+
+                var sb = new StringBuilder();
+                sb.AppendLine("ProposalId;Status;RuleId;RecoId;Field;OldValue;NewValue;CreatedAt;CreatedBy;DecidedBy;DecidedAt");
+                foreach (var p in items)
+                {
+                    sb.Append(p.ProposalId?.ToString() ?? string.Empty).Append(';')
+                      .Append(Csv(p.Status.ToString())).Append(';')
+                      .Append(Csv(p.RuleId)).Append(';')
+                      .Append(Csv(p.RecoId)).Append(';')
+                      .Append(Csv(p.Field)).Append(';')
+                      .Append(Csv(p.OldValue)).Append(';')
+                      .Append(Csv(p.NewValue)).Append(';')
+                      .Append(p.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss")).Append(';')
+                      .Append(Csv(p.CreatedBy)).Append(';')
+                      .Append(Csv(p.DecidedBy)).Append(';')
+                      .Append(p.DecidedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? string.Empty)
+                      .AppendLine();
+                }
+                File.WriteAllText(dlg.FileName, sb.ToString(), Encoding.UTF8);
+                PropStatusText.Text = $"Exported {items.Count} proposal(s) to {dlg.FileName}";
+                StatusText.Text = PropStatusText.Text;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Export failed: {ex.Message}", "Proposals", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
         private async void AcceptProposals_Click(object sender, RoutedEventArgs e)
@@ -563,8 +468,11 @@ namespace RecoTool.Windows
             ProposalStatus? filter = null;
             if (!string.IsNullOrWhiteSpace(tag) && Enum.TryParse<ProposalStatus>(tag, true, out var s)) filter = s;
             var list = await repo.LoadAsync(filter).ConfigureAwait(true);
-            PropGrid.ItemsSource = list;
-            PropStatusText.Text = $"{list.Count} proposal(s) loaded.";
+            _loadedProposals = list ?? new List<RuleProposal>();
+            // Rebuild the rule combo (distinct RuleIds may have changed after Accept/Reject) and
+            // re-apply the currently selected rule filter.
+            RebuildPropRuleCombo();
+            ApplyProposalRuleFilter();
         }
 
         /// <summary>
@@ -621,6 +529,9 @@ namespace RecoTool.Windows
         // =================================================================================
 
         private string _ambreSimFilePath;
+        // Optional: path to a DWINGS snapshot (zip or accdb). When null/empty, the simulation falls
+        // back to the country's live DWINGS cache. See ReconciliationService.ApplyDwingsOverride.
+        private string _ambreSimDwingsPath;
         private List<RuleSimulationRow> _ambreSimRows = new List<RuleSimulationRow>();
 
         private void PickAmbreFile_Click(object sender, RoutedEventArgs e)
@@ -641,11 +552,48 @@ namespace RecoTool.Windows
             }
         }
 
+        // ──────────────────────────────────────────────────────────────────────────────────────
+        // Optional DWINGS snapshot. User may pick a DW .zip (containing one .accdb) or a .accdb
+        // directly; we just stash the path here and DwingsService.LoadFromPathAsync figures out the
+        // file type at simulation time. Loading is deferred (zip extraction is expensive) so we do
+        // not hit the disk until the user actually clicks Run.
+        // ──────────────────────────────────────────────────────────────────────────────────────
+        private void PickDwingsFile_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new OpenFileDialog
+            {
+                Title = "Select DWINGS file (zip containing accdb, or accdb directly)",
+                Filter = "DWINGS files (*.zip;*.accdb)|*.zip;*.accdb|All files (*.*)|*.*",
+                CheckFileExists = true,
+                RestoreDirectory = true
+            };
+            if (dlg.ShowDialog(this) == true)
+            {
+                _ambreSimDwingsPath = dlg.FileName;
+                DwingsFilePathText.Text = _ambreSimDwingsPath;
+                ClearDwingsButton.IsEnabled = true;
+                AmbreSimStatusText.Text = "DWINGS snapshot selected. Click Run to simulate with this data.";
+            }
+        }
+
+        private void ClearDwingsFile_Click(object sender, RoutedEventArgs e)
+        {
+            _ambreSimDwingsPath = null;
+            DwingsFilePathText.Text = "(using country's live DWINGS cache)";
+            ClearDwingsButton.IsEnabled = false;
+            AmbreSimStatusText.Text = "DWINGS snapshot cleared. Next run will use the live cache.";
+        }
+
         private async void RunAmbreSim_Click(object sender, RoutedEventArgs e)
         {
             if (string.IsNullOrWhiteSpace(_ambreSimFilePath) || !File.Exists(_ambreSimFilePath))
             {
                 MessageBox.Show(this, "Please pick an AMBRE Excel file first.", "Simulate AMBRE", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            if (!string.IsNullOrWhiteSpace(_ambreSimDwingsPath) && !File.Exists(_ambreSimDwingsPath))
+            {
+                MessageBox.Show(this, "The selected DWINGS file no longer exists. Please pick another or clear the selection.", "Simulate AMBRE", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
             var countryId = _offlineFirstService?.CurrentCountry?.CNT_Id;
@@ -670,7 +618,8 @@ namespace RecoTool.Windows
 
                 _cts = new CancellationTokenSource();
                 var rows = await _reconciliationService.SimulateAmbreImportFromFileAsync(
-                    _ambreSimFilePath, countryId, progress, _cts.Token).ConfigureAwait(true);
+                    _ambreSimFilePath, countryId, progress, _cts.Token,
+                    dwingsFilePath: _ambreSimDwingsPath).ConfigureAwait(true);
 
                 _ambreSimRows = rows ?? new List<RuleSimulationRow>();
 
@@ -715,6 +664,7 @@ namespace RecoTool.Windows
             {
                 SetBusy(false);
                 RunSimButton.IsEnabled = !string.IsNullOrWhiteSpace(_ambreSimFilePath);
+                RerunSimButton.IsEnabled = RunSimButton.IsEnabled && _ambreSimRows != null && _ambreSimRows.Count > 0;
             }
         }
 
@@ -793,15 +743,80 @@ namespace RecoTool.Windows
                 MessageBox.Show(this, ex.Message, "Export", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
-    }
 
-    /// <summary>View-model row for the Tester grid.</summary>
-    internal class TesterRow
-    {
-        public int Order { get; set; }
-        public TruthRule Rule { get; set; }
-        public bool IsEnabled { get; set; }
-        public bool IsMatch { get; set; }
-        public List<RuleConditionDebug> Conditions { get; set; }
+        // ───────────────────────────────────────────────────────────────────────────────────
+        // Double-click on a simulated row → opens the rule debug window that shows, for every
+        // rule in priority order, whether each condition passed or failed. Re-evaluates against
+        // the CURRENT rule set so the user sees the effect of edits made elsewhere without
+        // re-reading the Excel file.
+        // ───────────────────────────────────────────────────────────────────────────────────
+        private async void AmbreSimGrid_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            try
+            {
+                var row = AmbreSimGrid.SelectedItem as RuleSimulationRow;
+                if (row == null) return;
+                var countryId = _offlineFirstService?.CurrentCountry?.CNT_Id;
+                if (string.IsNullOrWhiteSpace(countryId) || _reconciliationService == null) return;
+
+                var (ctx, evaluations) = await _reconciliationService
+                    .EvaluateAllRulesForSimulatedRowAsync(row, countryId).ConfigureAwait(true);
+
+                if (ctx == null || evaluations == null || evaluations.Count == 0)
+                {
+                    MessageBox.Show(this, "Unable to evaluate rules for this row.", "Debug Rules", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                var lineInfo = $"ID: {row.ReconciliationId}  |  Account: {row.Account}  |  {(row.IsPivot ? "Pivot" : "Receivable")}  |  Amount: {row.SignedAmount:N2} {row.Currency}";
+                var contextInfo = $"IsPivot: {ctx.IsPivot}  |  Country: {ctx.CountryId}  |  " +
+                                 $"TransactionType: {ctx.TransactionType ?? "(null)"}  |  " +
+                                 $"GuaranteeType: {ctx.GuaranteeType ?? "(null)"}  |  " +
+                                 $"IsGrouped: {ctx.IsGrouped?.ToString() ?? "(null)"}  |  " +
+                                 $"HasDwingsLink: {ctx.HasDwingsLink?.ToString() ?? "(null)"}";
+
+                var debugItems = new List<RuleDebugItem>();
+                int displayOrder = 1;
+                foreach (var ev in evaluations)
+                {
+                    var item = new RuleDebugItem
+                    {
+                        DisplayOrder = displayOrder++,
+                        Rule = ev.Rule,
+                        RuleName = ev.Rule?.RuleId ?? "(unnamed)",
+                        IsEnabled = ev.IsEnabled,
+                        IsMatch = ev.IsMatch,
+                        MatchStatus = ev.IsMatch ? "✓ MATCH" : (ev.IsEnabled ? "✗ No Match" : "⊘ Disabled"),
+                        OutputAction = ev.Rule?.OutputActionId?.ToString() ?? "-",
+                        OutputKPI = ev.Rule?.OutputKpiId?.ToString() ?? "-",
+                        Conditions = ev.Conditions?.Select(c => new ConditionDebugItem
+                        {
+                            Field = c.Field,
+                            Expected = c.Expected,
+                            Actual = c.Actual,
+                            IsMet = c.IsMet,
+                            Status = c.IsMet ? "✓" : "✗"
+                        }).ToList() ?? new List<ConditionDebugItem>()
+                    };
+                    debugItems.Add(item);
+                }
+
+                var debugWindow = new RuleDebugWindow { Owner = this, Title = $"Rule Debug — {row.ReconciliationId}" };
+                debugWindow.SetDebugInfo(lineInfo, contextInfo, debugItems);
+                debugWindow.Show();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Debug Rules", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        // Re-runs the simulation using the current rule set. The TruthTableRepository.RulesChanged
+        // event (raised on every rule upsert) has already invalidated the engine's cache, so all we
+        // need to do is replay the same file path.
+        private void RerunAmbreSim_Click(object sender, RoutedEventArgs e)
+        {
+            RunAmbreSim_Click(sender, e);
+        }
     }
 }

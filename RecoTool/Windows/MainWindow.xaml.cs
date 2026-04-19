@@ -1405,26 +1405,63 @@ private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
         }
 
         /// <summary>
-        /// Navigation vers la page de rapports
+        /// One-click Excel dashboard export for the selected country.
+        /// Mirrors <c>HomePage.OpenReports_Click</c> — kept here so the (currently hidden)
+        /// Reports button in the header stays functional without resurrecting ReportsWindow.
         /// </summary>
-        private void ReportsButton_Click(object sender, RoutedEventArgs e)
+        private async void ReportsButton_Click(object sender, RoutedEventArgs e)
         {
             try
             {
                 if (string.IsNullOrEmpty(_currentCountryId))
                 {
-                    ShowWarning("Selection required", "Please select a country before accessing reports.");
+                    ShowWarning("Selection required", "Please select a country before exporting the dashboard.");
+                    return;
+                }
+                if (_reconciliationService == null || _offlineFirstService == null)
+                {
+                    ShowError("Error", "Services are not ready yet. Please wait for the country to finish loading.");
                     return;
                 }
 
-                // Créer la fenêtre de rapports en lui passant les services courants pour réutiliser la country sélectionnée
-                var reportsWindow = new ReportsWindow(_reconciliationService, _offlineFirstService);
-                reportsWindow.Owner = this;
-                reportsWindow.ShowDialog();
+                var defaultName = $"Reconciliation_Dashboard_{_currentCountryId}_{DateTime.Now:yyyyMMdd_HHmm}.xlsx";
+                var sfd = new Microsoft.Win32.SaveFileDialog
+                {
+                    FileName = defaultName,
+                    Filter = "Excel Workbook (*.xlsx)|*.xlsx",
+                    DefaultExt = ".xlsx",
+                    Title = $"Export dashboard — {_currentCountryId}"
+                };
+                if (sfd.ShowDialog(this) != true) return;
+
+                var button = sender as System.Windows.Controls.Button;
+                try { if (button != null) button.IsEnabled = false; } catch { }
+
+                string path;
+                try
+                {
+                    var service = new DashboardExportService(_reconciliationService, _offlineFirstService);
+                    path = await service.ExportDashboardAsync(_currentCountryId, sfd.FileName).ConfigureAwait(true);
+                }
+                finally
+                {
+                    try { if (button != null) button.IsEnabled = true; } catch { }
+                }
+
+                var result = MessageBox.Show(this,
+                    $"Dashboard exported successfully:\n{path}\n\nOpen the file now?",
+                    "Export complete",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Information);
+                if (result == MessageBoxResult.Yes)
+                {
+                    try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true }); }
+                    catch (Exception openEx) { ShowError("Error", $"Unable to open file: {openEx.Message}"); }
+                }
             }
             catch (Exception ex)
             {
-                ShowError("Error", $"Unable to open reports window: {ex.Message}");
+                ShowError("Error", $"Export failed: {ex.Message}");
             }
         }
 

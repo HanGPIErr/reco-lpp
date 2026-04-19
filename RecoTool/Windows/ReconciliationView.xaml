@@ -20,213 +20,18 @@
         <KeyBinding Key="R" Modifiers="Ctrl" Command="{x:Static local:ReconciliationView.ShortcutSetReminderCommand}"/>
     </UserControl.InputBindings>
     <UserControl.Resources>
-        <!-- Item template that renders null items as an empty option so users can clear selection -->
-        <DataTemplate x:Key="UserFieldItemTemplate">
-            <TextBlock>
-                <TextBlock.Text>
-                    <Binding Path="USR_FieldName"/>
-                </TextBlock.Text>
-            </TextBlock>
-        </DataTemplate>
-        <!-- Centered Text Style for DataGrid Columns -->
-        <Style x:Key="CenteredTextStyle" TargetType="TextBlock">
-            <Setter Property="HorizontalAlignment" Value="Center"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="TextAlignment" Value="Center"/>
-        </Style>
-
-        <!-- Right-aligned Text Style for Numbers -->
-        <Style x:Key="RightAlignedTextStyle" TargetType="TextBlock">
-            <Setter Property="HorizontalAlignment" Value="Right"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="TextAlignment" Value="Right"/>
-            <Setter Property="Margin" Value="0,0,8,0"/>
-        </Style>
-
-        <!-- Centered CheckBox Style -->
-        <Style x:Key="CenteredCheckBoxStyle" TargetType="CheckBox">
-            <Setter Property="HorizontalAlignment" Value="Center"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-        </Style>
-
-        <!-- Converters -->
-        <local:UserFieldOptionsConverter x:Key="UserFieldOptionsConverter"/>
-        <local:ActionColorConverter x:Key="ActionColorConverter"/>
-        <local:GuaranteeTypeDisplayConverter x:Key="GuaranteeTypeDisplayConverter"/>
-        <local:UserFieldIdToNameConverter x:Key="UserFieldIdToNameConverter"/>
-        <local:BoolToPendingDoneConverter x:Key="BoolToPendingDoneConverter"/>
-        <local:AssigneeIdToNameConverter x:Key="AssigneeIdToNameConverter"/>
-        <local:IsPositiveConverter x:Key="IsPositiveConverter"/>
-        <local:IsNegativeConverter x:Key="IsNegativeConverter"/>
-        <local:PluralConverter x:Key="PluralConverter"/>
-        <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
-        <local:RowBackgroundConverter x:Key="RowBackgroundConverter"/>
-        <local:RowForegroundConverter x:Key="RowForegroundConverter"/>
-        <local:CommentCountConverter x:Key="CommentCountConverter"/>
-        <local:CommentCountToVisibilityConverter x:Key="CommentCountToVisibilityConverter"/>
-        <local:MbawHasContentConverter x:Key="MbawHasContentConverter"/>
-        <local:MbawForegroundConverter x:Key="MbawForegroundConverter"/>
-
-        <!-- PERF: Frozen brushes for column headers (avoid GC pressure during horizontal scroll) -->
-        <LinearGradientBrush x:Key="AmbreHeaderBg" po:Freeze="True" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#E3F2FD" Offset="0"/>
-            <GradientStop Color="#BBDEFB" Offset="1"/>
-        </LinearGradientBrush>
-        <SolidColorBrush x:Key="AmbreHeaderFg" po:Freeze="True" Color="#0D47A1"/>
-        <SolidColorBrush x:Key="AmbreHeaderBorder" po:Freeze="True" Color="#90CAF9"/>
-
-        <LinearGradientBrush x:Key="UserHeaderBg" po:Freeze="True" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#E8F5E9" Offset="0"/>
-            <GradientStop Color="#C8E6C9" Offset="1"/>
-        </LinearGradientBrush>
-        <SolidColorBrush x:Key="UserHeaderFg" po:Freeze="True" Color="#1B5E20"/>
-        <SolidColorBrush x:Key="UserHeaderBorder" po:Freeze="True" Color="#81C784"/>
-
-        <LinearGradientBrush x:Key="DWInvoiceHeaderBg" po:Freeze="True" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#FFF3E0" Offset="0"/>
-            <GradientStop Color="#FFE0B2" Offset="1"/>
-        </LinearGradientBrush>
-        <SolidColorBrush x:Key="DWInvoiceHeaderFg" po:Freeze="True" Color="#E65100"/>
-        <SolidColorBrush x:Key="DWInvoiceHeaderBorder" po:Freeze="True" Color="#FFB74D"/>
-
-        <LinearGradientBrush x:Key="DWGuaranteeHeaderBg" po:Freeze="True" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#F3E5F5" Offset="0"/>
-            <GradientStop Color="#E1BEE7" Offset="1"/>
-        </LinearGradientBrush>
-        <SolidColorBrush x:Key="DWGuaranteeHeaderFg" po:Freeze="True" Color="#4A148C"/>
-        <SolidColorBrush x:Key="DWGuaranteeHeaderBorder" po:Freeze="True" Color="#BA68C8"/>
-
-        <!-- PERF: Frozen brushes for cell styles (avoid per-cell brush creation during scroll) -->
-        <SolidColorBrush x:Key="CellHoverBg" po:Freeze="True" Color="#F7FAFF"/>
-        <SolidColorBrush x:Key="CellSelectedBg" po:Freeze="True" Color="#DCEBFF"/>
-        <SolidColorBrush x:Key="CellSelectedBorder" po:Freeze="True" Color="#A7C5FF"/>
-        <SolidColorBrush x:Key="CellDefaultBorder" po:Freeze="True" Color="#DDDDDD"/>
-        <SolidColorBrush x:Key="RowHoverBg" po:Freeze="True" Color="#EEF5FF"/>
-
-        <!-- ═══════ SfDataGrid Visual Polish ═══════ -->
-        <!-- Alternating row -->
-        <SolidColorBrush x:Key="GridAlternatingRowBg" po:Freeze="True" Color="#F8FAFC"/>
-        <SolidColorBrush x:Key="GridRowBg" po:Freeze="True" Color="#FFFFFF"/>
-        <!-- Selection -->
-        <SolidColorBrush x:Key="GridSelectionBrush" po:Freeze="True" Color="#DBEAFE"/>
-        <SolidColorBrush x:Key="GridSelectionFg" po:Freeze="True" Color="#1E293B"/>
-        <!-- Hover -->
-        <SolidColorBrush x:Key="GridHoverBrush" po:Freeze="True" Color="#EFF6FF"/>
-        <!-- Grid lines -->
-        <SolidColorBrush x:Key="GridLineBrush" po:Freeze="True" Color="#E2E8F0"/>
-        <!-- Frozen column separator -->
-        <SolidColorBrush x:Key="FrozenBorderBrush" po:Freeze="True" Color="#93C5FD"/>
-        <!-- Default header fallback -->
-        <LinearGradientBrush x:Key="DefaultHeaderBg" po:Freeze="True" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#F1F5F9" Offset="0"/>
-            <GradientStop Color="#E2E8F0" Offset="1"/>
-        </LinearGradientBrush>
-        <SolidColorBrush x:Key="DefaultHeaderFg" po:Freeze="True" Color="#334155"/>
-        <SolidColorBrush x:Key="DefaultHeaderBorderBrush" po:Freeze="True" Color="#CBD5E1"/>
-
-        <!-- SfDataGrid default header style (applied globally) -->
-        <Style x:Key="DefaultGridHeaderStyle" TargetType="syncfusion:GridHeaderCellControl">
-            <Setter Property="Background" Value="{StaticResource DefaultHeaderBg}"/>
-            <Setter Property="Foreground" Value="{StaticResource DefaultHeaderFg}"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Padding" Value="8,6"/>
-            <Setter Property="BorderBrush" Value="{StaticResource DefaultHeaderBorderBrush}"/>
-            <Setter Property="BorderThickness" Value="0,0,1,2"/>
-        </Style>
-
-        <!-- SfDataGrid row (VirtualizingCellsControl) style: conditional bg + hover -->
-        <!-- PERF: Direct brush binding (pre-calculated on DTO) replaces converter calls
-             that previously ran on every row recycle during scroll. -->
-        <Style TargetType="syncfusion:VirtualizingCellsControl">
-            <Setter Property="Background" Value="{Binding RowBackgroundBrush}"/>
-            <Setter Property="Foreground" Value="{Binding RowForegroundBrush}"/>
-            <Setter Property="FontFamily" Value="Segoe UI"/>
-            <Setter Property="FontSize" Value="12"/>
-        </Style>
-
-        <!-- SfDataGrid cell style: subtle vertical separators + padding -->
-        <Style TargetType="syncfusion:GridCell">
-            <Setter Property="BorderBrush" Value="{StaticResource GridLineBrush}"/>
-            <Setter Property="BorderThickness" Value="0,0,0.5,0"/>
-            <Setter Property="Padding" Value="6,2"/>
-            <Setter Property="FontFamily" Value="Segoe UI"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/>
-        </Style>
-
-        <!-- Modern toggle-style CheckBox for grid cells -->
-        <Style x:Key="GridToggleCheckBox" TargetType="CheckBox">
-            <Setter Property="HorizontalAlignment" Value="Center"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="CheckBox">
-                        <Grid>
-                            <Border x:Name="Track" Width="32" Height="18" CornerRadius="9" Background="#E2E8F0" BorderThickness="0"/>
-                            <Border x:Name="Thumb" Width="14" Height="14" CornerRadius="7" Background="White" 
-                                    HorizontalAlignment="Left" VerticalAlignment="Center" Margin="2,0,0,0">
-                                <Border.Effect>
-                                    <DropShadowEffect ShadowDepth="0.5" BlurRadius="2" Opacity="0.3"/>
-                                </Border.Effect>
-                            </Border>
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Track" Property="Background" Value="#3B82F6"/>
-                                <Setter TargetName="Thumb" Property="HorizontalAlignment" Value="Right"/>
-                                <Setter TargetName="Thumb" Property="Margin" Value="0,0,2,0"/>
-                            </Trigger>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Track" Property="Opacity" Value="0.85"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- Column Header Styles by Data Source (using frozen brush resources) -->
-        <Style x:Key="AmbreHeaderStyle" TargetType="syncfusion:GridHeaderCellControl">
-            <Setter Property="Background" Value="{StaticResource AmbreHeaderBg}"/>
-            <Setter Property="Foreground" Value="{StaticResource AmbreHeaderFg}"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Padding" Value="8,6"/>
-            <Setter Property="BorderBrush" Value="{StaticResource AmbreHeaderBorder}"/>
-            <Setter Property="BorderThickness" Value="0,0,1,2"/>
-            <Setter Property="ToolTip" Value="Source: AMBRE"/>
-        </Style>
-
-        <Style x:Key="UserHeaderStyle" TargetType="syncfusion:GridHeaderCellControl">
-            <Setter Property="Background" Value="{StaticResource UserHeaderBg}"/>
-            <Setter Property="Foreground" Value="{StaticResource UserHeaderFg}"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Padding" Value="8,6"/>
-            <Setter Property="BorderBrush" Value="{StaticResource UserHeaderBorder}"/>
-            <Setter Property="BorderThickness" Value="0,0,1,2"/>
-            <Setter Property="ToolTip" Value="Source: T_Reconciliation (User Data)"/>
-        </Style>
-
-        <Style x:Key="DWInvoiceHeaderStyle" TargetType="syncfusion:GridHeaderCellControl">
-            <Setter Property="Background" Value="{StaticResource DWInvoiceHeaderBg}"/>
-            <Setter Property="Foreground" Value="{StaticResource DWInvoiceHeaderFg}"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Padding" Value="8,6"/>
-            <Setter Property="BorderBrush" Value="{StaticResource DWInvoiceHeaderBorder}"/>
-            <Setter Property="BorderThickness" Value="0,0,1,2"/>
-            <Setter Property="ToolTip" Value="Source: DWINGS Invoice"/>
-        </Style>
-
-        <Style x:Key="DWGuaranteeHeaderStyle" TargetType="syncfusion:GridHeaderCellControl">
-            <Setter Property="Background" Value="{StaticResource DWGuaranteeHeaderBg}"/>
-            <Setter Property="Foreground" Value="{StaticResource DWGuaranteeHeaderFg}"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Padding" Value="8,6"/>
-            <Setter Property="BorderBrush" Value="{StaticResource DWGuaranteeHeaderBorder}"/>
-            <Setter Property="BorderThickness" Value="0,0,1,2"/>
-            <Setter Property="ToolTip" Value="Source: DWINGS Guarantee"/>
-        </Style>
+        <!-- Resources extracted to dedicated ResourceDictionaries for maintainability.
+             Physical layout: Windows/ReconciliationView/Resources/*.xaml
+               • SharedResources.xaml    : UserFieldItemTemplate + converter instances
+               • GridHeaderStyles.xaml   : header brushes + per-source header Styles
+               • GridRowStyles.xaml      : row/cell styles + selection/grid-line brushes -->
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/RecoTool;component/Windows/ReconciliationView/Resources/SharedResources.xaml"/>
+                <ResourceDictionary Source="/RecoTool;component/Windows/ReconciliationView/Resources/GridHeaderStyles.xaml"/>
+                <ResourceDictionary Source="/RecoTool;component/Windows/ReconciliationView/Resources/GridRowStyles.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
     </UserControl.Resources>
     <Grid Background="{DynamicResource BNPBackground}">
         <Grid.RowDefinitions>
@@ -482,6 +287,152 @@
                             <TextBlock Text="Activity" Foreground="#7C3AED" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
+
+                    <!-- Import History Button (snapshot-based "what changed since last import") -->
+                    <Button x:Name="ImportHistoryButton" Click="ImportHistoryButton_Click"
+                            Style="{StaticResource StandardButtonStyle}" Background="#DBEAFE" BorderBrush="#93C5FD" BorderThickness="1" Padding="8,6" Margin="0,0,8,0"
+                            ToolTip="What changed since the last AMBRE imports">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE81E;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="#2563EB" VerticalAlignment="Center" Margin="0,0,5,0" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display"/>
+                            <TextBlock Text="Imports" Foreground="#2563EB" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+
+                    <!--
+                        Import History Popup. Opened by ImportHistoryButton_Click in Activity.cs;
+                        left column lists recent runs, right column shows the impact report for
+                        the selected run (field-level stats + alerts + clickable "show rows" buttons).
+                    -->
+                    <Popup x:Name="ImportHistoryPopup" PlacementTarget="{Binding ElementName=ImportHistoryButton}"
+                           Placement="Bottom" StaysOpen="False" AllowsTransparency="True" PopupAnimation="Slide">
+                        <Border Background="White" BorderBrush="#CBD5E1" BorderThickness="1" CornerRadius="8"
+                                Width="760" MaxHeight="520" Margin="0,4,0,0"
+                                Effect="{StaticResource StandardShadow}">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+
+                                <!-- Header -->
+                                <Border Grid.Row="0" Background="#EFF6FF" CornerRadius="8,8,0,0" Padding="12,8">
+                                    <DockPanel>
+                                        <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                                            <TextBlock Text="&#xE81E;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="#2563EB" VerticalAlignment="Center" Margin="0,0,6,0" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display"/>
+                                            <TextBlock Text="Import History" FontSize="14" FontWeight="Bold" Foreground="#1E3A8A" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                        <TextBlock x:Name="ImportHistoryHint" DockPanel.Dock="Right"
+                                                   Text="Pick a run on the left to see its impact."
+                                                   FontSize="11" Foreground="#64748B"
+                                                   VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                                    </DockPanel>
+                                </Border>
+
+                                <!-- Body: left = runs list, right = impact details -->
+                                <Grid Grid.Row="1">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="260"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <!-- Runs list -->
+                                    <ListBox x:Name="ImportHistoryRunsList"
+                                             Grid.Column="0"
+                                             BorderThickness="0,0,1,0"
+                                             BorderBrush="#E2E8F0"
+                                             Background="Transparent"
+                                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                             SelectionChanged="ImportHistoryRun_SelectionChanged">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Padding="10,8" BorderBrush="#F1F5F9" BorderThickness="0,0,0,1">
+                                                    <StackPanel>
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="{Binding Kind}" FontWeight="SemiBold" Foreground="#1E293B" FontSize="12"/>
+                                                            <TextBlock Text=" · " Foreground="#CBD5E1"/>
+                                                            <TextBlock Text="{Binding StartedUtc, StringFormat=yyyy-MM-dd HH:mm}" Foreground="#64748B" FontSize="11"/>
+                                                        </StackPanel>
+                                                        <TextBlock Text="{Binding TriggeredBy}" Foreground="#94A3B8" FontSize="10" Margin="0,2,0,0"/>
+                                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                            <Border Background="#DCFCE7" CornerRadius="3" Padding="4,1" Margin="0,0,3,0">
+                                                                <TextBlock Text="{Binding NewCount, StringFormat=+{0}}" Foreground="#166534" FontSize="10" FontWeight="SemiBold"/>
+                                                            </Border>
+                                                            <Border Background="#FEF3C7" CornerRadius="3" Padding="4,1" Margin="0,0,3,0">
+                                                                <TextBlock Text="{Binding UpdatedCount, StringFormat=~{0}}" Foreground="#92400E" FontSize="10" FontWeight="SemiBold"/>
+                                                            </Border>
+                                                            <Border Background="#FEE2E2" CornerRadius="3" Padding="4,1">
+                                                                <TextBlock Text="{Binding ArchivedCount, StringFormat=-{0}}" Foreground="#991B1B" FontSize="10" FontWeight="SemiBold"/>
+                                                            </Border>
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+
+                                    <!-- Impact details -->
+                                    <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Padding="14,10">
+                                        <StackPanel x:Name="ImportHistoryDetailsPanel">
+                                            <TextBlock x:Name="ImportHistoryPlaceholder"
+                                                       Text="No run selected."
+                                                       Foreground="#94A3B8" FontStyle="Italic" FontSize="12"/>
+
+                                            <!-- Alerts -->
+                                            <TextBlock x:Name="ImportHistoryAlertsHeader"
+                                                       Text="Alerts" FontWeight="Bold" Foreground="#1E293B"
+                                                       FontSize="13" Margin="0,0,0,4" Visibility="Collapsed"/>
+                                            <ItemsControl x:Name="ImportHistoryAlerts" Margin="0,0,0,10">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Background="#FEF3C7" BorderBrush="#F59E0B" BorderThickness="1" CornerRadius="4"
+                                                                Padding="8,4" Margin="0,2,0,0"
+                                                                Cursor="Hand" MouseLeftButtonUp="ImportHistoryImpactRow_Click"
+                                                                Tag="{Binding RowIds}">
+                                                            <StackPanel Orientation="Horizontal">
+                                                                <TextBlock Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="#B45309" VerticalAlignment="Center" Margin="0,0,6,0" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display"/>
+                                                                <TextBlock Text="{Binding Label}" FontWeight="SemiBold" Foreground="#78350F" VerticalAlignment="Center"/>
+                                                                <TextBlock Text=" · " Foreground="#D97706"/>
+                                                                <TextBlock Text="{Binding Count}" Foreground="#92400E" VerticalAlignment="Center"/>
+                                                                <TextBlock Text=" rows" Foreground="#92400E" VerticalAlignment="Center"/>
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+
+                                            <!-- Material field changes -->
+                                            <TextBlock x:Name="ImportHistoryFieldsHeader"
+                                                       Text="Fields changed" FontWeight="Bold" Foreground="#1E293B"
+                                                       FontSize="13" Margin="0,0,0,4" Visibility="Collapsed"/>
+                                            <ItemsControl x:Name="ImportHistoryFields">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Background="#F8FAFC" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="4"
+                                                                Padding="8,4" Margin="0,2,0,0"
+                                                                Cursor="Hand" MouseLeftButtonUp="ImportHistoryImpactRow_Click"
+                                                                Tag="{Binding RowIds}">
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <TextBlock Grid.Column="0" Text="{Binding FieldName}" FontWeight="SemiBold" Foreground="#1E293B" VerticalAlignment="Center"/>
+                                                                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                                    <TextBlock Text="{Binding Count}" Foreground="#475569" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                                                    <TextBlock Text=" rows" Foreground="#64748B" VerticalAlignment="Center"/>
+                                                                    <TextBlock Text="  Show" Foreground="#2563EB" FontSize="11" TextDecorations="Underline" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                                                </StackPanel>
+                                                            </Grid>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </Grid>
+                            </Grid>
+                        </Border>
+                    </Popup>
 
                     <!-- Mention Notification Badge (bell icon) -->
                     <Border x:Name="MentionBadgeButton" Background="#F0F9FF" CornerRadius="6" BorderBrush="#38BDF8" BorderThickness="1"
@@ -1156,7 +1107,7 @@
                     <syncfusion:SfDataGrid x:Name="ResultsDataGrid" Grid.Row="1"
                               AutoGenerateColumns="False"
                               AllowEditing="True"
-                              EditTrigger="OnTap"
+                              EditTrigger="OnDoubleTap"
                               AllowSorting="True"
                               AllowResizingColumns="True"
                               AllowDraggingColumns="True"
@@ -1183,9 +1134,17 @@
                               TextOptions.TextHintingMode="Fixed"
                               RenderOptions.BitmapScalingMode="LowQuality"
                               RenderOptions.ClearTypeHint="Enabled"
+                              ScrollViewer.CanContentScroll="True"
+                              EnableDataVirtualization="True"
+                              ColumnSizer="None"
+                              AllowResizingHiddenColumns="False"
+                              AllowTriStateSorting="False"
+                              LiveDataUpdateMode="AllowDataShaping"
                               Loaded="ResultsDataGrid_Loaded"
                               SelectionChanged="ResultsDataGrid_SelectionChanged"
+                              CurrentCellBeginEdit="ResultsDataGrid_CurrentCellBeginEdit"
                               CurrentCellEndEdit="ResultsDataGrid_CurrentCellEndEdit"
+                              CurrentCellValueChanged="ResultsDataGrid_CurrentCellValueChanged"
                               CellTapped="ResultsDataGrid_CellTapped"
                               MouseDoubleClick="ResultsDataGrid_MouseDoubleClick"
                               QueryColumnDragging="ResultsDataGrid_QueryColumnDragging"
@@ -1217,46 +1176,40 @@
                                 </syncfusion:GridTemplateColumn.HeaderTemplate>
                                 <syncfusion:GridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
+                                        <!-- PERF: Replaced nested Grid(4 cols) + double-Ellipse glow with a flat
+                                             StackPanel + single Ellipse. Saves ~4 FrameworkElements per row
+                                             and one ellipse render pass per frame during scroll. -->
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
                                             <!-- Presence avatar (other user viewing this row) -->
-                                            <Border Grid.Column="0" CornerRadius="10" Width="20" Height="20" Margin="0,0,4,0"
+                                            <Border CornerRadius="10" Width="20" Height="20" Margin="0,0,4,0"
                                                     Background="#7C3AED" Visibility="{Binding PresenceVisibility}"
                                                     ToolTip="{Binding PresenceUserName}">
                                                 <TextBlock Text="{Binding PresenceInitials}" Foreground="White"
-                                                           FontSize="8" FontWeight="Bold" FontFamily="Segoe UI"
+                                                           FontSize="8" FontWeight="Bold"
                                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                             </Border>
                                             <!-- New/Updated pill badge — pre-calculated brushes -->
-                                            <Border Grid.Column="1" CornerRadius="8" Padding="6,2" Margin="0,0,5,0"
+                                            <Border CornerRadius="8" Padding="6,2" Margin="0,0,5,0"
                                                     Visibility="{Binding HasStatusIndicatorVisibility}"
                                                     Background="{Binding StatusBadgeBgBrush}">
                                                 <TextBlock Text="{Binding StatusIndicator}"
                                                            Foreground="{Binding StatusBadgeFgBrush}"
-                                                           FontWeight="Bold" FontSize="9" FontFamily="Segoe UI"/>
+                                                           FontWeight="Bold" FontSize="9"/>
                                             </Border>
-                                            <!-- Status color dot with glow ring -->
-                                            <Grid Grid.Column="2">
-                                                <Ellipse Width="16" Height="16" Fill="{Binding StatusColorBrush}" Opacity="0.2"/>
-                                                <Ellipse Width="11" Height="11" Fill="{Binding StatusColorBrush}" 
-                                                         HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                         ToolTip="{Binding StatusTooltip}"/>
-                                            </Grid>
+                                            <!-- Status color dot (single ellipse, no glow halo) -->
+                                            <Ellipse Width="12" Height="12" Fill="{Binding StatusColorBrush}"
+                                                     VerticalAlignment="Center"
+                                                     ToolTip="{Binding StatusTooltip}"/>
                                             <!-- Group indicator pill -->
-                                            <Border Grid.Column="3" Background="#DCFCE7" CornerRadius="8" Padding="5,2" Margin="5,0,0,0"
+                                            <Border Background="#DCFCE7" CornerRadius="8" Padding="5,2" Margin="5,0,0,0"
                                                     Cursor="Hand"
                                                     ToolTip="Click to open related entries across accounts"
                                                     Visibility="{Binding IsMatchedAcrossAccountsVisibility}"
                                                     MouseLeftButtonUp="MatchedIndicator_MouseLeftButtonUp">
-                                                <TextBlock Text="G" Foreground="#166534" FontWeight="Bold" FontSize="9" FontFamily="Segoe UI"
+                                                <TextBlock Text="G" Foreground="#166534" FontWeight="Bold" FontSize="9"
                                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                             </Border>
-                                        </Grid>
+                                        </StackPanel>
                                     </DataTemplate>
                                 </syncfusion:GridTemplateColumn.CellTemplate>
                             </syncfusion:GridTemplateColumn>
@@ -1306,169 +1259,113 @@
                             </syncfusion:GridTextColumn>
                             <syncfusion:GridTextColumn HeaderText="CCY" MappingName="CCY" Width="60" AllowEditing="False" TextAlignment="Center" HeaderStyle="{StaticResource AmbreHeaderStyle}"/>
 
-                            <!-- Missing Amount: conditional formatting (Green=0, Orange>0, Red<0) -->
-                            <!-- OPTIMIZED: Use pre-calculated properties instead of converters to avoid overhead during scroll -->
-                            <syncfusion:GridTemplateColumn HeaderText="Missing Amount" Width="140" MappingName="MissingAmount" AllowEditing="False">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Border Padding="4,3" CornerRadius="4" Margin="2,2" Background="{Binding MissingAmountBgBrush}">
-                                            <TextBlock Text="{Binding MissingAmount, StringFormat={}{0:N2}}" 
-                                                       HorizontalAlignment="Right" 
-                                                       VerticalAlignment="Center"
-                                                       FontFamily="Segoe UI"
-                                                       Foreground="{Binding MissingAmountFgBrush}"
-                                                       FontWeight="SemiBold"
-                                                       FontSize="11.5"
-                                                       ToolTip="Missing Amount&#x0a;• Positive: Waiting for more payments&#x0a;• Negative: Overpayment&#x0a;• Zero: Balanced"/>
-                                        </Border>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                            </syncfusion:GridTemplateColumn>
+                            <!-- Missing Amount: conditional formatting via pre-calculated brushes on DTO.
+                                 Native GridTextColumn — no Border wrapper instantiated per row. -->
+                            <syncfusion:GridTextColumn HeaderText="Missing Amount" Width="140" MappingName="MissingAmount" AllowEditing="False"
+                                                       DisplayBinding="{Binding MissingAmount, StringFormat={}{0:N2}}" TextAlignment="Right">
+                                <syncfusion:GridTextColumn.CellStyle>
+                                    <Style TargetType="syncfusion:GridCell">
+                                        <Setter Property="Background" Value="{Binding MissingAmountBgBrush}"/>
+                                        <Setter Property="Foreground" Value="{Binding MissingAmountFgBrush}"/>
+                                        <Setter Property="FontWeight" Value="SemiBold"/>
+                                        <Setter Property="ToolTip" Value="Missing Amount&#x0a;• Positive: Waiting for more payments&#x0a;• Negative: Overpayment&#x0a;• Zero: Balanced"/>
+                                    </Style>
+                                </syncfusion:GridTextColumn.CellStyle>
+                            </syncfusion:GridTextColumn>
 
-                            <!-- Counterpart Info: Total amount and count -->
-                            <syncfusion:GridTemplateColumn HeaderText="Counterpart" Width="150" MappingName="CounterpartDisplay" AllowEditing="False">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Border Background="#EFF6FF" CornerRadius="4" Padding="6,2" Margin="2,2"
-                                                HorizontalAlignment="Center" VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding CounterpartDisplay}" Foreground="#1D4ED8" FontWeight="SemiBold"
-                                                       FontFamily="Segoe UI" FontSize="11"
-                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                       ToolTip="{Binding CounterpartTooltip}"/>
-                                        </Border>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                            </syncfusion:GridTemplateColumn>
+                            <!-- Counterpart Info: static blue pill, native GridTextColumn. -->
+                            <syncfusion:GridTextColumn HeaderText="Counterpart" Width="150" MappingName="CounterpartDisplay" AllowEditing="False"
+                                                       DisplayBinding="{Binding CounterpartDisplay}" TextAlignment="Center">
+                                <syncfusion:GridTextColumn.CellStyle>
+                                    <Style TargetType="syncfusion:GridCell">
+                                        <Setter Property="Background" Value="#EFF6FF"/>
+                                        <Setter Property="Foreground" Value="#1D4ED8"/>
+                                        <Setter Property="FontWeight" Value="SemiBold"/>
+                                        <Setter Property="ToolTip" Value="{Binding CounterpartTooltip}"/>
+                                    </Style>
+                                </syncfusion:GridTextColumn.CellStyle>
+                            </syncfusion:GridTextColumn>
 
                             <syncfusion:GridTextColumn HeaderText="Value Date" MappingName="Value_Date" DisplayBinding="{Binding Value_Date, StringFormat={}{0:dd/MM/yyyy}}" Width="110" AllowEditing="False" TextAlignment="Center" HeaderStyle="{StaticResource AmbreHeaderStyle}"/>
                             <syncfusion:GridTextColumn HeaderText="Guarantee Type" MappingName="GuaranteeTypeDisplay"  Width="130" AllowEditing="False" HeaderStyle="{StaticResource DWGuaranteeHeaderStyle}"/>
                             <!-- Colonnes T_Reconciliation (données combinées à plat dans ReconciliationViewData) -->
 
-                            <!-- Action: editable ComboBox filtered by category and account type -->
-                            <syncfusion:GridTemplateColumn HeaderText="Action" Width="120" MappingName="Action" HeaderStyle="{StaticResource UserHeaderStyle}">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Border Background="{Binding ActionBgBrush}" CornerRadius="4" Padding="4,2" Margin="2,2" HorizontalAlignment="Stretch">
-                                            <TextBlock Text="{Binding ActionDisplayName}" FontFamily="Segoe UI" FontSize="11" FontWeight="SemiBold"
-                                                       HorizontalAlignment="Center" TextAlignment="Center" VerticalAlignment="Center"/>
-                                        </Border>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                                <syncfusion:GridTemplateColumn.EditTemplate>
-                                    <DataTemplate>
-                                        <Border Background="{Binding ActionBgBrush}" CornerRadius="4">
-                                            <ComboBox Width="Auto"
-                                                      SelectedValue="{Binding Action, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                      SelectedValuePath="USR_ID"
-                                                      DisplayMemberPath="USR_FieldName"
-                                                      SelectionChanged="UserFieldComboBox_SelectionChanged"
-                                                      Tag="Action"
-                                                      HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
-                                                <ComboBox.ItemsSource>
-                                                    <MultiBinding Converter="{StaticResource UserFieldOptionsConverter}" ConverterParameter="Action">
-                                                        <Binding Path="Account_ID"/>
-                                                        <Binding ElementName="Root" Path="DataContext.AllUserFields"/>
-                                                        <Binding ElementName="Root" Path="DataContext.CurrentCountryObject"/>
-                                                    </MultiBinding>
-                                                </ComboBox.ItemsSource>
-                                            </ComboBox>
-                                        </Border>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.EditTemplate>
-                            </syncfusion:GridTemplateColumn>
-                            <!-- Action Status (Pending/Done) -->
-                            <syncfusion:GridTemplateColumn HeaderText="Action Status" Width="120" MappingName="ActionStatus">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Border CornerRadius="10" Padding="8,3" Margin="2,3" HorizontalAlignment="Center"
-                                                Background="{Binding ActionStatusBgBrush}">
-                                            <TextBlock Text="{Binding ActionStatusText}"
-                                                       Foreground="{Binding ActionStatusFgBrush}"
-                                                       FontFamily="Segoe UI" FontSize="10" FontWeight="Bold" HorizontalAlignment="Center"/>
-                                        </Border>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                                <syncfusion:GridTemplateColumn.EditTemplate>
-                                    <DataTemplate>
-                                        <ComboBox Width="Auto"
-                                                  SelectedValue="{Binding ActionStatus, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                  SelectedValuePath="Tag"
-                                                  SelectionChanged="UserFieldComboBox_SelectionChanged"
-                                                  Tag="ActionStatus"
-                                                  HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
-                                            <ComboBoxItem Tag="False">⏳ PENDING</ComboBoxItem>
-                                            <ComboBoxItem Tag="True">✓ DONE</ComboBoxItem>
-                                        </ComboBox>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.EditTemplate>
-                            </syncfusion:GridTemplateColumn>
+                            <!-- Action: native GridTextColumn with CellStyle bound to pre-calculated ActionBgBrush.
+                                 Editable via popup (see ShowUserFieldEditPopup). PERF: 3-5x faster than GridTemplateColumn+Border wrapper. -->
+                            <syncfusion:GridTextColumn HeaderText="Action" Width="120" MappingName="Action"
+                                                       DisplayBinding="{Binding ActionDisplayName}" TextAlignment="Center" AllowEditing="False"
+                                                       HeaderStyle="{StaticResource UserHeaderStyle}">
+                                <syncfusion:GridTextColumn.CellStyle>
+                                    <Style TargetType="syncfusion:GridCell">
+                                        <Setter Property="Background" Value="{Binding ActionBgBrush}"/>
+                                        <Setter Property="FontWeight" Value="SemiBold"/>
+                                    </Style>
+                                </syncfusion:GridTextColumn.CellStyle>
+                            </syncfusion:GridTextColumn>
+                            <!-- Action Status (Pending/Done). Native GridTextColumn + CellStyle for background.
+                                 Editable via two-button popup (ShowActionStatusEditPopup). -->
+                            <syncfusion:GridTextColumn HeaderText="Action Status" Width="120" MappingName="ActionStatus"
+                                                       DisplayBinding="{Binding ActionStatusText}" TextAlignment="Center" AllowEditing="False"
+                                                       HeaderStyle="{StaticResource UserHeaderStyle}">
+                                <syncfusion:GridTextColumn.CellStyle>
+                                    <Style TargetType="syncfusion:GridCell">
+                                        <Setter Property="Background" Value="{Binding ActionStatusBgBrush}"/>
+                                        <Setter Property="Foreground" Value="{Binding ActionStatusFgBrush}"/>
+                                        <Setter Property="FontWeight" Value="Bold"/>
+                                        <Setter Property="FontSize" Value="10"/>
+                                    </Style>
+                                </syncfusion:GridTextColumn.CellStyle>
+                            </syncfusion:GridTextColumn>
                             <!-- Action Date -->
                             <syncfusion:GridTextColumn HeaderText="Action Date" Width="160" MappingName="ActionDate" HeaderStyle="{StaticResource UserHeaderStyle}" DisplayBinding="{Binding ActionDate, StringFormat={}{0:dd/MM/yyyy}}" TextAlignment="Center" AllowEditing="False"/>
                             <!-- Assignee: displays user name, binds ID -->
                             <syncfusion:GridTextColumn HeaderText="Assignee" Width="140" MappingName="Assignee" HeaderStyle="{StaticResource UserHeaderStyle}" DisplayBinding="{Binding AssigneeDisplayName}" TextAlignment="Center" AllowEditing="False"/>
 
+                            <!-- PERF: Click is routed via CellTapped (see ResultsDataGrid_CellTapped) instead of
+                                 PreviewMouseLeftButtonUp on the DataTemplate root. Event subscription used to re-attach
+                                 on every row recycle — now a single handler on the grid. -->
                             <syncfusion:GridTemplateColumn HeaderText="Comments" Width="220" MappingName="LastComment" AllowEditing="False" HeaderStyle="{StaticResource UserHeaderStyle}">
                                 <syncfusion:GridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <Grid ToolTip="{Binding Comments}" ToolTipService.InitialShowDelay="0" ToolTipService.ShowDuration="300000"
-                                              PreviewMouseLeftButtonUp="CommentsCell_Click" Cursor="Hand">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <!-- Chat icon + count badge -->
-                                            <Grid Grid.Column="0" Margin="0,0,4,0"
+                                        <DockPanel ToolTip="{Binding Comments}" LastChildFill="True" Cursor="Hand">
+                                            <Grid DockPanel.Dock="Left" Margin="0,0,4,0"
                                                   Visibility="{Binding CommentBadgeVisibility}">
                                                 <TextBlock Text="💬" FontSize="12" VerticalAlignment="Center"/>
                                                 <Border Background="#3B82F6" CornerRadius="7" MinWidth="14" Height="14"
                                                         HorizontalAlignment="Right" VerticalAlignment="Top" Margin="10,-3,-6,0" Padding="3,0">
-                                                    <TextBlock Text="{Binding CommentCountText}" 
+                                                    <TextBlock Text="{Binding CommentCountText}"
                                                                Foreground="White" FontSize="8" FontWeight="Bold"
                                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                 </Border>
                                             </Grid>
-                                            <TextBlock Grid.Column="1" Text="{Binding LastComment}" TextTrimming="CharacterEllipsis"
-                                                       VerticalAlignment="Center" FontFamily="Segoe UI" FontSize="11.5"
-                                                       Foreground="#374151"/>
-                                        </Grid>
+                                            <TextBlock Text="{Binding LastComment}" TextTrimming="CharacterEllipsis"
+                                                       VerticalAlignment="Center" FontSize="11.5" Foreground="#374151"/>
+                                        </DockPanel>
                                     </DataTemplate>
                                 </syncfusion:GridTemplateColumn.CellTemplate>
                             </syncfusion:GridTemplateColumn>
-                            <syncfusion:GridTemplateColumn HeaderText="Internal Invoice Ref" MappingName="InternalInvoiceReference" Width="140" HeaderStyle="{StaticResource UserHeaderStyle}">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Border Background="{Binding InvoiceGroupBrush}" CornerRadius="3" Padding="4,2" Margin="1">
-                                            <TextBlock Text="{Binding InternalInvoiceReference}" VerticalAlignment="Center"
-                                                       FontFamily="Segoe UI" FontSize="11" TextTrimming="CharacterEllipsis"
-                                                       ToolTip="{Binding InternalInvoiceReference}"/>
-                                        </Border>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                                <syncfusion:GridTemplateColumn.EditTemplate>
-                                    <DataTemplate>
-                                        <TextBox Text="{Binding InternalInvoiceReference, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                 VerticalAlignment="Center" FontFamily="Segoe UI" FontSize="11"/>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.EditTemplate>
-                            </syncfusion:GridTemplateColumn>
+                            <!-- Internal Invoice Ref: editable text, native GridTextColumn with CellStyle for group color. -->
+                            <syncfusion:GridTextColumn HeaderText="Internal Invoice Ref" MappingName="InternalInvoiceReference" Width="140"
+                                                       HeaderStyle="{StaticResource UserHeaderStyle}" AllowEditing="True">
+                                <syncfusion:GridTextColumn.CellStyle>
+                                    <Style TargetType="syncfusion:GridCell">
+                                        <Setter Property="Background" Value="{Binding InvoiceGroupBrush}"/>
+                                        <Setter Property="ToolTip" Value="{Binding InternalInvoiceReference}"/>
+                                    </Style>
+                                </syncfusion:GridTextColumn.CellStyle>
+                            </syncfusion:GridTextColumn>
 
-                            <!-- MbawData (read-only, user-visible) -->
-                            <syncfusion:GridTemplateColumn HeaderText="Mbaw Data" Width="250" HeaderStyle="{StaticResource UserHeaderStyle}">
+                            <!-- MbawData: click routed via CellTapped. MappingName added so CellTapped can identify the column. -->
+                            <syncfusion:GridTemplateColumn HeaderText="Mbaw Data" Width="250" MappingName="MbawData" AllowEditing="False" HeaderStyle="{StaticResource UserHeaderStyle}">
                                 <syncfusion:GridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <Grid ToolTip="{Binding MbawData}" ToolTipService.InitialShowDelay="0" ToolTipService.ShowDuration="300000"
-                                              PreviewMouseLeftButtonUp="MbawCell_Click" Cursor="Hand">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <!-- Search icon for rows with real content -->
-                                            <TextBlock Grid.Column="0" Text="🔍" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"
+                                        <DockPanel ToolTip="{Binding MbawData}" LastChildFill="True" Cursor="Hand">
+                                            <TextBlock DockPanel.Dock="Left" Text="🔍" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"
                                                        Visibility="{Binding MbawIconVisibility}"/>
-                                            <TextBlock Grid.Column="1" Text="{Binding MbawData}" TextTrimming="CharacterEllipsis"
-                                                       VerticalAlignment="Center" FontFamily="Segoe UI" FontSize="11"
+                                            <TextBlock Text="{Binding MbawData}" TextTrimming="CharacterEllipsis"
+                                                       VerticalAlignment="Center" FontSize="11"
                                                        Foreground="{Binding MbawForegroundBrush}"/>
-                                        </Grid>
+                                        </DockPanel>
                                     </DataTemplate>
                                 </syncfusion:GridTemplateColumn.CellTemplate>
                             </syncfusion:GridTemplateColumn>
@@ -1479,124 +1376,34 @@
                             <!-- Last Claim Date -->
                             <syncfusion:GridTextColumn HeaderText="Last Claim Date" Width="160" MappingName="LastClaimDate" HeaderStyle="{StaticResource UserHeaderStyle}" DisplayBinding="{Binding LastClaimDate, StringFormat={}{0:dd/MM/yyyy}}" TextAlignment="Center" AllowEditing="False"/>
 
-                            <syncfusion:GridTemplateColumn HeaderText="To Remind" Width="80" MappingName="ToRemind" HeaderStyle="{StaticResource UserHeaderStyle}">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <CheckBox IsChecked="{Binding ToRemind, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
-                                                  Style="{StaticResource GridToggleCheckBox}"
-                                                  Checked="CheckBox_CheckedChanged" Unchecked="CheckBox_CheckedChanged"/>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                            </syncfusion:GridTemplateColumn>
+                            <!-- PERF: native GridCheckBoxColumn — 3× lighter than GridTemplateColumn+CheckBox.
+                                 Saves the entire CheckBox control-template tree on every row recycle.
+                                 Edit commit is handled by ResultsDataGrid_CurrentCellEndEdit. -->
+                            <syncfusion:GridCheckBoxColumn HeaderText="To Remind" Width="80" MappingName="ToRemind" HeaderStyle="{StaticResource UserHeaderStyle}"/>
 
                             <!-- Remind Date -->
                             <syncfusion:GridTextColumn HeaderText="Remind Date" Width="150" MappingName="ToRemindDate" HeaderStyle="{StaticResource UserHeaderStyle}" DisplayBinding="{Binding ToRemindDate, StringFormat={}{0:dd/MM/yyyy}}" TextAlignment="Center" AllowEditing="False"/>
-                            <syncfusion:GridTemplateColumn HeaderText="ACK" Width="60" MappingName="ACK" HeaderStyle="{StaticResource UserHeaderStyle}">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <CheckBox IsChecked="{Binding ACK, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
-                                                  Style="{StaticResource GridToggleCheckBox}"
-                                                  Checked="CheckBox_CheckedChanged" Unchecked="CheckBox_CheckedChanged"/>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                            </syncfusion:GridTemplateColumn>
+                            <syncfusion:GridCheckBoxColumn HeaderText="ACK" Width="60" MappingName="ACK" HeaderStyle="{StaticResource UserHeaderStyle}"/>
                             <syncfusion:GridTextColumn HeaderText="Swift Code" MappingName="SwiftCode" Width="100" HeaderStyle="{StaticResource UserHeaderStyle}"/>
                             <syncfusion:GridTextColumn HeaderText="Payment Reference" MappingName="PaymentReference" Width="130" HeaderStyle="{StaticResource UserHeaderStyle}"/>
                             <syncfusion:GridTextColumn HeaderText="User" Width="120" AllowEditing="False" MappingName="ModifiedByDisplayName" TextAlignment="Center" HeaderStyle="{StaticResource UserHeaderStyle}"/>
-                            <!-- KPI: editable ComboBox -->
-                            <syncfusion:GridTemplateColumn HeaderText="KPI" Width="160" MappingName="KPI" HeaderStyle="{StaticResource UserHeaderStyle}">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding KpiDisplayName}" HorizontalAlignment="Center" TextAlignment="Center"/>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                                <syncfusion:GridTemplateColumn.EditTemplate>
-                                    <DataTemplate>
-                                        <ComboBox Width="Auto"
-                                                  SelectedValue="{Binding KPI, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                  SelectedValuePath="USR_ID"
-                                                  DisplayMemberPath="USR_FieldName"
-                                                  SelectionChanged="UserFieldComboBox_SelectionChanged"
-                                                  Tag="KPI"
-                                                  HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
-                                            <ComboBox.ItemsSource>
-                                                <MultiBinding Converter="{StaticResource UserFieldOptionsConverter}" ConverterParameter="KPI">
-                                                    <Binding Path="Account_ID"/>
-                                                    <Binding ElementName="Root" Path="DataContext.AllUserFields"/>
-                                                    <Binding ElementName="Root" Path="DataContext.CurrentCountryObject"/>
-                                                </MultiBinding>
-                                            </ComboBox.ItemsSource>
-                                        </ComboBox>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.EditTemplate>
-                            </syncfusion:GridTemplateColumn>
+                            <!-- KPI: editable via tap popup (see ShowUserFieldEditPopup). PERF: native GridTextColumn. -->
+                            <syncfusion:GridTextColumn HeaderText="KPI" Width="160" MappingName="KPI"
+                                                       DisplayBinding="{Binding KpiDisplayName}" TextAlignment="Center" AllowEditing="False"
+                                                       HeaderStyle="{StaticResource UserHeaderStyle}"/>
 
-                            <!-- Incident Type: editable ComboBox -->
-                            <syncfusion:GridTemplateColumn HeaderText="Incident Type" Width="180" MappingName="IncidentType" HeaderStyle="{StaticResource UserHeaderStyle}">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding IncidentTypeDisplayName}" HorizontalAlignment="Center" TextAlignment="Center"/>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                                <syncfusion:GridTemplateColumn.EditTemplate>
-                                    <DataTemplate>
-                                        <ComboBox Width="Auto"
-                                                  SelectedValue="{Binding IncidentType, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                  SelectedValuePath="USR_ID"
-                                                  DisplayMemberPath="USR_FieldName"
-                                                  SelectionChanged="UserFieldComboBox_SelectionChanged"
-                                                  Tag="Incident Type"
-                                                  HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
-                                            <ComboBox.ItemsSource>
-                                                <MultiBinding Converter="{StaticResource UserFieldOptionsConverter}" ConverterParameter="Incident Type">
-                                                    <Binding Path="Account_ID"/>
-                                                    <Binding ElementName="Root" Path="DataContext.AllUserFields"/>
-                                                    <Binding ElementName="Root" Path="DataContext.CurrentCountryObject"/>
-                                                </MultiBinding>
-                                            </ComboBox.ItemsSource>
-                                        </ComboBox>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.EditTemplate>
-                            </syncfusion:GridTemplateColumn>
+                            <!-- Incident Type: editable via tap popup. PERF: native GridTextColumn. -->
+                            <syncfusion:GridTextColumn HeaderText="Incident Type" Width="180" MappingName="IncidentType"
+                                                       DisplayBinding="{Binding IncidentTypeDisplayName}" TextAlignment="Center" AllowEditing="False"
+                                                       HeaderStyle="{StaticResource UserHeaderStyle}"/>
 
                             <!-- Incident Number: editable text field -->
                             <syncfusion:GridTextColumn HeaderText="Incident Number" MappingName="IncNumber" Width="140" AllowEditing="True" HeaderStyle="{StaticResource UserHeaderStyle}"/>
-                            <syncfusion:GridTemplateColumn HeaderText="Risky Item" Width="100" MappingName="RiskyItem" HeaderStyle="{StaticResource UserHeaderStyle}">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <CheckBox IsChecked="{Binding RiskyItem, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
-                                                  Style="{StaticResource GridToggleCheckBox}"
-                                                  Checked="CheckBox_CheckedChanged" Unchecked="CheckBox_CheckedChanged"/>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                            </syncfusion:GridTemplateColumn>
-                            <!-- Reason Non Risky: editable ComboBox bound to referential filtered by RISKY category -->
-                            <syncfusion:GridTemplateColumn HeaderText="Reason Non Risky" Width="180" MappingName="ReasonNonRisky" HeaderStyle="{StaticResource UserHeaderStyle}">
-                                <syncfusion:GridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding ReasonNonRiskyDisplayName}" HorizontalAlignment="Center" TextAlignment="Center"/>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.CellTemplate>
-                                <syncfusion:GridTemplateColumn.EditTemplate>
-                                    <DataTemplate>
-                                        <ComboBox Width="Auto"
-                                                  SelectedValue="{Binding ReasonNonRisky, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                  SelectedValuePath="USR_ID"
-                                                  DisplayMemberPath="USR_FieldName"
-                                                  SelectionChanged="UserFieldComboBox_SelectionChanged"
-                                                  Tag="ReasonNonRisky"
-                                                  HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
-                                            <ComboBox.ItemsSource>
-                                                <MultiBinding Converter="{StaticResource UserFieldOptionsConverter}" ConverterParameter="RISKY">
-                                                    <Binding Path="Account_ID"/>
-                                                    <Binding ElementName="Root" Path="DataContext.AllUserFields"/>
-                                                    <Binding ElementName="Root" Path="DataContext.CurrentCountryObject"/>
-                                                </MultiBinding>
-                                            </ComboBox.ItemsSource>
-                                        </ComboBox>
-                                    </DataTemplate>
-                                </syncfusion:GridTemplateColumn.EditTemplate>
-                            </syncfusion:GridTemplateColumn>
+                            <syncfusion:GridCheckBoxColumn HeaderText="Risky Item" Width="100" MappingName="RiskyItem" HeaderStyle="{StaticResource UserHeaderStyle}"/>
+                            <!-- Reason Non Risky: editable via tap popup. PERF: native GridTextColumn. -->
+                            <syncfusion:GridTextColumn HeaderText="Reason Non Risky" Width="180" MappingName="ReasonNonRisky"
+                                                       DisplayBinding="{Binding ReasonNonRiskyDisplayName}" TextAlignment="Center" AllowEditing="False"
+                                                       HeaderStyle="{StaticResource UserHeaderStyle}"/>
 
                             <syncfusion:GridTextColumn HeaderText="DW Currency" MappingName="GUARANTEE_CURRENCY" Width="80" AllowEditing="False" TextAlignment="Center" HeaderStyle="{StaticResource DWGuaranteeHeaderStyle}"/>
                             <syncfusion:GridTextColumn HeaderText="DW Amount" MappingName="GUARANTEE_AMOUNT" DisplayBinding="{Binding GUARANTEE_AMOUNT, StringFormat={}{0:N2}}" Width="120" AllowEditing="False" TextAlignment="Right" HeaderStyle="{StaticResource DWGuaranteeHeaderStyle}"/>

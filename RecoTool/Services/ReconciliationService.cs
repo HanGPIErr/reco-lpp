@@ -74,16 +74,9 @@ namespace RecoTool.Services
             return (dwEsc, ambreEsc);
         }
 
-        #region Events
-        public sealed class RuleAppliedEventArgs : EventArgs
-        {
-            public string Origin { get; set; } // import | edit | run-now
-            public string CountryId { get; set; }
-            public string ReconciliationId { get; set; }
-            public string RuleId { get; set; }
-            public string Outputs { get; set; }
-            public string Message { get; set; }
-        }
+        // Events (RuleApplied + RuleAppliedEventArgs + RaiseRuleApplied) live in ReconciliationService.Events.cs.
+        // GetCurrencySumsAsync / CurrencySumRow remain in this file for now; they belong with Data Retrieval
+        // and will move when that region is extracted.
 
         /// <summary>
         /// Returns total absolute amounts by currency for Live rows matching the provided backend filter.
@@ -124,12 +117,6 @@ namespace RecoTool.Services
         }
 
         private class CurrencySumRow { public string CCY { get; set; } public double Amount { get; set; } }
-        public event EventHandler<RuleAppliedEventArgs> RuleApplied;
-        private void RaiseRuleApplied(string origin, string countryId, string recoId, string ruleId, string outputs, string message)
-        {
-            try { RuleApplied?.Invoke(this, new RuleAppliedEventArgs { Origin = origin, CountryId = countryId, ReconciliationId = recoId, RuleId = ruleId, Outputs = outputs, Message = message }); } catch { }
-        }
-        #endregion
 
         public ReconciliationService(string connectionString, string currentUser, IEnumerable<Country> countries)
         {
@@ -274,8 +261,48 @@ namespace RecoTool.Services
       
         
 
+        // ──────────────────────────────────────────────────────────────────────────────────────
+        // DWINGS simulation override. When set (via ApplyDwingsOverride), both getters short-circuit
+        // the country cache and return the override lists. AsyncLocal flows through awaits and is
+        // per-logical-call, so concurrent simulations on different threads remain isolated and the
+        // permanent CacheService.Instance is never polluted. Always scoped via `using { }`.
+        // ──────────────────────────────────────────────────────────────────────────────────────
+        public sealed class DwingsOverride
+        {
+            public IReadOnlyList<DwingsInvoiceDto> Invoices { get; set; }
+            public IReadOnlyList<DwingsGuaranteeDto> Guarantees { get; set; }
+        }
+
+        private static readonly System.Threading.AsyncLocal<DwingsOverride> _dwingsOverride
+            = new System.Threading.AsyncLocal<DwingsOverride>();
+
+        private sealed class DwingsOverrideScope : IDisposable
+        {
+            private readonly DwingsOverride _previous;
+            public DwingsOverrideScope(DwingsOverride replacement)
+            {
+                _previous = _dwingsOverride.Value;
+                _dwingsOverride.Value = replacement;
+            }
+            public void Dispose() { _dwingsOverride.Value = _previous; }
+        }
+
+        /// <summary>
+        /// Installs a DWINGS override for the current async logical call (simulation what-if).
+        /// Returned scope restores the previous override on <see cref="IDisposable.Dispose"/>;
+        /// the caller MUST wrap in <c>using</c> to guarantee the restore.
+        /// </summary>
+        public IDisposable ApplyDwingsOverride(DwingsOverride overrideData)
+        {
+            return new DwingsOverrideScope(overrideData);
+        }
+
         public async Task<IReadOnlyList<DwingsInvoiceDto>> GetDwingsInvoicesAsync()
         {
+            // Simulation bypass: user-provided snapshot, NOT cached anywhere.
+            var ovr = _dwingsOverride.Value;
+            if (ovr?.Invoices != null) return ovr.Invoices;
+
             // OPTIMIZATION: Cache DWINGS invoices permanently per country (never expires)
             var cacheKey = $"DWINGS_Invoices_{_offlineFirstService?.CurrentCountryId}";
             return await CacheService.Instance.GetOrLoadAsync(cacheKey, async () =>
@@ -287,6 +314,10 @@ namespace RecoTool.Services
 
         public async Task<IReadOnlyList<DwingsGuaranteeDto>> GetDwingsGuaranteesAsync()
         {
+            // Simulation bypass: user-provided snapshot, NOT cached anywhere.
+            var ovr = _dwingsOverride.Value;
+            if (ovr?.Guarantees != null) return ovr.Guarantees;
+
             // OPTIMIZATION: Cache DWINGS guarantees permanently per country (never expires)
             var cacheKey = $"DWINGS_Guarantees_{_offlineFirstService?.CurrentCountryId}";
             return await CacheService.Instance.GetOrLoadAsync(cacheKey, async () =>
@@ -928,731 +959,10 @@ namespace RecoTool.Services
         }
         #endregion
 
-        #region Automatic Matching (delegated to ReconciliationMatchingService)
-
-        private ReconciliationMatchingService _matchingService;
-        private ReconciliationMatchingService MatchingService
-            => _matchingService ?? (_matchingService = new ReconciliationMatchingService(this, _offlineFirstService, _currentUser));
-
-        public Task<int> PerformAutomaticMatchingAsync(string countryId)
-            => MatchingService.PerformAutomaticMatchingAsync(countryId, _countries);
-
-        public Task<int> ApplyManualOutgoingRuleAsync(string countryId)
-            => MatchingService.ApplyManualOutgoingRuleAsync(countryId, _countries);
-
-        #endregion
-
-        #region CRUD Operations
-
-        /// <summary>
-        /// Récupère ou crée une réconciliation pour une ligne Ambre
-        /// </summary>
-        public async Task<Reconciliation> GetOrCreateReconciliationAsync(string id)
-        {
-            // Lookup by ID
-            var query = "SELECT * FROM T_Reconciliation WHERE ID = ? AND DeleteDate IS NULL";
-            // Explicitly pass the connection string to avoid binding to the wrong overload (id mistaken for connection string)
-            var existing = await _queryExecutor.QueryAsync<Reconciliation>(query, _connectionString, id).ConfigureAwait(false);
-
-            if (existing.Any())
-                return existing.First();
-
-            return Reconciliation.CreateForAmbreLine(id);
-        }
-
-        /// <summary>
-        /// Récupère une réconciliation par ID (sans créer si inexistante)
-        /// </summary>
-        public async Task<Reconciliation> GetReconciliationByIdAsync(string countryId, string id)
-        {
-            var query = "SELECT * FROM T_Reconciliation WHERE ID = ? AND DeleteDate IS NULL";
-            var existing = await _queryExecutor.QueryAsync<Reconciliation>(query, _connectionString, id).ConfigureAwait(false);
-            return existing.FirstOrDefault();
-        }
-
-        /// <summary>
-        /// Run rules in a dry-run fashion against a set of IDs (or all active rows if ids is null).
-        /// Never writes to the database: only evaluates and returns the result per row.
-        /// Rules are evaluated in the provided scope (Import is useful to simulate what would happen during an import).
-        /// Uses <see cref="RulesEngine.EvaluateAllForDebugAsync"/> so dead rules and non-matching reasons can be surfaced.
-        /// </summary>
-        public async Task<List<RuleSimulationRow>> SimulateRulesAsync(
-            IEnumerable<string> ids,
-            RuleScope scope,
-            IProgress<(int done, int total)> progress = null,
-            CancellationToken ct = default)
-        {
-            var result = new List<RuleSimulationRow>();
-            try
-            {
-                var currentCountryId = _offlineFirstService?.CurrentCountryId;
-                if (string.IsNullOrWhiteSpace(currentCountryId) || _rulesEngine == null) return result;
-                if (_countries == null || !_countries.TryGetValue(currentCountryId, out var country) || country == null) return result;
-
-                List<string> targetIds;
-                if (ids != null)
-                {
-                    targetIds = ids.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                }
-                else
-                {
-                    // All active rows in current country
-                    var view = await GetReconciliationViewAsync(currentCountryId, null, false).ConfigureAwait(false);
-                    targetIds = (view ?? new List<ReconciliationViewData>())
-                        .Where(v => v != null && !v.IsDeleted && !string.IsNullOrWhiteSpace(v.ID))
-                        .Select(v => v.ID).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                }
-                if (targetIds.Count == 0) return result;
-
-                // Pre-warm DWINGS caches to avoid per-row loads
-                await EnsureDwingsCachesInitializedAsync().ConfigureAwait(false);
-
-                int done = 0;
-                int total = targetIds.Count;
-                foreach (var id in targetIds)
-                {
-                    if (ct.IsCancellationRequested) break;
-                    try
-                    {
-                        var amb = await GetAmbreRowByIdAsync(currentCountryId, id).ConfigureAwait(false);
-                        if (amb == null || amb.IsDeleted) continue;
-
-                        var reco = await GetOrCreateReconciliationAsync(id).ConfigureAwait(false);
-                        if (reco == null) continue;
-
-                        bool isPivot = amb.IsPivotAccount(country.CNT_AmbrePivot);
-                        var ctx = await BuildRuleContextAsync(amb, reco, country, currentCountryId, isPivot).ConfigureAwait(false);
-
-                        var res = await _rulesEngine.EvaluateAsync(ctx, scope, ct).ConfigureAwait(false);
-                        result.Add(new RuleSimulationRow
-                        {
-                            ReconciliationId = id,
-                            IsPivot = isPivot,
-                            MatchedRuleId = res?.Rule?.RuleId,
-                            MatchedRulePriority = res?.Rule?.Priority,
-                            ProposedActionId = res?.NewActionIdSelf,
-                            ProposedKpiId = res?.NewKpiIdSelf,
-                            ApplyTo = res?.Rule?.ApplyTo,
-                            CurrentActionId = reco.Action,
-                            CurrentKpiId = reco.KPI,
-                            UserMessage = res?.UserMessage
-                        });
-                    }
-                    catch { /* swallow per-row */ }
-                    finally
-                    {
-                        done++;
-                        try { progress?.Report((done, total)); } catch { }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"SimulateRulesAsync failed: {ex.Message}");
-            }
-            return result;
-        }
-
-        /// <summary>
-        /// Get detailed debug information about all rules and their evaluation for a specific line.
-        /// Used for debugging UI to show which conditions passed/failed.
-        /// </summary>
-        public async Task<(RuleContext Context, List<RuleDebugEvaluation> Evaluations)> GetRuleDebugInfoAsync(string reconciliationId)
-        {
-            try
-            {
-                var currentCountryId = _offlineFirstService?.CurrentCountryId;
-                if (string.IsNullOrWhiteSpace(currentCountryId) || _rulesEngine == null) 
-                    return (null, null);
-                if (_countries == null || !_countries.TryGetValue(currentCountryId, out var countryCtx) || countryCtx == null) 
-                    return (null, null);
-
-                var amb = await GetAmbreRowByIdAsync(currentCountryId, reconciliationId).ConfigureAwait(false);
-                var r = await GetOrCreateReconciliationAsync(reconciliationId).ConfigureAwait(false);
-                if (amb == null || r == null) return (null, null);
-
-                bool isPivot = amb.IsPivotAccount(countryCtx.CNT_AmbrePivot);
-                var ctx = await BuildRuleContextAsync(amb, r, countryCtx, currentCountryId, isPivot).ConfigureAwait(false);
-                var evaluations = await _rulesEngine.EvaluateAllForDebugAsync(ctx, RuleScope.Edit).ConfigureAwait(false);
-                return (ctx, evaluations);
-            }
-            catch { return (null, null); }
-        }
-
-        /// <summary>
-        /// Sauvegarde une réconciliation
-        /// </summary>
-        public async Task<bool> SaveReconciliationAsync(Reconciliation reconciliation)
-        {
-            return await SaveReconciliationsAsync(new[] { reconciliation });
-        }
-
-        /// <summary>
-        /// Sauvegarde une réconciliation avec option pour appliquer (ou non) les règles côté édition.
-        /// </summary>
-        public async Task<bool> SaveReconciliationAsync(Reconciliation reconciliation, bool applyRulesOnEdit)
-        {
-            return await SaveReconciliationsAsync(new[] { reconciliation }, applyRulesOnEdit);
-        }
-
-        /// <summary>
-        /// Sauvegarde plusieurs réconciliations en batch
-        /// </summary>
-        public async Task<bool> SaveReconciliationsAsync(IEnumerable<Reconciliation> reconciliations, bool applyRulesOnEdit = true)
-        {
-            try
-            {
-                using (var connection = new OleDbConnection(_connectionString))
-                {
-                    await connection.OpenAsync().ConfigureAwait(false);
-                    using (var transaction = connection.BeginTransaction())
-                    {
-                        try
-                        {
-                            var changeTuples = new List<(string TableName, string RecordId, string OperationType)>();
-                            var updatedRows = new List<Reconciliation>();
-                            foreach (var reconciliation in reconciliations)
-                            {
-                                if (applyRulesOnEdit)
-                                {
-                                    try
-                                    {
-                                        var currentCountryId = _offlineFirstService?.CurrentCountryId;
-                                        if (!string.IsNullOrWhiteSpace(currentCountryId) && _rulesEngine != null)
-                                        {
-                                            Country countryCtx = null;
-                                            if (_countries != null && _countries.TryGetValue(currentCountryId, out var c)) countryCtx = c;
-                                            if (countryCtx != null)
-                                            {
-                                                var amb = await GetAmbreRowByIdAsync(currentCountryId, reconciliation.ID).ConfigureAwait(false);
-                                                if (amb != null)
-                                                {
-                                                    bool isPivot = amb.IsPivotAccount(countryCtx.CNT_AmbrePivot);
-                                                    var ctx = await BuildRuleContextAsync(amb, reconciliation, countryCtx, currentCountryId, isPivot).ConfigureAwait(false);
-                                                    var res = await _rulesEngine.EvaluateAsync(ctx, RuleScope.Edit).ConfigureAwait(false);
-                                                    RuleApplicationHelper.ApplyAndLog(res, reconciliation, _currentUser, "edit", currentCountryId, RaiseRuleApplied, ProposalRepository);
-                                                    if (res?.NewActionIdSelf.HasValue == true) EnsureActionDefaults(reconciliation);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    catch { /* do not block user saves on rules engine errors */ }
-                                }
-
-                                var op = await SaveSingleReconciliationAsync(connection, transaction, reconciliation).ConfigureAwait(false);
-                                if (!string.Equals(op, "NOOP", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    changeTuples.Add(("T_Reconciliation", reconciliation.ID, op));
-                                    updatedRows.Add(reconciliation);
-                                }
-                            }
-
-                            transaction.Commit();
-
-                            // Invalidate caches so next view refresh recomputes flags (e.g., IsMatchedAcrossAccounts)
-                            try
-                            {
-                                var countryId = _offlineFirstService?.CurrentCountryId;
-                                if (!string.IsNullOrWhiteSpace(countryId))
-                                    InvalidateReconciliationViewCache(countryId);
-                                else
-                                    InvalidateReconciliationViewCache();
-                            }
-                            catch { }
-
-                            // Record changes in ChangeLog (stored locally via OfflineFirstService configuration)
-                            try
-                            {
-                                if (_offlineFirstService != null && changeTuples.Count > 0)
-                                {
-                                    var countryId = _offlineFirstService.CurrentCountryId;
-                                    if (!string.IsNullOrWhiteSpace(countryId))
-                                    {
-                                        using (var session = await _offlineFirstService.BeginChangeLogSessionAsync(countryId).ConfigureAwait(false))
-                                        {
-                                            foreach (var t in changeTuples)
-                                            {
-                                                await session.AddAsync(t.TableName, t.RecordId, t.OperationType).ConfigureAwait(false);
-                                            }
-                                            await session.CommitAsync().ConfigureAwait(false);
-                                        }
-                                    }
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                // Swallow change-log errors to not block user saves
-                                // Diagnostic only: log once here to help track missing pushes (background sync reads ChangeLog)
-                                try { LogManager.Warning("ChangeLog recording failed in SaveReconciliationsAsync; background sync will skip these rows unless reconstructed."); } catch { }
-                            }
-
-                            // Invalidate Lazy<Task> coalescing cache so next loads fetch fresh data from DB
-                            try { _recoViewCache.Clear(); } catch { }
-
-                            // Incrementally update materialized view lists with the modified reconciliation fields
-                            try { UpdateRecoViewCaches(updatedRows); } catch { }
-
-                            // Synchronization is handled by background services (e.g., SyncMonitor),
-                            // which read pending items from ChangeLog and then perform PUSH followed by PULL.
-                            // No direct push is triggered here.
-                            return true;
-                        }
-                        catch
-                        {
-                            transaction.Rollback();
-                            throw;
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                throw new Exception($"Erreur lors de la sauvegarde des réconciliations: {ex.Message}", ex);
-            }
-        }
-
-        private void UpdateRecoViewCaches(IEnumerable<Reconciliation> updated)
-        {
-            if (updated == null) return;
-            foreach (var kv in _recoViewDataCache)
-            {
-                var list = kv.Value;
-                if (list == null) continue;
-                // Update in place by ID (AMBRE row always exists; reconcile fields are nullable)
-                foreach (var r in updated)
-                {
-                    var row = list.FirstOrDefault(x => string.Equals(x.ID, r.ID, StringComparison.OrdinalIgnoreCase));
-                    if (row == null) continue;
-                    row.DWINGS_GuaranteeID = r.DWINGS_GuaranteeID;
-                    row.DWINGS_InvoiceID = r.DWINGS_InvoiceID;
-                    row.DWINGS_BGPMT = r.DWINGS_BGPMT;
-                    row.Action = r.Action;
-                    row.ActionStatus = r.ActionStatus;
-                    row.ActionDate = r.ActionDate;
-                    row.Assignee = r.Assignee;
-                    row.Comments = r.Comments;
-                    row.InternalInvoiceReference = r.InternalInvoiceReference;
-                    row.FirstClaimDate = r.FirstClaimDate;
-                    row.LastClaimDate = r.LastClaimDate;
-                    row.ToRemind = r.ToRemind;
-                    row.ToRemindDate = r.ToRemindDate;
-                    row.ACK = r.ACK;
-                    row.SwiftCode = r.SwiftCode;
-                    row.PaymentReference = r.PaymentReference;
-                    row.KPI = r.KPI;
-                    row.IncidentType = r.IncidentType;
-                    row.RiskyItem = r.RiskyItem == true;
-                    row.ReasonNonRisky = r.ReasonNonRisky;
-                    row.IncNumber = r.IncNumber;
-                    row.MbawData = r.MbawData;
-                    row.SpiritData = r.SpiritData;
-                    row.TriggerDate = r.TriggerDate;
-                }
-            }
-        }
-
-        /// <summary>
-        /// Sauvegarde une réconciliation unique dans une transaction
-        /// </summary>
-        private async Task<string> SaveSingleReconciliationAsync(OleDbConnection connection, OleDbTransaction transaction, Reconciliation reconciliation)
-        {
-            // Vérifier si l'enregistrement existe (par ID)
-            var checkQuery = "SELECT COUNT(*) FROM T_Reconciliation WHERE ID = ?";
-            using (var checkCmd = new OleDbCommand(checkQuery, connection, transaction))
-            {
-                checkCmd.Parameters.AddWithValue("@ID", reconciliation.ID);
-                var exists = (int)await checkCmd.ExecuteScalarAsync().ConfigureAwait(false) > 0;
-
-                // If the row exists, compare business fields to avoid no-op updates
-                if (exists)
-                {
-                    var changed = new System.Collections.Generic.List<string>();
-                    var selectCmd = new OleDbCommand(@"SELECT 
-                                [DWINGS_GuaranteeID], [DWINGS_InvoiceID], [DWINGS_BGPMT],
-                                [Action], [ActionStatus], [ActionDate], [Assignee], [Comments], [InternalInvoiceReference],
-                                [FirstClaimDate], [LastClaimDate], [ToRemind], [ToRemindDate],
-                                [ACK], [SwiftCode], [PaymentReference], [KPI],
-                                [IncidentType], [RiskyItem], [ReasonNonRisky], [IncNumber],
-                                [MbawData], [SpiritData], [TriggerDate],
-                                [LastModifiedByUser], [UserEditedFields], [LastRuleAppliedId], [LastRuleAppliedAt]
-                              FROM T_Reconciliation WHERE [ID] = ?", connection, transaction);
-                    selectCmd.Parameters.AddWithValue("@ID", reconciliation.ID);
-                    using (var rdr = await selectCmd.ExecuteReaderAsync().ConfigureAwait(false))
-                    {
-                        if (await rdr.ReadAsync().ConfigureAwait(false))
-                        {
-                            object DbVal(int i) => rdr.IsDBNull(i) ? null : rdr.GetValue(i);
-                            bool Equal(object a, object b) => (a == null && b == null) || (a != null && a.Equals(b));
-
-                            bool? DbBool(object o)
-                            {
-                                if (o == null) return null;
-                                try
-                                {
-                                    if (o is bool bb) return bb;
-                                    if (o is byte by) return by != 0;
-                                    if (o is short s) return s != 0;
-                                    if (o is int ii) return ii != 0;
-                                    return Convert.ToBoolean(o);
-                                }
-                                catch { return null; }
-                            }
-
-                            // Build the list of changed business fields
-                            if (!Equal(DbVal(0), (object)reconciliation.DWINGS_GuaranteeID)) changed.Add("DWINGS_GuaranteeID");
-                            if (!Equal(DbVal(1), (object)reconciliation.DWINGS_InvoiceID)) changed.Add("DWINGS_InvoiceID");
-                            if (!Equal(DbVal(2), (object)reconciliation.DWINGS_BGPMT)) changed.Add("DWINGS_BGPMT");
-                            if (!Equal(DbVal(3), (object)reconciliation.Action)) changed.Add("Action");
-                            if (!Equal(DbVal(4), (object)reconciliation.ActionStatus)) changed.Add("ActionStatus");
-                            if (!Equal(DbVal(5), reconciliation.ActionDate.HasValue ? (object)reconciliation.ActionDate.Value : null)) changed.Add("ActionDate");
-                            if (!Equal(DbVal(6), (object)reconciliation.Assignee)) changed.Add("Assignee");
-                            if (!Equal(DbVal(7), (object)reconciliation.Comments)) changed.Add("Comments");
-                            if (!Equal(DbVal(8), (object)reconciliation.InternalInvoiceReference)) changed.Add("InternalInvoiceReference");
-                            if (!Equal(DbVal(9), reconciliation.FirstClaimDate.HasValue ? (object)reconciliation.FirstClaimDate.Value : null)) changed.Add("FirstClaimDate");
-                            if (!Equal(DbVal(10), reconciliation.LastClaimDate.HasValue ? (object)reconciliation.LastClaimDate.Value : null)) changed.Add("LastClaimDate");
-                            if (!Equal(DbBool(DbVal(11)), (object)reconciliation.ToRemind)) changed.Add("ToRemind");
-                            if (!Equal(DbVal(12), reconciliation.ToRemindDate.HasValue ? (object)reconciliation.ToRemindDate.Value : null)) changed.Add("ToRemindDate");
-                            if (!Equal(DbBool(DbVal(13)), (object)reconciliation.ACK)) changed.Add("ACK");
-                            if (!Equal(DbVal(14), (object)reconciliation.SwiftCode)) changed.Add("SwiftCode");
-                            if (!Equal(DbVal(15), (object)reconciliation.PaymentReference)) changed.Add("PaymentReference");
-                            if (!Equal(DbVal(16), (object)reconciliation.KPI)) changed.Add("KPI");
-                            if (!Equal(DbVal(17), (object)reconciliation.IncidentType)) changed.Add("IncidentType");
-                            if (!Equal(DbBool(DbVal(18)), (object)reconciliation.RiskyItem)) changed.Add("RiskyItem");
-                            if (!Equal(DbVal(19), (object)reconciliation.ReasonNonRisky)) changed.Add("ReasonNonRisky");
-                            if (!Equal(DbVal(20), (object)reconciliation.IncNumber)) changed.Add("IncNumber");
-                            if (!Equal(DbVal(21), (object)reconciliation.MbawData)) changed.Add("MbawData");
-                            if (!Equal(DbVal(22), (object)reconciliation.SpiritData)) changed.Add("SpiritData");
-                            if (!Equal(DbVal(23), reconciliation.TriggerDate.HasValue ? (object)reconciliation.TriggerDate.Value : null)) changed.Add("TriggerDate");
-                            // Audit & user-edit protection columns (ordinals 24..27)
-                            if (!Equal(DbVal(24), reconciliation.LastModifiedByUser.HasValue ? (object)reconciliation.LastModifiedByUser.Value : null)) changed.Add("LastModifiedByUser");
-                            if (!Equal(DbVal(25), (object)reconciliation.UserEditedFields)) changed.Add("UserEditedFields");
-                            if (!Equal(DbVal(26), (object)reconciliation.LastRuleAppliedId)) changed.Add("LastRuleAppliedId");
-                            if (!Equal(DbVal(27), reconciliation.LastRuleAppliedAt.HasValue ? (object)reconciliation.LastRuleAppliedAt.Value : null)) changed.Add("LastRuleAppliedAt");
-
-                            if (changed.Count == 0)
-                            {
-                                // No business-field change: skip UPDATE and ChangeLog
-                                LogManager.Debug($"Reconciliation NOOP: ID={reconciliation.ID} - no business-field changes detected.");
-                                return "NOOP";
-                            }
-                        }
-                    }
-
-                    // Apply update with refreshed modification metadata (partial update of changed fields only)
-                    LogManager.Debug($"Reconciliation UPDATE detected: ID={reconciliation.ID} Changed=[{string.Join(",", changed)}]");
-                    reconciliation.ModifiedBy = _currentUser;
-                    reconciliation.LastModified = DateTime.UtcNow;
-
-                    // Build dynamic UPDATE statement
-                    var setClauses = new System.Collections.Generic.List<string>();
-                    foreach (var col in changed)
-                    {
-                        setClauses.Add($"[{col}] = ?");
-                    }
-                    // Always update metadata
-                    setClauses.Add("[ModifiedBy] = ?");
-                    setClauses.Add("[LastModified] = ?");
-                    var updateQuery = $"UPDATE T_Reconciliation SET {string.Join(", ", setClauses)} WHERE [ID] = ?";
-
-                    using (var cmd = new OleDbCommand(updateQuery, connection, transaction))
-                    {
-                        // Add parameters in the same order as placeholders
-                        foreach (var col in changed)
-                        {
-                            switch (col)
-                            {
-                                case "DWINGS_GuaranteeID":
-                                    cmd.Parameters.AddWithValue("@DWINGS_GuaranteeID", reconciliation.DWINGS_GuaranteeID ?? (object)DBNull.Value);
-                                    break;
-                                case "DWINGS_InvoiceID":
-                                    cmd.Parameters.AddWithValue("@DWINGS_InvoiceID", reconciliation.DWINGS_InvoiceID ?? (object)DBNull.Value);
-                                    break;
-                                case "DWINGS_BGPMT":
-                                    cmd.Parameters.AddWithValue("@DWINGS_BGPMT", reconciliation.DWINGS_BGPMT ?? (object)DBNull.Value);
-                                    break;
-                                case "Action":
-                                    cmd.Parameters.AddWithValue("@Action", reconciliation.Action ?? (object)DBNull.Value);
-                                    break;
-                                case "ActionStatus":
-                                    {
-                                        var p = cmd.Parameters.Add("@ActionStatus", OleDbType.Boolean);
-                                        p.Value = reconciliation.ActionStatus.HasValue ? (object)reconciliation.ActionStatus.Value : DBNull.Value;
-                                        break;
-                                    }
-                                case "ActionDate":
-                                    {
-                                        var p = cmd.Parameters.Add("@ActionDate", OleDbType.Date);
-                                        p.Value = reconciliation.ActionDate.HasValue ? (object)reconciliation.ActionDate.Value : DBNull.Value;
-                                        break;
-                                    }
-                                case "Assignee":
-                                    cmd.Parameters.AddWithValue("@Assignee", string.IsNullOrWhiteSpace(reconciliation.Assignee) ? (object)DBNull.Value : reconciliation.Assignee);
-                                    break;
-                                case "Comments":
-                                    {
-                                        var p = cmd.Parameters.Add("@Comments", OleDbType.LongVarWChar);
-                                        p.Value = reconciliation.Comments ?? (object)DBNull.Value;
-                                        break;
-                                    }
-                                case "InternalInvoiceReference":
-                                    cmd.Parameters.AddWithValue("@InternalInvoiceReference", reconciliation.InternalInvoiceReference ?? (object)DBNull.Value);
-                                    break;
-                                case "FirstClaimDate":
-                                    {
-                                        var p = cmd.Parameters.Add("@FirstClaimDate", OleDbType.Date);
-                                        p.Value = reconciliation.FirstClaimDate.HasValue ? (object)reconciliation.FirstClaimDate.Value : DBNull.Value;
-                                        break;
-                                    }
-                                case "LastClaimDate":
-                                    {
-                                        var p = cmd.Parameters.Add("@LastClaimDate", OleDbType.Date);
-                                        p.Value = reconciliation.LastClaimDate.HasValue ? (object)reconciliation.LastClaimDate.Value : DBNull.Value;
-                                        break;
-                                    }
-                                case "ToRemind":
-                                    {
-                                        var p = cmd.Parameters.Add("@ToRemind", OleDbType.Boolean);
-                                        p.Value = reconciliation.ToRemind;
-                                        break;
-                                    }
-                                case "ToRemindDate":
-                                    {
-                                        var p = cmd.Parameters.Add("@ToRemindDate", OleDbType.Date);
-                                        p.Value = reconciliation.ToRemindDate.HasValue ? (object)reconciliation.ToRemindDate.Value : DBNull.Value;
-                                        break;
-                                    }
-                                case "ACK":
-                                    {
-                                        var p = cmd.Parameters.Add("@ACK", OleDbType.Boolean);
-                                        p.Value = reconciliation.ACK;
-                                        break;
-                                    }
-                                case "SwiftCode":
-                                    cmd.Parameters.AddWithValue("@SwiftCode", reconciliation.SwiftCode ?? (object)DBNull.Value);
-                                    break;
-                                case "PaymentReference":
-                                    cmd.Parameters.AddWithValue("@PaymentReference", reconciliation.PaymentReference ?? (object)DBNull.Value);
-                                    break;
-                                case "MbawData":
-                                    {
-                                        var p = cmd.Parameters.Add("@MbawData", OleDbType.LongVarWChar);
-                                        p.Value = reconciliation.MbawData ?? (object)DBNull.Value;
-                                        break;
-                                    }
-                                case "SpiritData":
-                                    {
-                                        var p = cmd.Parameters.Add("@SpiritData", OleDbType.LongVarWChar);
-                                        p.Value = reconciliation.SpiritData ?? (object)DBNull.Value;
-                                        break;
-                                    }
-                                case "KPI":
-                                    {
-                                        var p = cmd.Parameters.Add("@KPI", OleDbType.Integer);
-                                        p.Value = reconciliation.KPI.HasValue ? (object)reconciliation.KPI.Value : DBNull.Value;
-                                        break;
-                                    }
-                                case "IncidentType":
-                                    {
-                                        var p = cmd.Parameters.Add("@IncidentType", OleDbType.Integer);
-                                        p.Value = reconciliation.IncidentType.HasValue ? (object)reconciliation.IncidentType.Value : DBNull.Value;
-                                        break;
-                                    }
-                                case "RiskyItem":
-                                    {
-                                        var p = cmd.Parameters.Add("@RiskyItem", OleDbType.Boolean);
-                                        p.Value = reconciliation.RiskyItem.HasValue ? (object)reconciliation.RiskyItem.Value : DBNull.Value;
-                                        break;
-                                    }
-                                case "ReasonNonRisky":
-                                    {
-                                        var p = cmd.Parameters.Add("@ReasonNonRisky", OleDbType.Integer);
-                                        p.Value = reconciliation.ReasonNonRisky.HasValue ? (object)reconciliation.ReasonNonRisky.Value : DBNull.Value;
-                                        break;
-                                    }
-                                case "IncNumber":
-                                    cmd.Parameters.AddWithValue("@IncNumber", reconciliation.IncNumber ?? (object)DBNull.Value);
-                                    break;
-                                case "TriggerDate":
-                                    {
-                                        var p = cmd.Parameters.Add("@TriggerDate", OleDbType.Date);
-                                        p.Value = reconciliation.TriggerDate.HasValue ? (object)reconciliation.TriggerDate.Value : DBNull.Value;
-                                        break;
-                                    }
-                                case "LastModifiedByUser":
-                                    {
-                                        var p = cmd.Parameters.Add("@LastModifiedByUser", OleDbType.Date);
-                                        p.Value = reconciliation.LastModifiedByUser.HasValue ? (object)reconciliation.LastModifiedByUser.Value : DBNull.Value;
-                                        break;
-                                    }
-                                case "UserEditedFields":
-                                    cmd.Parameters.AddWithValue("@UserEditedFields", reconciliation.UserEditedFields ?? (object)DBNull.Value);
-                                    break;
-                                case "LastRuleAppliedId":
-                                    cmd.Parameters.AddWithValue("@LastRuleAppliedId", reconciliation.LastRuleAppliedId ?? (object)DBNull.Value);
-                                    break;
-                                case "LastRuleAppliedAt":
-                                    {
-                                        var p = cmd.Parameters.Add("@LastRuleAppliedAt", OleDbType.Date);
-                                        p.Value = reconciliation.LastRuleAppliedAt.HasValue ? (object)reconciliation.LastRuleAppliedAt.Value : DBNull.Value;
-                                        break;
-                                    }
-                            }
-                        }
-
-                        // Metadata
-                        cmd.Parameters.AddWithValue("@ModifiedBy", reconciliation.ModifiedBy ?? (object)DBNull.Value);
-                        var pMod = cmd.Parameters.Add("@LastModified", OleDbType.Date);
-                        pMod.Value = reconciliation.LastModified.HasValue ? (object)reconciliation.LastModified.Value : DBNull.Value;
-
-                        // WHERE ID
-                        cmd.Parameters.AddWithValue("@ID", reconciliation.ID);
-
-                        // Debug SQL and parameters
-                        try
-                        {
-                            var paramDbg = string.Join(" | ", cmd.Parameters
-                                .Cast<OleDbParameter>()
-                                .Select(p =>
-                                {
-                                    var val = p.Value;
-                                    string display = val == null || val is DBNull ? "NULL" : (val is byte[] b ? $"byte[{b.Length}]" : val.ToString());
-                                    return $"{p.ParameterName} type={p.OleDbType} value={display}";
-                                }));
-                            LogManager.Debug($"Reconciliation UPDATE SQL: {updateQuery} | Params: {paramDbg}");
-                        }
-                        catch { }
-
-                        await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-                        // Encode changed fields for partial update during sync
-                        var op = $"UPDATE({string.Join(",", changed)})";
-                        LogManager.Debug($"Reconciliation UPDATE operation encoded: {op}");
-                        return op;
-                    }
-                }
-                else
-                {
-                    // Prepare metadata for insert
-                    if (!reconciliation.CreationDate.HasValue)
-                        reconciliation.CreationDate = DateTime.UtcNow;
-                    reconciliation.ModifiedBy = _currentUser;
-                    reconciliation.LastModified = DateTime.UtcNow;
-
-                    var insertQuery = @"INSERT INTO T_Reconciliation 
-                             ([ID], [DWINGS_GuaranteeID], [DWINGS_InvoiceID], [DWINGS_BGPMT],
-                              [Action], [ActionStatus], [ActionDate], [Assignee], [Comments], [InternalInvoiceReference], [FirstClaimDate], [LastClaimDate],
-                              [ToRemind], [ToRemindDate], [ACK], [SwiftCode], [PaymentReference], [MbawData], [SpiritData], [KPI],
-                              [IncidentType], [RiskyItem], [ReasonNonRisky], [TriggerDate],
-                              [LastModifiedByUser], [UserEditedFields], [LastRuleAppliedId], [LastRuleAppliedAt],
-                              [CreationDate], [ModifiedBy], [LastModified])
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-
-                    using (var cmd = new OleDbCommand(insertQuery, connection, transaction))
-                    {
-                        AddReconciliationParameters(cmd, reconciliation, isInsert: true);
-                        LogManager.Debug($"Reconciliation INSERT: ID={reconciliation.ID}");
-                            await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-                        return "INSERT";
-                    }
-                }
-            }
-        }
-
-        /// <summary>
-        /// Ajoute les paramètres pour les requêtes de réconciliation
-        /// </summary>
-        private void AddReconciliationParameters(OleDbCommand cmd, Reconciliation reconciliation, bool isInsert)
-        {
-            if (isInsert)
-            {
-                // ID as stable key
-                cmd.Parameters.AddWithValue("@ID", reconciliation.ID ?? (object)DBNull.Value);
-            }
-
-            cmd.Parameters.AddWithValue("@DWINGS_GuaranteeID", reconciliation.DWINGS_GuaranteeID ?? (object)DBNull.Value);
-            cmd.Parameters.AddWithValue("@DWINGS_InvoiceID", reconciliation.DWINGS_InvoiceID ?? (object)DBNull.Value);
-            cmd.Parameters.AddWithValue("@DWINGS_BGPMT", reconciliation.DWINGS_BGPMT ?? (object)DBNull.Value);
-            cmd.Parameters.AddWithValue("@Action", reconciliation.Action ?? (object)DBNull.Value);
-            var pActionStatus = cmd.Parameters.Add("@ActionStatus", OleDbType.Boolean);
-            pActionStatus.Value = reconciliation.ActionStatus.HasValue ? (object)reconciliation.ActionStatus.Value : DBNull.Value;
-            var pActionDate = cmd.Parameters.Add("@ActionDate", OleDbType.Date);
-            pActionDate.Value = reconciliation.ActionDate.HasValue ? (object)reconciliation.ActionDate.Value : DBNull.Value;
-            cmd.Parameters.AddWithValue("@Assignee", string.IsNullOrWhiteSpace(reconciliation.Assignee) ? (object)DBNull.Value : reconciliation.Assignee);
-            var pComments = cmd.Parameters.Add("@Comments", OleDbType.LongVarWChar);
-            pComments.Value = reconciliation.Comments ?? (object)DBNull.Value;
-            cmd.Parameters.AddWithValue("@InternalInvoiceReference", reconciliation.InternalInvoiceReference ?? (object)DBNull.Value);
-            var pFirst = cmd.Parameters.Add("@FirstClaimDate", OleDbType.Date);
-            pFirst.Value = reconciliation.FirstClaimDate.HasValue ? (object)reconciliation.FirstClaimDate.Value : DBNull.Value;
-            var pLast = cmd.Parameters.Add("@LastClaimDate", OleDbType.Date);
-            pLast.Value = reconciliation.LastClaimDate.HasValue ? (object)reconciliation.LastClaimDate.Value : DBNull.Value;
-            var pToRemind = cmd.Parameters.Add("@ToRemind", OleDbType.Boolean);
-            pToRemind.Value = reconciliation.ToRemind;
-            var pRem = cmd.Parameters.Add("@ToRemindDate", OleDbType.Date);
-            pRem.Value = reconciliation.ToRemindDate.HasValue ? (object)reconciliation.ToRemindDate.Value : DBNull.Value;
-            var pAck = cmd.Parameters.Add("@ACK", OleDbType.Boolean);
-            pAck.Value = reconciliation.ACK;
-            cmd.Parameters.AddWithValue("@SwiftCode", reconciliation.SwiftCode ?? (object)DBNull.Value);
-            cmd.Parameters.AddWithValue("@PaymentReference", reconciliation.PaymentReference ?? (object)DBNull.Value);
-            var pMbaw = cmd.Parameters.Add("@MbawData", OleDbType.LongVarWChar);
-            pMbaw.Value = reconciliation.MbawData ?? (object)DBNull.Value;
-            var pSpirit = cmd.Parameters.Add("@SpiritData", OleDbType.LongVarWChar);
-            pSpirit.Value = reconciliation.SpiritData ?? (object)DBNull.Value;
-            var pKpi = cmd.Parameters.Add("@KPI", OleDbType.Integer);
-            pKpi.Value = reconciliation.KPI.HasValue ? (object)reconciliation.KPI.Value : DBNull.Value;
-            var pInc = cmd.Parameters.Add("@IncidentType", OleDbType.Integer);
-            pInc.Value = reconciliation.IncidentType.HasValue ? (object)reconciliation.IncidentType.Value : DBNull.Value;
-            var pRisky = cmd.Parameters.Add("@RiskyItem", OleDbType.Boolean);
-            pRisky.Value = reconciliation.RiskyItem.HasValue ? (object)reconciliation.RiskyItem.Value : DBNull.Value;
-            var pReason = cmd.Parameters.Add("@ReasonNonRisky", OleDbType.Integer);
-            pReason.Value = reconciliation.ReasonNonRisky.HasValue ? (object)reconciliation.ReasonNonRisky.Value : DBNull.Value;
-            var pTrigDate = cmd.Parameters.Add("@TriggerDate", OleDbType.Date);
-            pTrigDate.Value = reconciliation.TriggerDate.HasValue ? (object)reconciliation.TriggerDate.Value : DBNull.Value;
-
-            if (isInsert)
-            {
-                // Audit & user-edit protection (positions match the INSERT statement order)
-                var pLmbu = cmd.Parameters.Add("@LastModifiedByUser", OleDbType.Date);
-                pLmbu.Value = reconciliation.LastModifiedByUser.HasValue ? (object)reconciliation.LastModifiedByUser.Value : DBNull.Value;
-                cmd.Parameters.AddWithValue("@UserEditedFields", reconciliation.UserEditedFields ?? (object)DBNull.Value);
-                cmd.Parameters.AddWithValue("@LastRuleAppliedId", reconciliation.LastRuleAppliedId ?? (object)DBNull.Value);
-                var pLra = cmd.Parameters.Add("@LastRuleAppliedAt", OleDbType.Date);
-                pLra.Value = reconciliation.LastRuleAppliedAt.HasValue ? (object)reconciliation.LastRuleAppliedAt.Value : DBNull.Value;
-
-                var pCreate = cmd.Parameters.Add("@CreationDate", OleDbType.Date);
-                pCreate.Value = reconciliation.CreationDate.HasValue ? (object)reconciliation.CreationDate.Value : DBNull.Value;
-            }
-
-            cmd.Parameters.AddWithValue("@ModifiedBy", reconciliation.ModifiedBy ?? (object)DBNull.Value);
-            var pMod = cmd.Parameters.Add("@LastModified", OleDbType.Date);
-            pMod.Value = reconciliation.LastModified.HasValue ? (object)reconciliation.LastModified.Value : DBNull.Value;
-
-            if (!isInsert)
-                cmd.Parameters.AddWithValue("@ID", reconciliation.ID);
-        }
-
-        #endregion
-
-        #region Truth Table Helpers (delegated to RuleContextBuilder)
-
-        private RuleContextBuilder _ruleContextBuilder;
-        private RuleContextBuilder RuleContextBuilderInstance
-            => _ruleContextBuilder ?? (_ruleContextBuilder = new RuleContextBuilder(this, _offlineFirstService));
-
-        private Task<RuleContext> BuildRuleContextAsync(DataAmbre a, Reconciliation r, Country country, string countryId, bool isPivot, bool? isGrouped = null, bool? isAmountMatch = null)
-            => RuleContextBuilderInstance.BuildAsync(a, r, country, countryId, isPivot, isGrouped, isAmountMatch);
-
-        private async Task<DataAmbre> GetAmbreRowByIdAsync(string countryId, string id)
-        {
-            if (string.IsNullOrWhiteSpace(countryId) || string.IsNullOrWhiteSpace(id)) return null;
-            try
-            {
-                var ambreCs = _offlineFirstService?.GetAmbreConnectionString(countryId);
-                if (string.IsNullOrWhiteSpace(ambreCs)) return null;
-                var list = await _queryExecutor.QueryAsync<DataAmbre>("SELECT TOP 1 * FROM T_Data_Ambre WHERE ID = ? AND DeleteDate IS NULL", ambreCs, id).ConfigureAwait(false);
-                return list?.FirstOrDefault();
-            }
-            catch { return null; }
-        }
-
-        #endregion
+        // The remaining surface of ReconciliationService lives in sibling partial files:
+        //   • ReconciliationService.Events.cs    — RuleApplied event + RuleAppliedEventArgs + RaiseRuleApplied
+        //   • ReconciliationService.Delegates.cs — ReconciliationMatchingService + RuleContextBuilder delegations + GetAmbreRowByIdAsync
+        //   • ReconciliationService.Crud.cs      — Get/Save/Simulate/RuleDebug + SaveSingleReconciliationAsync + AddReconciliationParameters
+        //   • ReconciliationService.AmbreSim.cs  — AMBRE import simulation helpers
     }
 }

@@ -137,6 +137,66 @@ namespace RecoTool.Services.Rules
         /// in T_RuleProposals instead of mutating the reconciliation.
         /// </summary>
         public RuleMode Mode { get; set; } = RuleMode.Apply;
+
+        /// <summary>
+        /// Deep-copy this rule. Safe to mutate the returned instance without affecting the source.
+        /// All scalar properties are value-copied; since the class has no reference-typed collections,
+        /// a shallow member-wise copy is sufficient.
+        /// </summary>
+        public TruthRule Clone()
+        {
+            return new TruthRule
+            {
+                RuleId = RuleId,
+                Enabled = Enabled,
+                Priority = Priority,
+                Scope = Scope,
+                AccountSide = AccountSide,
+                GuaranteeType = GuaranteeType,
+                TransactionType = TransactionType,
+                Booking = Booking,
+                HasDwingsLink = HasDwingsLink,
+                IsGrouped = IsGrouped,
+                IsAmountMatch = IsAmountMatch,
+                MissingAmountMin = MissingAmountMin,
+                MissingAmountMax = MissingAmountMax,
+                Sign = Sign,
+                MTStatus = MTStatus,
+                CommIdEmail = CommIdEmail,
+                BgiStatusInitiated = BgiStatusInitiated,
+                InvoiceStatus = InvoiceStatus,
+                PaymentRequestStatus = PaymentRequestStatus,
+                TriggerDateIsNull = TriggerDateIsNull,
+                DaysSinceTriggerMin = DaysSinceTriggerMin,
+                DaysSinceTriggerMax = DaysSinceTriggerMax,
+                OperationDaysAgoMin = OperationDaysAgoMin,
+                OperationDaysAgoMax = OperationDaysAgoMax,
+                IsMatched = IsMatched,
+                HasManualMatch = HasManualMatch,
+                IsFirstRequest = IsFirstRequest,
+                IsNewLine = IsNewLine,
+                DaysSinceReminderMin = DaysSinceReminderMin,
+                DaysSinceReminderMax = DaysSinceReminderMax,
+                CurrentActionId = CurrentActionId,
+                IsActionDone = IsActionDone,
+                OutputActionId = OutputActionId,
+                OutputKpiId = OutputKpiId,
+                OutputIncidentTypeId = OutputIncidentTypeId,
+                OutputRiskyItem = OutputRiskyItem,
+                OutputReasonNonRiskyId = OutputReasonNonRiskyId,
+                OutputToRemind = OutputToRemind,
+                OutputToRemindDays = OutputToRemindDays,
+                OutputActionDone = OutputActionDone,
+                OutputFirstClaimToday = OutputFirstClaimToday,
+                ApplyTo = ApplyTo,
+                AutoApply = AutoApply,
+                Message = Message,
+                TriggerOnField = TriggerOnField,
+                RespectUserEdits = RespectUserEdits,
+                UserEditLockDays = UserEditLockDays,
+                Mode = Mode
+            };
+        }
     }
 
     /// <summary>

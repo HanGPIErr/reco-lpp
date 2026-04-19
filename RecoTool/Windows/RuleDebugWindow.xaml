@@ -38,7 +38,9 @@
                   GridLinesVisibility="Horizontal"
                   HeadersVisibility="Column"
                   AlternatingRowBackground="#F9F9F9"
-                  RowBackground="White">
+                  RowBackground="White"
+                  MouseDoubleClick="RulesDataGrid_MouseDoubleClick"
+                  ToolTip="Double-click a rule to edit it. Changes are saved immediately; close this window and double-click the AMBRE row again to re-evaluate.">
             <DataGrid.Columns>
                 <DataGridTextColumn Header="Order" Binding="{Binding DisplayOrder}" Width="50"/>
                 <DataGridTextColumn Header="ID" Binding="{Binding RuleId}" Width="50"/>

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Linq;
@@ -23,10 +23,58 @@ namespace RecoTool.Windows
         
         // Debounce checkbox saves to avoid multiple saves for the same row
         private readonly Dictionary<string, System.Threading.CancellationTokenSource> _checkboxSavePending = new Dictionary<string, System.Threading.CancellationTokenSource>();
+
+        // ── Archived-row write guard ─────────────────────────────────────────────────────────
+        // Archived (IsDeleted) rows are effectively read-only. Comments are the single
+        // exception — the business explicitly wants to keep annotating settled items, e.g. to
+        // log post-mortem notes or to route an @mention to another user. Every mutation path
+        // below funnels through IsFieldLockedByArchive so the rule lives in one place.
+        private static readonly HashSet<string> _archivedEditableFields = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase) { "Comments", "LastComment" };
+
+        // Re-entrancy flag for the checkbox revert path so setting IsChecked back doesn't
+        // trigger CheckBox_CheckedChanged a second time (which would otherwise save on the revert).
+        private bool _revertingArchivedCheckbox;
+
+        // Rate-limit the "you can't edit this row" toast so the user sees it once per row
+        // they attack instead of getting spammed on every keystroke.
+        private string _lastArchivedToastRowId;
+
+        /// <summary>
+        /// Returns <c>true</c> when <paramref name="row"/> is archived AND <paramref name="mappingName"/>
+        /// is not in the whitelist of fields we still let through (Comments). Unknown mapping names
+        /// are treated as locked — unsafe-by-default so a new editable column doesn't accidentally
+        /// leak past the guard without an explicit review here.
+        /// </summary>
+        private static bool IsFieldLockedByArchive(ReconciliationViewData row, string mappingName)
+        {
+            if (row == null || !row.IsDeleted) return false;
+            if (string.IsNullOrEmpty(mappingName)) return true;
+            return !_archivedEditableFields.Contains(mappingName);
+        }
+
+        /// <summary>
+        /// Shows a one-shot toast when the user keeps trying to edit a locked archived row.
+        /// Deduped per row id so rapid key/click bursts don't stack notifications.
+        /// </summary>
+        private void NotifyArchivedRowBlocked(ReconciliationViewData row)
+        {
+            try
+            {
+                var rid = row?.ID ?? string.Empty;
+                if (string.Equals(_lastArchivedToastRowId, rid, StringComparison.OrdinalIgnoreCase)) return;
+                _lastArchivedToastRowId = rid;
+                ShowToast("🔒 Archived row — only comments can be edited.");
+            }
+            catch { }
+        }
         private async void CheckBox_CheckedChanged(object sender, RoutedEventArgs e)
         {
             try
             {
+                // Short-circuit the re-entrant notification fired by our own revert write below.
+                if (_revertingArchivedCheckbox) return;
+
                 var checkBox = sender as CheckBox;
                 if (checkBox == null) return;
                 
@@ -40,6 +88,18 @@ namespace RecoTool.Windows
                 
                 var row = checkBox.DataContext as ReconciliationViewData;
                 if (row == null || string.IsNullOrEmpty(row.ID)) return;
+
+                // No checkbox column is in the whitelist, so any archived row click is blocked.
+                // Flip IsChecked back to undo the TwoWay update the click just pushed onto the DTO
+                // — otherwise the checkbox visual would stay on while the DB stays off.
+                if (row.IsDeleted)
+                {
+                    _revertingArchivedCheckbox = true;
+                    try { checkBox.IsChecked = !(checkBox.IsChecked ?? false); }
+                    finally { _revertingArchivedCheckbox = false; }
+                    NotifyArchivedRowBlocked(row);
+                    return;
+                }
                 
                 // Cancel any pending save for this row
                 if (_checkboxSavePending.TryGetValue(row.ID, out var existingCts))
@@ -90,6 +150,22 @@ namespace RecoTool.Windows
 
                 var row = cb.DataContext as ReconciliationViewData;
                 if (row == null) return;
+
+                // None of the ComboBox popups (Action / KPI / IncidentType / Risky / ActionStatus)
+                // are whitelisted on archived rows — revert the pick and bail.
+                if (row.IsDeleted)
+                {
+                    try
+                    {
+                        if (e.RemovedItems != null && e.RemovedItems.Count == 1)
+                            cb.SelectedItem = e.RemovedItems[0];
+                        else
+                            cb.SelectedItem = null;
+                    }
+                    catch { }
+                    NotifyArchivedRowBlocked(row);
+                    return;
+                }
 
                 // Determine which field changed via Tag
                 var tag = cb.Tag as string;
@@ -246,6 +322,14 @@ namespace RecoTool.Windows
                     return;
                 }
 
+                // Defence-in-depth: CurrentCellBeginEdit cancels locked edits first, but older
+                // Syncfusion paths occasionally skip BeginEdit for programmatic commits.
+                if (IsFieldLockedByArchive(rowData, mappingName))
+                {
+                    NotifyArchivedRowBlocked(rowData);
+                    return;
+                }
+
                 // CRITICAL: SfDataGrid fires CurrentCellEndEdit BEFORE updating the binding source.
                 // Capture the new value from the focused TextBox and write it to the row property
                 // immediately so that SaveEditedRowAsync sees the new value instead of the old one
@@ -289,11 +373,109 @@ namespace RecoTool.Windows
             }
         }
 
-        // Loads existing reconciliation and maps editable fields from the view row, then saves
+        // Persist checkbox toggles (ToRemind / ACK / RiskyItem).
+        // PERF/BUG: GridCheckBoxColumn does NOT fire CurrentCellEndEdit when EditTrigger="OnDoubleTap"
+        // because a single click on a checkbox just flips the bound property via TwoWay binding
+        // without entering/leaving the grid's edit mode. CurrentCellValueChanged DOES fire in that
+        // case, so we rely on it — but ONLY for checkbox columns, otherwise we'd double-save the
+        // text/date edits already handled by CurrentCellEndEdit.
+        private void ResultsDataGrid_CurrentCellValueChanged(object sender, Syncfusion.UI.Xaml.Grid.CurrentCellValueChangedEventArgs e)
+        {
+            try
+            {
+                var grid = sender as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (grid == null) return;
+
+                int colIdx = grid.ResolveToGridVisibleColumnIndex(e.RowColumnIndex.ColumnIndex);
+                if (colIdx < 0 || colIdx >= grid.Columns.Count) return;
+                var column = grid.Columns[colIdx];
+                if (!(column is Syncfusion.UI.Xaml.Grid.GridCheckBoxColumn)) return;
+
+                var rowData = grid.GetRecordAtRowIndex(e.RowColumnIndex.RowIndex) as ReconciliationViewData;
+                if (rowData == null) return;
+
+                // No checkbox column is whitelisted for archived rows. Block the save path here
+                // and rely on CheckBox_CheckedChanged (for templated CheckBoxes) + the DTO
+                // setters to roll back the visual state.
+                if (IsFieldLockedByArchive(rowData, column.MappingName ?? string.Empty))
+                {
+                    NotifyArchivedRowBlocked(rowData);
+                    return;
+                }
+
+                // Defer to let the binding source finish updating before we read it.
+                Dispatcher?.BeginInvoke(new Action(async () =>
+                {
+                    try
+                    {
+                        await SaveEditedRowAsync(rowData);
+                    }
+                    catch (Exception ex)
+                    {
+                        ShowError($"Save error (checkbox): {ex.Message}");
+                    }
+                }), System.Windows.Threading.DispatcherPriority.Background);
+            }
+            catch (Exception ex)
+            {
+                ShowError($"Save error (checkbox handler): {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Cancels cell-level editing before it starts when the row is archived and the target
+        /// column isn't whitelisted (only Comments / LastComment pass). This is the <b>primary</b>
+        /// protection — it prevents the cell from entering edit mode at all, so the user sees the
+        /// "can't edit" toast instead of a half-committed edit. CurrentCellEndEdit + the per-
+        /// handler guards below are fallbacks for paths where BeginEdit is skipped (programmatic
+        /// commits, native check-box toggles).
+        /// </summary>
+        private void ResultsDataGrid_CurrentCellBeginEdit(object sender, Syncfusion.UI.Xaml.Grid.CurrentCellBeginEditEventArgs e)
+        {
+            try
+            {
+                var grid = sender as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+                if (grid == null) return;
+
+                var rowData = grid.GetRecordAtRowIndex(e.RowColumnIndex.RowIndex) as ReconciliationViewData;
+                if (rowData == null || !rowData.IsDeleted) return;
+
+                int colIdx = grid.ResolveToGridVisibleColumnIndex(e.RowColumnIndex.ColumnIndex);
+                if (colIdx < 0 || colIdx >= grid.Columns.Count) return;
+
+                var mapping = grid.Columns[colIdx]?.MappingName ?? string.Empty;
+                if (IsFieldLockedByArchive(rowData, mapping))
+                {
+                    e.Cancel = true;
+                    NotifyArchivedRowBlocked(rowData);
+                }
+            }
+            catch { /* swallow — never block navigation on a guard failure */ }
+        }
+
+        // Loads existing reconciliation and maps editable fields from the view row, then saves.
+        // Final safety net for the archived-row guard: when the caller has slipped past all the
+        // upstream checks, we fold the save to a Comments-only update so the rest of the row stays
+        // exactly as it sits on disk.
         private async Task SaveEditedRowAsync(ReconciliationViewData row)
         {
             if (_reconciliationService == null || row == null) return;
             var reco = await _reconciliationService.GetOrCreateReconciliationAsync(row.ID);
+
+            // Archived rows — only Comments can change. Short-circuit to a minimal save path so
+            // no stale field from the view DTO overwrites the persisted record.
+            if (row.IsDeleted)
+            {
+                if (!string.Equals(reco.Comments, row.Comments, StringComparison.Ordinal))
+                {
+                    reco.Comments = row.Comments;
+                    await _reconciliationService.SaveReconciliationAsync(reco, applyRulesOnEdit: false);
+                    StampRowsModified(new[] { row });
+                    try { ScheduleBulkPushDebounced(); } catch { }
+                    try { RefreshActivityLog(); } catch { }
+                }
+                return;
+            }
 
             // Track if linking fields changed (to know if we need to recalculate grouping)
             var oldInternalRef = reco.InternalInvoiceReference;
@@ -867,13 +1049,34 @@ namespace RecoTool.Windows
                 System.Diagnostics.Debug.WriteLine($"[PropagateTrigger] Error: {ex.Message}");
             }
         }
-        // ── Popup editing for date/Assignee columns (converted to GridTextColumn for scroll perf) ──
+        // ── Popup editing for date/Assignee/UserField columns (converted to GridTextColumn for scroll perf) ──
         private static readonly HashSet<string> _datePopupColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "ActionDate", "FirstClaimDate", "LastClaimDate", "ToRemindDate"
         };
 
+        // mapping name → UserFieldOptionsConverter category parameter
+        private static readonly Dictionary<string, string> _userFieldPopupColumns = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "Action", "Action" },
+            { "KPI", "KPI" },
+            { "IncidentType", "Incident Type" },
+            { "ReasonNonRisky", "RISKY" }
+        };
+
+        // Shared converter instance — the cache it holds is static anyway, but sharing avoids
+        // allocating a new converter + interface vtable per popup open.
+        private static readonly UserFieldOptionsConverter _sharedUserFieldConverter = new UserFieldOptionsConverter();
+
+        // Popup infrastructure for inline cell editing.
+        // PERF: the Popup/Border instances are created once and reused across all editors
+        // (saves HWND + layered-window + DropShadowEffect D3D surface allocation per open).
+        // BUG FIX: _cellEditInner tracks the ComboBox/DatePicker so CloseEditPopup can close its
+        // dropdown BEFORE the outer popup is dismissed — otherwise the dropdown's own top-level
+        // popup window becomes orphaned (stays visible until the next click).
         private Popup _cellEditPopup;
+        private Border _cellEditBorder;
+        private FrameworkElement _cellEditInner;
 
         private void ResultsDataGrid_CellTapped(object sender, Syncfusion.UI.Xaml.Grid.GridCellTappedEventArgs e)
         {
@@ -887,6 +1090,16 @@ namespace RecoTool.Windows
                 if (col == null) return;
                 var mapping = col.MappingName ?? "";
 
+                // Archived rows: only the Comments dialog + the read-only Mbaw preview pass
+                // through. Everything else (date pickers, Assignee, ActionStatus, UserField
+                // popups) would mutate a row that's supposed to be frozen.
+                if (IsFieldLockedByArchive(row, mapping)
+                    && !string.Equals(mapping, "MbawData", StringComparison.OrdinalIgnoreCase))
+                {
+                    NotifyArchivedRowBlocked(row);
+                    return;
+                }
+
                 if (_datePopupColumns.Contains(mapping))
                 {
                     ShowDateEditPopup(grid, row, mapping);
@@ -895,6 +1108,24 @@ namespace RecoTool.Windows
                 {
                     ShowAssigneeEditPopup(grid, row);
                 }
+                else if (string.Equals(mapping, "ActionStatus", StringComparison.OrdinalIgnoreCase))
+                {
+                    ShowActionStatusEditPopup(grid, row);
+                }
+                else if (_userFieldPopupColumns.TryGetValue(mapping, out var category))
+                {
+                    ShowUserFieldEditPopup(grid, row, mapping, category);
+                }
+                else if (string.Equals(mapping, "LastComment", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Route Comments click through CellTapped instead of per-cell PreviewMouseLeftButtonUp
+                    // (used to be re-attached on every row recycle during scroll).
+                    _ = OpenCommentsDialogForAsync(row);
+                }
+                else if (string.Equals(mapping, "MbawData", StringComparison.OrdinalIgnoreCase))
+                {
+                    OpenMbawPreviewFor(row);
+                }
             }
             catch (Exception ex)
             {
@@ -902,10 +1133,83 @@ namespace RecoTool.Windows
             }
         }
 
-        private void ShowDateEditPopup(SfDataGrid grid, ReconciliationViewData row, string propertyName)
+        /// <summary>
+        /// Opens a read-only preview dialog for the MbawData column. Mirrors the legacy
+        /// MbawCell_Click handler but takes a row directly so it can be invoked from CellTapped
+        /// without re-binding a per-row click handler on every row recycle during scroll.
+        /// </summary>
+        private void OpenMbawPreviewFor(ReconciliationViewData row)
+        {
+            if (row == null) return;
+            try
+            {
+                var dlg = new PreviewTextDialog
+                {
+                    Owner = Window.GetWindow(this)
+                };
+                dlg.SetTitle("Mbaw Data");
+                dlg.SetContent(row.MbawData ?? string.Empty);
+                dlg.ShowDialog();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[OpenMbawPreviewFor] Error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Lazy-creates (or reuses) the shared popup shell and hosts <paramref name="content"/> in it.
+        /// Pass <paramref name="dropdownOwner"/> when the content contains a ComboBox or DatePicker
+        /// whose inner dropdown must be explicitly closed before the outer popup is dismissed.
+        /// </summary>
+        private void OpenEditPopup(FrameworkElement content, FrameworkElement dropdownOwner = null)
         {
             CloseEditPopup();
 
+            if (_cellEditPopup == null)
+            {
+                _cellEditBorder = new Border
+                {
+                    BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x3B, 0x82, 0xF6)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Background = System.Windows.Media.Brushes.White,
+                    Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 8, Opacity = 0.3, ShadowDepth = 2 }
+                };
+                _cellEditPopup = new Popup
+                {
+                    Child = _cellEditBorder,
+                    Placement = PlacementMode.MousePoint,
+                    StaysOpen = false,
+                    AllowsTransparency = true
+                };
+            }
+
+            _cellEditBorder.Child = content;
+            _cellEditInner = dropdownOwner ?? content;
+            _cellEditPopup.IsOpen = true;
+        }
+
+        private void CloseEditPopup()
+        {
+            // Close the inner dropdown BEFORE detaching the editor from the visual tree,
+            // otherwise the ComboBox/DatePicker's own top-level popup window stays visible
+            // as an orphan (the reported "list reste ouverte" bug).
+            if (_cellEditInner is ComboBox cb) cb.IsDropDownOpen = false;
+            else if (_cellEditInner is DatePicker dp) dp.IsDropDownOpen = false;
+            _cellEditInner = null;
+
+            if (_cellEditPopup != null)
+            {
+                _cellEditPopup.IsOpen = false;
+                // Release the content reference so it can be GC'd, but keep the Popup/Border
+                // alive for reuse by the next OpenEditPopup call.
+                if (_cellEditBorder != null) _cellEditBorder.Child = null;
+            }
+        }
+
+        private void ShowDateEditPopup(SfDataGrid grid, ReconciliationViewData row, string propertyName)
+        {
             var prop = typeof(ReconciliationViewData).GetProperty(propertyName);
             if (prop == null) return;
             var currentValue = prop.GetValue(row) as DateTime?;
@@ -918,49 +1222,14 @@ namespace RecoTool.Windows
                 Width = 140,
                 Margin = new Thickness(4)
             };
-
-            var todayBtn = new Button
-            {
-                Content = "📅 Today",
-                Padding = new Thickness(6, 2, 6, 2),
-                Margin = new Thickness(2, 4, 4, 4),
-                FontSize = 11
-            };
-
-            var clearBtn = new Button
-            {
-                Content = "✕",
-                Padding = new Thickness(6, 2, 6, 2),
-                Margin = new Thickness(0, 4, 2, 4),
-                FontSize = 11,
-                ToolTip = "Clear date"
-            };
+            var todayBtn = new Button { Content = "📅 Today", Padding = new Thickness(6, 2, 6, 2), Margin = new Thickness(2, 4, 4, 4), FontSize = 11 };
+            var clearBtn = new Button { Content = "✕", Padding = new Thickness(6, 2, 6, 2), Margin = new Thickness(0, 4, 2, 4), FontSize = 11, ToolTip = "Clear date" };
 
             var panel = new StackPanel { Orientation = Orientation.Horizontal, Background = System.Windows.Media.Brushes.White };
             panel.Children.Add(dp);
             panel.Children.Add(todayBtn);
             panel.Children.Add(clearBtn);
 
-            var border = new Border
-            {
-                Child = panel,
-                BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x3B, 0x82, 0xF6)),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(4),
-                Background = System.Windows.Media.Brushes.White,
-                Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 8, Opacity = 0.3, ShadowDepth = 2 }
-            };
-
-            _cellEditPopup = new Popup
-            {
-                Child = border,
-                Placement = PlacementMode.MousePoint,
-                StaysOpen = false,
-                AllowsTransparency = true,
-                IsOpen = true
-            };
-
-            // Wire events
             dp.SelectedDateChanged += async (s, args) =>
             {
                 prop.SetValue(row, dp.SelectedDate);
@@ -979,12 +1248,12 @@ namespace RecoTool.Windows
                 CloseEditPopup();
                 await SaveEditedRowAsync(row);
             };
+
+            OpenEditPopup(panel, dp);
         }
 
         private void ShowAssigneeEditPopup(SfDataGrid grid, ReconciliationViewData row)
         {
-            CloseEditPopup();
-
             var cb = new ComboBox
             {
                 Width = 180,
@@ -995,32 +1264,8 @@ namespace RecoTool.Windows
                 HorizontalContentAlignment = HorizontalAlignment.Center,
                 VerticalContentAlignment = VerticalAlignment.Center
             };
-
             // AssigneeOptions is a property on ReconciliationView (partial class in Options.cs)
-            try
-            {
-                cb.ItemsSource = AssigneeOptions;
-            }
-            catch { }
-
-            var border = new Border
-            {
-                Child = cb,
-                BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x3B, 0x82, 0xF6)),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(4),
-                Background = System.Windows.Media.Brushes.White,
-                Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 8, Opacity = 0.3, ShadowDepth = 2 }
-            };
-
-            _cellEditPopup = new Popup
-            {
-                Child = border,
-                Placement = PlacementMode.MousePoint,
-                StaysOpen = false,
-                AllowsTransparency = true,
-                IsOpen = true
-            };
+            try { cb.ItemsSource = AssigneeOptions; } catch { }
 
             cb.SelectionChanged += async (s, args) =>
             {
@@ -1028,18 +1273,125 @@ namespace RecoTool.Windows
                 CloseEditPopup();
                 await SaveEditedRowAsync(row);
             };
+            // Safety net: if the user dismisses the dropdown (Escape, click outside, click on
+            // another cell), close the outer popup too. Deferred so SelectionChanged's
+            // CloseEditPopup runs first when a selection is made (idempotent otherwise).
+            cb.DropDownClosed += (s, args) =>
+                Dispatcher?.BeginInvoke(new Action(() => CloseEditPopup()), System.Windows.Threading.DispatcherPriority.Background);
 
-            // Open dropdown immediately
+            OpenEditPopup(cb);
             cb.IsDropDownOpen = true;
         }
 
-        private void CloseEditPopup()
+        /// <summary>
+        /// Shared popup editor for Action / KPI / IncidentType / ReasonNonRisky columns.
+        /// Replaces the previous GridTemplateColumn+ComboBox EditTemplate — those templates
+        /// were instantiated per row and dragged the scroll performance down. A single popup
+        /// is shown on tap and disposed on selection.
+        /// </summary>
+        private void ShowUserFieldEditPopup(SfDataGrid grid, ReconciliationViewData row, string propertyName, string category)
         {
-            if (_cellEditPopup != null)
+            var prop = typeof(ReconciliationViewData).GetProperty(propertyName);
+            if (prop == null) return;
+
+            // The converter returns a cached List<UserFieldOption> from its static cache (keyed by
+            // category+accountSide). Feed it straight to ItemsSource — no per-open copy needed.
+            System.Collections.IEnumerable options = Array.Empty<UserFieldOption>();
+            try
             {
-                _cellEditPopup.IsOpen = false;
-                _cellEditPopup = null;
+                options = _sharedUserFieldConverter.Convert(
+                    new object[] { row.Account_ID, AllUserFields, CurrentCountryObject },
+                    typeof(System.Collections.IEnumerable),
+                    category,
+                    System.Globalization.CultureInfo.CurrentCulture) as System.Collections.IEnumerable
+                    ?? Array.Empty<UserFieldOption>();
             }
+            catch { }
+
+            var cb = new ComboBox
+            {
+                Width = 180,
+                Margin = new Thickness(4),
+                DisplayMemberPath = "USR_FieldName",
+                SelectedValuePath = "USR_ID",
+                SelectedValue = prop.GetValue(row),
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                ItemsSource = options
+            };
+
+            cb.SelectionChanged += async (s, args) =>
+            {
+                try
+                {
+                    // SelectedValue is int? for Action/KPI/IncidentType/ReasonNonRisky
+                    int? newId = cb.SelectedValue as int?;
+                    prop.SetValue(row, newId);
+
+                    // Keep the display-name cache in sync so the cell repaints immediately
+                    // without waiting for a full enrich pass.
+                    var displayName = (cb.SelectedItem as UserFieldOption)?.USR_FieldName ?? string.Empty;
+                    switch (propertyName)
+                    {
+                        case "Action":         row.ActionDisplayName = displayName; break;
+                        case "KPI":            row.KpiDisplayName = displayName; break;
+                        case "IncidentType":   row.IncidentTypeDisplayName = displayName; break;
+                        case "ReasonNonRisky": row.ReasonNonRiskyDisplayName = displayName; break;
+                    }
+
+                    CloseEditPopup();
+                    await SaveEditedRowAsync(row);
+
+                    // If the Action is TRIGGER, propagate to the whole group (same BGI / BGPMT / InternalInvoiceRef).
+                    // This replicates the legacy UserFieldComboBox_SelectionChanged behaviour.
+                    if (string.Equals(propertyName, "Action", StringComparison.OrdinalIgnoreCase)
+                        && newId.HasValue && newId.Value == (int)ActionType.Trigger)
+                    {
+                        await PropagateTriggerToGroupAsync(row);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[UserFieldPopup] {propertyName} save error: {ex.Message}");
+                }
+            };
+            // Safety net: dropdown dismissed without selection (Escape / click outside) → close outer popup.
+            cb.DropDownClosed += (s, args) =>
+                Dispatcher?.BeginInvoke(new Action(() => CloseEditPopup()), System.Windows.Threading.DispatcherPriority.Background);
+
+            OpenEditPopup(cb);
+            cb.IsDropDownOpen = true;
+        }
+
+        /// <summary>
+        /// Simple two-state popup for ActionStatus (PENDING/DONE). Cheaper than a ComboBox
+        /// with custom items: just two buttons in a stack.
+        /// </summary>
+        private void ShowActionStatusEditPopup(SfDataGrid grid, ReconciliationViewData row)
+        {
+            var stack = new StackPanel { Orientation = Orientation.Vertical, Margin = new Thickness(2) };
+            var btnPending = new Button { Content = "⏳ PENDING", Padding = new Thickness(10, 4, 10, 4), Margin = new Thickness(2), HorizontalContentAlignment = HorizontalAlignment.Left };
+            var btnDone = new Button { Content = "✓ DONE", Padding = new Thickness(10, 4, 10, 4), Margin = new Thickness(2), HorizontalContentAlignment = HorizontalAlignment.Left };
+            stack.Children.Add(btnPending);
+            stack.Children.Add(btnDone);
+
+            async void Commit(bool? done)
+            {
+                try
+                {
+                    row.ActionStatus = done;
+                    CloseEditPopup();
+                    await SaveEditedRowAsync(row);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[ActionStatusPopup] error: {ex.Message}");
+                }
+            }
+            btnPending.Click += (s, a) => Commit(false);
+            btnDone.Click += (s, a) => Commit(true);
+
+            OpenEditPopup(stack);
         }
     }
 }

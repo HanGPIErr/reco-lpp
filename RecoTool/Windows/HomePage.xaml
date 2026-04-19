@@ -86,10 +86,11 @@
                             <TextBlock Text="Import Ambre" FontSize="14" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
-                    <Button Height="38" MinWidth="160" Style="{StaticResource StandardButtonStyle}" VerticalAlignment="Center" Click="OpenReports_Click" Margin="0,0,10,10">
+                    <Button Height="38" MinWidth="160" Style="{StaticResource StandardButtonStyle}" VerticalAlignment="Center" Click="OpenReports_Click" Margin="0,0,10,10"
+                            ToolTip="Exports a multi-sheet Excel dashboard (KPIs, breakdowns, alerts, all reconciliations) for the currently selected country.">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE9F9;" FontFamily="Segoe MDL2 Assets" FontSize="16" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                            <TextBlock Text="Reports &amp; Exports" FontSize="14" VerticalAlignment="Center"/>
+                            <TextBlock Text="Export Dashboard" FontSize="14" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
                     <Button Height="38" MinWidth="160" Style="{StaticResource StandardButtonStyle}" VerticalAlignment="Center" Click="ExportDailyKpi_Click" Margin="0,0,10,10">

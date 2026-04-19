@@ -1,4 +1,4 @@
-<Window x:Class="RecoTool.Windows.RulesHealthWindow"
+﻿<Window x:Class="RecoTool.Windows.RulesHealthWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -57,132 +57,7 @@
         </Border>
 
         <TabControl x:Name="MainTabs" Margin="8">
-            <!-- ============================ TAB 1 : SIMULATOR ============================ -->
-            <TabItem Header="🔬 Simulator">
-                <DockPanel Margin="8">
-                    <!-- Controls -->
-                    <Border DockPanel.Dock="Top" Background="White" Padding="12" CornerRadius="4" Margin="0,0,0,8">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="Scope:"/>
-                            <ComboBox x:Name="SimScopeCombo" Width="110" Margin="6,0,12,0" SelectedIndex="0">
-                                <ComboBoxItem Content="Import" Tag="Import"/>
-                                <ComboBoxItem Content="Edit" Tag="Edit"/>
-                                <ComboBoxItem Content="Both" Tag="Both"/>
-                            </ComboBox>
-                            <Button Content="▶ Run Simulation" Click="RunSimulation_Click" Background="#27AE60" Foreground="White" FontWeight="SemiBold" Padding="14,6"/>
-                            <Button Content="Export CSV" Click="ExportSimulation_Click" IsEnabled="False" x:Name="ExportSimBtn"/>
-                            <Separator Margin="10,0"/>
-                            <TextBlock Text="Filter rules:" Margin="6,0"/>
-                            <TextBox x:Name="SimFilterBox" Width="220" TextChanged="SimFilter_TextChanged" VerticalContentAlignment="Center"/>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- KPI summary -->
-                    <Border DockPanel.Dock="Top" Background="White" Padding="8" CornerRadius="4" Margin="0,0,0,8">
-                        <StackPanel Orientation="Horizontal">
-                            <Border Style="{StaticResource Kpi}" Background="#ECF0F1">
-                                <StackPanel>
-                                    <TextBlock Text="TOTAL ROWS" FontSize="10" Foreground="#7F8C8D"/>
-                                    <TextBlock x:Name="SimTotalText" Text="—" FontSize="20" FontWeight="Bold"/>
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource Kpi}" Background="#E8F8F5">
-                                <StackPanel>
-                                    <TextBlock Text="MATCHED" FontSize="10" Foreground="#148F77"/>
-                                    <TextBlock x:Name="SimMatchedText" Text="—" FontSize="20" FontWeight="Bold" Foreground="#148F77"/>
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource Kpi}" Background="#FDEDEC">
-                                <StackPanel>
-                                    <TextBlock Text="UNMATCHED" FontSize="10" Foreground="#C0392B"/>
-                                    <TextBlock x:Name="SimUnmatchedText" Text="—" FontSize="20" FontWeight="Bold" Foreground="#C0392B"/>
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource Kpi}" Background="#FEF9E7">
-                                <StackPanel>
-                                    <TextBlock Text="DEAD RULES" FontSize="10" Foreground="#B7950B"/>
-                                    <TextBlock x:Name="SimDeadText" Text="—" FontSize="20" FontWeight="Bold" Foreground="#B7950B"/>
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource Kpi}" Background="#EAF2F8">
-                                <StackPanel>
-                                    <TextBlock Text="ACTIVE RULES" FontSize="10" Foreground="#21618C"/>
-                                    <TextBlock x:Name="SimActiveText" Text="—" FontSize="20" FontWeight="Bold" Foreground="#21618C"/>
-                                </StackPanel>
-                            </Border>
-                            <StackPanel VerticalAlignment="Center" Margin="18,0,0,0">
-                                <TextBlock x:Name="SimRunAtText" Text="" Foreground="#7F8C8D" FontStyle="Italic"/>
-                                <TextBlock x:Name="SimSummaryText" Text="Click 'Run Simulation' to evaluate all rules against the current dataset."
-                                           TextWrapping="Wrap" MaxWidth="600" Foreground="#2C3E50"/>
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Grid with results -->
-                    <DataGrid x:Name="SimGrid"
-                              AutoGenerateColumns="False"
-                              IsReadOnly="True"
-                              CanUserAddRows="False"
-                              CanUserDeleteRows="False"
-                              GridLinesVisibility="Horizontal"
-                              AlternatingRowBackground="#FAFBFC"
-                              SelectionMode="Single"
-                              SelectionChanged="SimGrid_SelectionChanged"
-                              Background="White"
-                              HeadersVisibility="Column">
-                        <DataGrid.Columns>
-                            <DataGridTemplateColumn Header="Status" Width="80">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Border CornerRadius="10" Padding="6,2" HorizontalAlignment="Center">
-                                            <Border.Style>
-                                                <Style TargetType="Border">
-                                                    <Setter Property="Background" Value="#27AE60"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsDead}" Value="True">
-                                                            <Setter Property="Background" Value="#E74C3C"/>
-                                                        </DataTrigger>
-                                                        <DataTrigger Binding="{Binding Enabled}" Value="False">
-                                                            <Setter Property="Background" Value="#95A5A6"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Border.Style>
-                                            <TextBlock Text="{Binding StatusBadge}" Foreground="White" FontSize="10" FontWeight="Bold"/>
-                                        </Border>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="Rule ID" Binding="{Binding RuleId}" Width="260"/>
-                            <DataGridTextColumn Header="Prio" Binding="{Binding Priority}" Width="60"/>
-                            <DataGridTextColumn Header="Scope" Binding="{Binding Scope}" Width="70"/>
-                            <DataGridTextColumn Header="Hits" Binding="{Binding HitCount}" Width="80">
-                                <DataGridTextColumn.ElementStyle>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="FontWeight" Value="Bold"/>
-                                        <Setter Property="HorizontalAlignment" Value="Right"/>
-                                        <Setter Property="Padding" Value="0,0,12,0"/>
-                                    </Style>
-                                </DataGridTextColumn.ElementStyle>
-                            </DataGridTextColumn>
-                            <DataGridTextColumn Header="% Coverage" Binding="{Binding CoverageDisplay}" Width="100">
-                                <DataGridTextColumn.ElementStyle>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="HorizontalAlignment" Value="Right"/>
-                                        <Setter Property="Padding" Value="0,0,12,0"/>
-                                    </Style>
-                                </DataGridTextColumn.ElementStyle>
-                            </DataGridTextColumn>
-                            <DataGridTextColumn Header="Last applied (log)" Binding="{Binding LastAppliedDisplay}" Width="140"/>
-                            <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled}" Width="70"/>
-                            <DataGridCheckBoxColumn Header="Auto" Binding="{Binding AutoApply}" Width="60"/>
-                            <DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="*"/>
-                        </DataGrid.Columns>
-                    </DataGrid>
-                </DockPanel>
-            </TabItem>
-
-            <!-- ============================ TAB 2 : COVERAGE REPORT ============================ -->
+            <!-- ============================ TAB 1 : COVERAGE REPORT ============================ -->
             <TabItem Header="📊 Coverage Report">
                 <DockPanel Margin="8">
                     <Border DockPanel.Dock="Top" Background="White" Padding="12" CornerRadius="4" Margin="0,0,0,8">
@@ -243,193 +118,12 @@
                 </DockPanel>
             </TabItem>
 
-            <!-- ============================ TAB 3 : RULE TESTER ============================ -->
-            <TabItem Header="🧪 Tester">
-                <Grid Margin="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="420"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-
-                    <!-- Left: context form -->
-                    <Border Grid.Column="0" Background="White" Padding="12" CornerRadius="4" Margin="0,0,8,0">
-                        <DockPanel>
-                            <TextBlock DockPanel.Dock="Top" Text="Synthetic context" Style="{StaticResource SectionHeader}"/>
-                            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
-                                <Button Content="▶ Evaluate" Click="RunTest_Click" Background="#8E44AD" Foreground="White" FontWeight="SemiBold"/>
-                                <Button Content="Load from line..." Click="LoadContextFromLine_Click"/>
-                                <Button Content="Reset" Click="ResetTesterForm_Click"/>
-                            </StackPanel>
-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="170"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                    </Grid.RowDefinitions>
-                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Scope" Margin="0,4"/>
-                                    <ComboBox Grid.Row="0" Grid.Column="1" x:Name="TestScopeCombo" SelectedIndex="0" Margin="0,2">
-                                        <ComboBoxItem Content="Import" Tag="Import"/>
-                                        <ComboBoxItem Content="Edit" Tag="Edit"/>
-                                    </ComboBox>
-                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Country ID" Margin="0,4"/>
-                                    <TextBox Grid.Row="1" Grid.Column="1" x:Name="TestCountryBox" Margin="0,2"/>
-                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="IsPivot" Margin="0,4"/>
-                                    <CheckBox Grid.Row="2" Grid.Column="1" x:Name="TestIsPivotChk" Margin="0,6" IsThreeState="False"/>
-                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="GuaranteeType" Margin="0,4"/>
-                                    <ComboBox Grid.Row="3" Grid.Column="1" x:Name="TestGuaranteeCombo" IsEditable="True" Margin="0,2">
-                                        <ComboBoxItem Content="(null)"/>
-                                        <ComboBoxItem Content="ISSUANCE"/>
-                                        <ComboBoxItem Content="REISSUANCE"/>
-                                        <ComboBoxItem Content="ADVISING"/>
-                                    </ComboBox>
-                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="TransactionType" Margin="0,4"/>
-                                    <ComboBox Grid.Row="4" Grid.Column="1" x:Name="TestTransactionCombo" IsEditable="True" Margin="0,2"/>
-                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="HasDwingsLink" Margin="0,4"/>
-                                    <CheckBox Grid.Row="5" Grid.Column="1" x:Name="TestHasDwingsChk" Margin="0,6" IsThreeState="True"/>
-                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="IsGrouped" Margin="0,4"/>
-                                    <CheckBox Grid.Row="6" Grid.Column="1" x:Name="TestIsGroupedChk" Margin="0,6" IsThreeState="True"/>
-                                    <TextBlock Grid.Row="7" Grid.Column="0" Text="IsAmountMatch" Margin="0,4"/>
-                                    <CheckBox Grid.Row="7" Grid.Column="1" x:Name="TestIsAmountMatchChk" Margin="0,6" IsThreeState="True"/>
-                                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Sign" Margin="0,4"/>
-                                    <ComboBox Grid.Row="8" Grid.Column="1" x:Name="TestSignCombo" Margin="0,2" SelectedIndex="0">
-                                        <ComboBoxItem Content="*" Tag=""/>
-                                        <ComboBoxItem Content="C (Credit)" Tag="C"/>
-                                        <ComboBoxItem Content="D (Debit)" Tag="D"/>
-                                    </ComboBox>
-                                    <TextBlock Grid.Row="9" Grid.Column="0" Text="MT Status" Margin="0,4"/>
-                                    <ComboBox Grid.Row="9" Grid.Column="1" x:Name="TestMtStatusCombo" Margin="0,2" SelectedIndex="0">
-                                        <ComboBoxItem Content="(null)" Tag=""/>
-                                        <ComboBoxItem Content="ACKED" Tag="ACKED"/>
-                                        <ComboBoxItem Content="NOT_ACKED" Tag="NOT_ACKED"/>
-                                    </ComboBox>
-                                    <TextBlock Grid.Row="10" Grid.Column="0" Text="CommIdEmail" Margin="0,4"/>
-                                    <CheckBox Grid.Row="10" Grid.Column="1" x:Name="TestCommIdEmailChk" Margin="0,6" IsThreeState="True"/>
-                                    <TextBlock Grid.Row="11" Grid.Column="0" Text="BgiInitiated" Margin="0,4"/>
-                                    <CheckBox Grid.Row="11" Grid.Column="1" x:Name="TestBgiInitiatedChk" Margin="0,6" IsThreeState="True"/>
-                                    <TextBlock Grid.Row="12" Grid.Column="0" Text="PaymentReqStatus" Margin="0,4"/>
-                                    <TextBox Grid.Row="12" Grid.Column="1" x:Name="TestPaymentStatusBox" Margin="0,2"/>
-                                    <TextBlock Grid.Row="13" Grid.Column="0" Text="InvoiceStatus" Margin="0,4"/>
-                                    <TextBox Grid.Row="13" Grid.Column="1" x:Name="TestInvoiceStatusBox" Margin="0,2"/>
-                                    <TextBlock Grid.Row="14" Grid.Column="0" Text="IsFirstRequest" Margin="0,4"/>
-                                    <CheckBox Grid.Row="14" Grid.Column="1" x:Name="TestIsFirstRequestChk" Margin="0,6" IsThreeState="True"/>
-                                    <TextBlock Grid.Row="15" Grid.Column="0" Text="IsNewLine" Margin="0,4"/>
-                                    <CheckBox Grid.Row="15" Grid.Column="1" x:Name="TestIsNewLineChk" Margin="0,6" IsThreeState="True"/>
-                                    <TextBlock Grid.Row="16" Grid.Column="0" Text="DaysSinceReminder" Margin="0,4"/>
-                                    <TextBox Grid.Row="16" Grid.Column="1" x:Name="TestDaysSinceReminderBox" Margin="0,2"/>
-                                    <TextBlock Grid.Row="17" Grid.Column="0" Text="CurrentActionId" Margin="0,4"/>
-                                    <TextBox Grid.Row="17" Grid.Column="1" x:Name="TestCurrentActionBox" Margin="0,2"/>
-                                    <TextBlock Grid.Row="18" Grid.Column="0" Text="IsActionDone" Margin="0,4"/>
-                                    <CheckBox Grid.Row="18" Grid.Column="1" x:Name="TestIsActionDoneChk" Margin="0,6" IsThreeState="True"/>
-                                </Grid>
-                            </ScrollViewer>
-                        </DockPanel>
-                    </Border>
-
-                    <!-- Right: result -->
-                    <Border Grid.Column="1" Background="White" Padding="12" CornerRadius="4">
-                        <DockPanel>
-                            <TextBlock DockPanel.Dock="Top" Text="Evaluation result" Style="{StaticResource SectionHeader}"/>
-                            <Border DockPanel.Dock="Top" x:Name="TestHeroBox" CornerRadius="4" Padding="10" Margin="0,0,0,8" Background="#ECF0F1">
-                                <TextBlock x:Name="TestHeroText" Text="Fill the context and click Evaluate." FontSize="13" TextWrapping="Wrap"/>
-                            </Border>
-                            <DataGrid x:Name="TestGrid"
-                                      AutoGenerateColumns="False"
-                                      IsReadOnly="True"
-                                      CanUserAddRows="False"
-                                      GridLinesVisibility="Horizontal"
-                                      AlternatingRowBackground="#FAFBFC">
-                                <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Order" Binding="{Binding Order}" Width="50"/>
-                                    <DataGridTextColumn Header="Rule ID" Binding="{Binding Rule.RuleId}" Width="260"/>
-                                    <DataGridTextColumn Header="Prio" Binding="{Binding Rule.Priority}" Width="60"/>
-                                    <DataGridTemplateColumn Header="Match" Width="80">
-                                        <DataGridTemplateColumn.CellTemplate>
-                                            <DataTemplate>
-                                                <Border CornerRadius="10" Padding="6,2" HorizontalAlignment="Center">
-                                                    <Border.Style>
-                                                        <Style TargetType="Border">
-                                                            <Setter Property="Background" Value="#27AE60"/>
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsMatch}" Value="False">
-                                                                    <Setter Property="Background" Value="#E74C3C"/>
-                                                                </DataTrigger>
-                                                                <DataTrigger Binding="{Binding IsEnabled}" Value="False">
-                                                                    <Setter Property="Background" Value="#95A5A6"/>
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Border.Style>
-                                                    <TextBlock Foreground="White" FontWeight="Bold" FontSize="10">
-                                                        <TextBlock.Style>
-                                                            <Style TargetType="TextBlock">
-                                                                <Setter Property="Text" Value="MATCH"/>
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding IsMatch}" Value="False">
-                                                                        <Setter Property="Text" Value="NO"/>
-                                                                    </DataTrigger>
-                                                                    <DataTrigger Binding="{Binding IsEnabled}" Value="False">
-                                                                        <Setter Property="Text" Value="OFF"/>
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </TextBlock.Style>
-                                                    </TextBlock>
-                                                </Border>
-                                            </DataTemplate>
-                                        </DataGridTemplateColumn.CellTemplate>
-                                    </DataGridTemplateColumn>
-                                    <DataGridTemplateColumn Header="Conditions (expected → actual)" Width="*">
-                                        <DataGridTemplateColumn.CellTemplate>
-                                            <DataTemplate>
-                                                <ItemsControl ItemsSource="{Binding Conditions}" Margin="4">
-                                                    <ItemsControl.ItemTemplate>
-                                                        <DataTemplate>
-                                                            <TextBlock Margin="2" FontFamily="Consolas" FontSize="11">
-                                                                <TextBlock.Style>
-                                                                    <Style TargetType="TextBlock">
-                                                                        <Setter Property="Foreground" Value="#148F77"/>
-                                                                        <Style.Triggers>
-                                                                            <DataTrigger Binding="{Binding IsMet}" Value="False">
-                                                                                <Setter Property="Foreground" Value="#C0392B"/>
-                                                                                <Setter Property="FontWeight" Value="Bold"/>
-                                                                            </DataTrigger>
-                                                                        </Style.Triggers>
-                                                                    </Style>
-                                                                </TextBlock.Style>
-                                                                <Run Text="{Binding Field, Mode=OneWay}" FontWeight="SemiBold"/>
-                                                                <Run Text=": "/>
-                                                                <Run Text="{Binding Expected, Mode=OneWay}"/>
-                                                                <Run Text=" → "/>
-                                                                <Run Text="{Binding Actual, Mode=OneWay}" FontStyle="Italic"/>
-                                                            </TextBlock>
-                                                        </DataTemplate>
-                                                    </ItemsControl.ItemTemplate>
-                                                </ItemsControl>
-                                            </DataTemplate>
-                                        </DataGridTemplateColumn.CellTemplate>
-                                    </DataGridTemplateColumn>
-                                </DataGrid.Columns>
-                            </DataGrid>
-                        </DockPanel>
-                    </Border>
-                </Grid>
-            </TabItem>
-
-            <!-- ============================ TAB 4 : IMPACT PREVIEW ============================ -->
+            <!-- ============================ TAB 2 : IMPACT PREVIEW ============================ -->
             <TabItem Header="🎯 Impact Preview">
                 <DockPanel Margin="8">
                     <Border DockPanel.Dock="Top" Background="White" Padding="12" CornerRadius="4" Margin="0,0,0,8">
                         <StackPanel>
-                            <TextBlock Text="Select a rule to preview its impact on the current dataset. The draft is compared to the current rule-set; you see which rows would start/stop matching without saving anything."
+                            <TextBlock Text="Pick a rule, optionally edit a draft version in memory, then Run Preview: the current rule-set is compared to the draft to show which rows would start/stop matching — nothing is saved to the DB."
                                        TextWrapping="Wrap" Foreground="#566573" Margin="0,0,0,6"/>
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="Rule:"/>
@@ -439,8 +133,14 @@
                                     <ComboBoxItem Content="Import" Tag="Import"/>
                                     <ComboBoxItem Content="Edit" Tag="Edit"/>
                                 </ComboBox>
-                                <Button Content="▶ Run Preview" Click="RunImpact_Click" Background="#D35400" Foreground="White" FontWeight="SemiBold"/>
+                                <Button x:Name="EditImpactDraftButton" Content="✏️ Edit draft…" Click="EditImpactDraft_Click" Background="#8E44AD" Foreground="White" FontWeight="SemiBold" IsEnabled="False"
+                                        ToolTip="Open the rule editor on an IN-MEMORY copy. Changes are kept only for this preview — they are never persisted until you save the rule from Rules Admin."/>
+                                <Button Content="▶ Run Preview" Click="RunImpact_Click" Margin="6,0,0,0" Background="#D35400" Foreground="White" FontWeight="SemiBold"/>
+                                <Button x:Name="ClearImpactDraftButton" Content="✕" Click="ClearImpactDraft_Click" Margin="6,0,0,0" Padding="8,2" Background="Transparent" Foreground="#7F8C8D" BorderBrush="#BDC3C7" IsEnabled="False"
+                                        ToolTip="Discard the in-memory draft and preview against the saved version of the rule."/>
                             </StackPanel>
+                            <TextBlock x:Name="ImpactDraftStatusText" Margin="0,6,0,0" Foreground="#566573" FontStyle="Italic"
+                                       Text="No draft — preview will compare the saved rule against itself (no-op). Click 'Edit draft…' to modify a copy."/>
                         </StackPanel>
                     </Border>
 
@@ -504,25 +204,35 @@
                 </DockPanel>
             </TabItem>
 
-            <!-- ============================ TAB 5 : PENDING PROPOSALS ============================ -->
+            <!-- ============================ TAB 3 : PENDING PROPOSALS ============================ -->
             <TabItem Header="📋 Proposals">
                 <DockPanel Margin="8">
                     <!-- Controls -->
                     <Border DockPanel.Dock="Top" Background="White" Padding="12" CornerRadius="4" Margin="0,0,0,8">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="Status:"/>
-                            <ComboBox x:Name="PropStatusCombo" Width="140" Margin="6,0,12,0" SelectedIndex="0" SelectionChanged="ReloadProposals_Click">
-                                <ComboBoxItem Content="Pending" Tag="Pending"/>
-                                <ComboBoxItem Content="Accepted" Tag="Accepted"/>
-                                <ComboBoxItem Content="Rejected" Tag="Rejected"/>
-                                <ComboBoxItem Content="Stale" Tag="Stale"/>
-                                <ComboBoxItem Content="(all)" Tag=""/>
-                            </ComboBox>
-                            <Button Content="↻ Reload" Click="ReloadProposals_Click" Background="#3498DB" Foreground="White" FontWeight="SemiBold"/>
-                            <Separator Margin="10,0"/>
-                            <Button Content="✓ Accept selected" Click="AcceptProposals_Click" Background="#27AE60" Foreground="White" FontWeight="SemiBold"/>
-                            <Button Content="✗ Reject selected" Click="RejectProposals_Click" Background="#E74C3C" Foreground="White" FontWeight="SemiBold"/>
-                            <TextBlock x:Name="PropStatusText" Margin="14,0,0,0" VerticalAlignment="Center" Foreground="#566573"/>
+                        <StackPanel>
+                            <TextBlock Text="Proposals are created automatically by rules in Mode=Propose when they match during import or 'Run Rules Now'. Review and accept/reject them here — accepted proposals mutate the reconciliation, rejected ones leave it untouched."
+                                       TextWrapping="Wrap" Foreground="#566573" Margin="0,0,0,6"/>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Status:" VerticalAlignment="Center"/>
+                                <ComboBox x:Name="PropStatusCombo" Width="140" Margin="6,0,12,0" SelectedIndex="0" SelectionChanged="ReloadProposals_Click">
+                                    <ComboBoxItem Content="Pending" Tag="Pending"/>
+                                    <ComboBoxItem Content="Accepted" Tag="Accepted"/>
+                                    <ComboBoxItem Content="Rejected" Tag="Rejected"/>
+                                    <ComboBoxItem Content="Stale" Tag="Stale"/>
+                                    <ComboBoxItem Content="(all)" Tag=""/>
+                                </ComboBox>
+                                <TextBlock Text="Rule:" VerticalAlignment="Center"/>
+                                <ComboBox x:Name="PropRuleCombo" Width="220" Margin="6,0,12,0" SelectionChanged="PropRuleCombo_SelectionChanged"
+                                          ToolTip="Client-side filter: show only proposals produced by this rule."/>
+                                <Button Content="↻ Reload" Click="ReloadProposals_Click" Background="#3498DB" Foreground="White" FontWeight="SemiBold"
+                                        ToolTip="Re-query T_RuleProposals. If the list is empty, no rule in Mode=Propose has matched anything — switch a rule to Propose in Rules Admin, then run an import or click 'Run Rules Now'."/>
+                                <Separator Margin="10,0"/>
+                                <Button Content="✓ Accept selected" Click="AcceptProposals_Click" Background="#27AE60" Foreground="White" FontWeight="SemiBold"/>
+                                <Button Content="✗ Reject selected" Click="RejectProposals_Click" Background="#E74C3C" Foreground="White" FontWeight="SemiBold"/>
+                                <Button Content="⎘ Export CSV" Click="ExportProposals_Click" Margin="6,0,0,0" Background="#7F8C8D" Foreground="White" FontWeight="SemiBold"
+                                        ToolTip="Export the currently displayed proposals (after both status and rule filters) to a CSV file."/>
+                                <TextBlock x:Name="PropStatusText" Margin="14,0,0,0" VerticalAlignment="Center" Foreground="#566573"/>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
 
@@ -577,20 +287,29 @@
                 </DockPanel>
             </TabItem>
 
-            <!-- ============================ TAB 6 : AMBRE IMPORT SIMULATION ============================ -->
+            <!-- ============================ TAB 4 : AMBRE IMPORT SIMULATION ============================ -->
             <TabItem Header="🔬 Simulate AMBRE">
                 <DockPanel Margin="8">
                     <!-- Controls -->
                     <Border DockPanel.Dock="Top" Background="White" Padding="12" CornerRadius="4" Margin="0,0,0,8">
                         <StackPanel>
-                            <TextBlock Text="Load the same AMBRE Excel file you would normally import, then evaluate rules against every row (scope = Import). No data is written to the DB — this is a pure what-if run."
+                            <TextBlock Text="Load the same AMBRE Excel file you would normally import, then evaluate rules against every row (scope = Import). Optionally pick a DWINGS snapshot (zip or accdb) to simulate with fresh DWINGS data. No data is written to the DB — this is a pure what-if run."
                                        TextWrapping="Wrap" Foreground="#566573" Margin="0,0,0,6"/>
                             <StackPanel Orientation="Horizontal">
                                 <Button Content="📂 Pick AMBRE file…" Click="PickAmbreFile_Click" Background="#2980B9" Foreground="White" FontWeight="SemiBold"/>
                                 <TextBlock x:Name="AmbreFilePathText" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#566573" Text="(no file selected)"/>
                             </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <Button Content="📦 Pick DWINGS file…" Click="PickDwingsFile_Click" Background="#8E44AD" Foreground="White" FontWeight="SemiBold"
+                                        ToolTip="Optional. Pick a DWINGS .zip (containing an .accdb) or a .accdb directly to simulate rules against a fresh DWINGS snapshot. Leave empty to use the country's live DWINGS cache."/>
+                                <TextBlock x:Name="DwingsFilePathText" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#566573" Text="(using country's live DWINGS cache)"/>
+                                <Button x:Name="ClearDwingsButton" Content="✕" Click="ClearDwingsFile_Click" Margin="6,0,0,0" Padding="8,2" Background="Transparent" Foreground="#7F8C8D" BorderBrush="#BDC3C7" IsEnabled="False"
+                                        ToolTip="Clear the DWINGS snapshot selection and fall back to the country's live DWINGS cache."/>
+                            </StackPanel>
                             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                 <Button x:Name="RunSimButton" Content="▶ Run simulation" Click="RunAmbreSim_Click" Background="#27AE60" Foreground="White" FontWeight="SemiBold" IsEnabled="False"/>
+                                <Button x:Name="RerunSimButton" Content="🔄 Refresh rules &amp; re-run" Click="RerunAmbreSim_Click" Margin="6,0,0,0" Background="#E67E22" Foreground="White" FontWeight="SemiBold" IsEnabled="False"
+                                        ToolTip="Reload rules from DB (so edits you just made are picked up) and re-simulate the same file."/>
                                 <Button Content="⎘ Export CSV" Click="ExportAmbreSim_Click" Margin="6,0,0,0" Background="#7F8C8D" Foreground="White" FontWeight="SemiBold"/>
                                 <TextBlock x:Name="AmbreSimStatusText" VerticalAlignment="Center" Margin="14,0,0,0" Foreground="#566573"/>
                             </StackPanel>
@@ -652,7 +371,9 @@
                               GridLinesVisibility="Horizontal"
                               AlternatingRowBackground="#FAFBFC"
                               Background="White"
-                              HeadersVisibility="Column">
+                              HeadersVisibility="Column"
+                              MouseDoubleClick="AmbreSimGrid_MouseDoubleClick"
+                              ToolTip="Double-click a row to see why each rule matched or not (and fix the rule if needed).">
                         <DataGrid.Columns>
                             <DataGridTemplateColumn Header="Δ" Width="40" ToolTipService.ToolTip="Would mutate the reconciliation">
                                 <DataGridTemplateColumn.CellTemplate>

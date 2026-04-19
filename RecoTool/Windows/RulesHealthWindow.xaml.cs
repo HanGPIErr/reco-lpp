@@ -1,17 +1,10 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
-using System.ComponentModel;
-using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
 using System.Windows.Input;
-using Microsoft.Win32;
 using RecoTool.Services;
 using RecoTool.Services.Rules;
 
@@ -19,7 +12,7 @@ namespace RecoTool.Windows
 {
     /// <summary>
     /// Rules Health Center — diagnostics & validation hub for the truth-table rules engine.
-    /// Four tabs: Simulator / Coverage / Tester / Impact Preview.
+    /// Four tabs: Coverage / Impact Preview / Proposals / Simulate AMBRE.
     /// Does NOT modify rules or reconciliations; read-only diagnostics.
     /// </summary>
     public partial class RulesHealthWindow : Window
@@ -30,11 +23,6 @@ namespace RecoTool.Windows
         private readonly RulesDiagnosticsService _diagnostics;
 
         private CancellationTokenSource _cts;
-
-        // Simulator state
-        private SimulationReport _lastSimReport;
-        private readonly ObservableCollection<RuleHitStats> _simRows = new ObservableCollection<RuleHitStats>();
-        private ICollectionView _simView;
 
         // Coverage state
         private CoverageReport _lastCoverage;
@@ -52,9 +40,6 @@ namespace RecoTool.Windows
 
             CountryText.Text = _offlineFirstService?.CurrentCountry?.CNT_Id ?? "—";
 
-            SimGrid.ItemsSource = _simView = CollectionViewSource.GetDefaultView(_simRows);
-            _simView.Filter = SimRowFilter;
-
             Loaded += async (s, e) => await InitializeAsync();
         }
 
@@ -64,17 +49,6 @@ namespace RecoTool.Windows
             {
                 _allRules = (await _repository.LoadRulesAsync().ConfigureAwait(true)) ?? new List<TruthRule>();
                 ImpactRuleCombo.ItemsSource = _allRules.OrderBy(r => r.RuleId).ToList();
-                // Populate TransactionType combo in Tester
-                try
-                {
-                    var names = Enum.GetNames(typeof(RecoTool.Services.TransactionType));
-                    TestTransactionCombo.Items.Clear();
-                    TestTransactionCombo.Items.Add("(null)");
-                    foreach (var n in names) TestTransactionCombo.Items.Add(n);
-                    TestTransactionCombo.SelectedIndex = 0;
-                }
-                catch { }
-                TestCountryBox.Text = _offlineFirstService?.CurrentCountry?.CNT_Id ?? string.Empty;
             }
             catch (Exception ex) { StatusText.Text = $"Init error: {ex.Message}"; }
         }

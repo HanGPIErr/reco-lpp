@@ -147,6 +147,23 @@ namespace RecoTool.Services.Rules
                 if (r == null) continue;
 
                 var conditions = EvaluateConditions(r, c);
+
+                // Surface the scope check as a pseudo-condition so the user sees WHY a rule is
+                // "out of scope" instead of seeing it as a MATCH that the engine never actually
+                // applies. Without this, a rule with Scope=Edit evaluated under scope=Import would
+                // report IsMatch=true in the debug view even though EvaluateAsync silently skips it
+                // via `if (r.Scope != RuleScope.Both && r.Scope != scope) continue;`.
+                if (r.Scope != RuleScope.Both && r.Scope != scope)
+                {
+                    conditions.Insert(0, new RuleConditionDebug
+                    {
+                        Field = "Scope",
+                        Expected = scope.ToString(),
+                        Actual = r.Scope.ToString(),
+                        IsMet = false
+                    });
+                }
+
                 bool allMet = conditions.TrueForAll(cd => cd.IsMet);
 
                 results.Add(new RuleDebugEvaluation

@@ -375,6 +375,20 @@ namespace RecoTool.Services.Rules
         public string ChangesSummary { get; set; }
         /// <summary>True when <see cref="MatchedRuleId"/> is non-null AND at least one proposed output differs from current.</summary>
         public bool WouldMutate { get; set; }
+
+        // --- Cached inputs for on-demand rule debugging (double-click in the Simulate AMBRE tab) ---
+        // Internal so the public DTO surface / CSV export remain unchanged.
+        /// <summary>DataAmbre used to evaluate this row; lets the UI rebuild the RuleContext without re-reading Excel.</summary>
+        internal RecoTool.Models.DataAmbre SimulatedAmbre { get; set; }
+        /// <summary>Existing T_Reconciliation row at simulation time (or stub if the row is new). Same use as above.</summary>
+        internal RecoTool.Models.Reconciliation SimulatedReco { get; set; }
+        /// <summary>
+        /// DWINGS snapshot used at simulation time (non-null only when the user provided a DW file).
+        /// All rows produced by the same simulation share the same reference — copy is shallow.
+        /// The debug path reapplies this override so the per-condition report stays consistent with
+        /// what the simulation reported for the row.
+        /// </summary>
+        internal ReconciliationService.DwingsOverride DwingsSnapshot { get; set; }
     }
 
     public class RuleHitStats

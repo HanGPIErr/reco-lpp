@@ -197,6 +197,11 @@ namespace RecoTool.Windows
                 swEnrich.Stop();
                 System.Diagnostics.Debug.WriteLine($"[ViewDataEnricher] Enriched {totalRows} rows in {swEnrich.ElapsedMilliseconds}ms");
 
+                // Snapshot diff: flag rows that changed since the last import. Fire-and-forget so
+                // the initial render is not blocked by the cross-DB read; the edge markers appear
+                // a few hundred ms later via a dispatcher post.
+                _ = ApplyRecentActivityAsync();
+
                 // ── Rules catch-up: apply rules for rows that gained a DWINGS link but have no Action yet ──
                 // Scenario: DWINGS data wasn't available on day N → rows loaded without BGI → rules couldn't match.
                 // On day N+1, DWINGS data is available → BGI is filled → re-run rules ONLY for rows where Action is still null.

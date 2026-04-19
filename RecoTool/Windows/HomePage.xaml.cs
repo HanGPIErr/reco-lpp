@@ -2357,18 +2357,63 @@ namespace RecoTool.Windows
         }
 
         /// <summary>
-        /// Ouvre la fenêtre de rapports
+        /// One-click Excel dashboard export for the currently selected country.
+        /// Prompts for a destination path then generates a multi-sheet workbook via
+        /// <see cref="DashboardExportService"/>. The heavy work runs on a background thread so
+        /// the UI stays responsive; progress is surfaced through <see cref="StatusMessage"/>.
         /// </summary>
-        private void OpenReports_Click(object sender, RoutedEventArgs e)
+        private async void OpenReports_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                var reportsWindow = App.ServiceProvider.GetRequiredService<ReportsWindow>();
-                reportsWindow.ShowDialog();
+                if (_reconciliationService == null || _offlineFirstService == null || string.IsNullOrWhiteSpace(CurrentCountryId))
+                {
+                    ShowError("Export is unavailable: please select a country first.");
+                    return;
+                }
+
+                var defaultName = $"Reconciliation_Dashboard_{CurrentCountryId}_{DateTime.Now:yyyyMMdd_HHmm}.xlsx";
+                var sfd = new Microsoft.Win32.SaveFileDialog
+                {
+                    FileName = defaultName,
+                    Filter = "Excel Workbook (*.xlsx)|*.xlsx",
+                    DefaultExt = ".xlsx",
+                    Title = $"Export dashboard — {CurrentCountryId}"
+                };
+                if (sfd.ShowDialog() != true) return;
+
+                var service = new DashboardExportService(_reconciliationService, _offlineFirstService);
+                var progress = new Progress<string>(msg => StatusMessage = msg);
+
+                // Disable the caller so the user can't double-click during generation.
+                var button = sender as Button;
+                try { if (button != null) button.IsEnabled = false; } catch { }
+
+                string path;
+                try
+                {
+                    path = await service.ExportDashboardAsync(CurrentCountryId, sfd.FileName, progress).ConfigureAwait(true);
+                }
+                finally
+                {
+                    try { if (button != null) button.IsEnabled = true; } catch { }
+                }
+
+                StatusMessage = $"Dashboard exported to {System.IO.Path.GetFileName(path)}";
+                var result = MessageBox.Show(
+                    $"Dashboard exported successfully:\n{path}\n\nOpen the file now?",
+                    "Export complete",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Information);
+                if (result == MessageBoxResult.Yes)
+                {
+                    try { System.Diagnostics.Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
+                    catch (Exception openEx) { ShowError($"Unable to open file: {openEx.Message}"); }
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error opening reports: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                ShowError($"Export failed: {ex.Message}");
             }
         }
 

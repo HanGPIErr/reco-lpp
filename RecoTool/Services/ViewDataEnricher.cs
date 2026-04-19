@@ -231,6 +231,31 @@ namespace RecoTool.Services
         #endregion
 
         #region Cache lookup helpers (unchanged)
+
+        /// <summary>
+        /// Public read-only accessor over the UserField name cache. Returns <c>null</c> when
+        /// <paramref name="id"/> is absent or the cache has not been primed yet — callers should
+        /// fall back to the raw id in that case (instead of showing an empty string to the user).
+        /// Used by <c>SnapshotComparisonService</c> to render diff tooltips with semantic labels
+        /// (e.g. "TRIGGER" instead of "1").
+        /// </summary>
+        public static string TryGetUserFieldName(int? id)
+        {
+            if (!id.HasValue || _userFieldNameCache == null) return null;
+            return _userFieldNameCache.TryGetValue(id.Value, out var name) ? name : null;
+        }
+
+        /// <summary>
+        /// Public read-only accessor over the assignee name cache. Same contract as
+        /// <see cref="TryGetUserFieldName"/>: returns <c>null</c> on cache miss so the caller
+        /// can fall back to the raw login id instead of a blank string.
+        /// </summary>
+        public static string TryGetAssigneeName(string assigneeId)
+        {
+            if (string.IsNullOrEmpty(assigneeId) || _assigneeNameCache == null) return null;
+            return _assigneeNameCache.TryGetValue(assigneeId, out var name) ? name : null;
+        }
+
         private static string GetUserFieldName(int? id)
         {
             if (!id.HasValue || _userFieldNameCache == null) return string.Empty;

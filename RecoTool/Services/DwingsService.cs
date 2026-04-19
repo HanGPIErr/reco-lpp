@@ -95,6 +95,50 @@ namespace RecoTool.Services
             return _guaranteesCache ?? new List<DwingsGuaranteeDto>();
         }
 
+        /// <summary>
+        /// Loads DWINGS data from an arbitrary file path (used by the AMBRE-import simulator so
+        /// the user can what-if a fresh DWINGS snapshot without touching the country's DW cache).
+        /// Accepts either a `.accdb` or a `.zip` containing exactly one `.accdb`; in the zip case
+        /// the database is extracted to a temp file, loaded, then the temp file is deleted.
+        /// </summary>
+        /// <param name="path">Absolute path to a DWINGS `.accdb` or `.zip`.</param>
+        public static async Task<(List<DwingsInvoiceDto> invoices, List<DwingsGuaranteeDto> guarantees)> LoadFromPathAsync(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("path is required", nameof(path));
+            if (!File.Exists(path))
+                throw new FileNotFoundException("DWINGS file not found", path);
+
+            bool isZip = string.Equals(Path.GetExtension(path), ".zip", StringComparison.OrdinalIgnoreCase);
+            if (!isZip)
+                return await LoadDwingsAsync(path).ConfigureAwait(false);
+
+            // Extract the single .accdb from the zip into a temp file.
+            string tempAccdb = Path.Combine(Path.GetTempPath(), $"dwings_sim_{Guid.NewGuid():N}.accdb");
+            try
+            {
+                using (var archive = System.IO.Compression.ZipFile.OpenRead(path))
+                {
+                    var entry = archive.Entries.FirstOrDefault(en =>
+                        !string.IsNullOrEmpty(en.Name) &&
+                        string.Equals(Path.GetExtension(en.Name), ".accdb", StringComparison.OrdinalIgnoreCase));
+                    if (entry == null)
+                        throw new InvalidDataException("The DWINGS zip does not contain a .accdb file.");
+                    // Stream-copy instead of ExtractToFile — avoids the extra System.IO.Compression.FileSystem assembly reference.
+                    using (var entryStream = entry.Open())
+                    using (var fs = new FileStream(tempAccdb, FileMode.Create, FileAccess.Write, FileShare.None))
+                    {
+                        await entryStream.CopyToAsync(fs).ConfigureAwait(false);
+                    }
+                }
+                return await LoadDwingsAsync(tempAccdb).ConfigureAwait(false);
+            }
+            finally
+            {
+                try { if (File.Exists(tempAccdb)) File.Delete(tempAccdb); } catch { /* best-effort cleanup */ }
+            }
+        }
+
         private static async Task<(List<DwingsInvoiceDto> invoices, List<DwingsGuaranteeDto> guarantees)> LoadDwingsAsync(string dwPath)
         {
             var dwCs = DbConn.AceConn(dwPath);

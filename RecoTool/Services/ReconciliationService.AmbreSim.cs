@@ -32,7 +32,8 @@ namespace RecoTool.Services
             string filePath,
             string countryId,
             IProgress<(string message, int percent)> progress = null,
-            CancellationToken ct = default)
+            CancellationToken ct = default,
+            string dwingsFilePath = null)
         {
             var result = new List<RuleSimulationRow>();
             if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
@@ -76,9 +77,24 @@ namespace RecoTool.Services
             if (transformed.Count == 0)
                 return result;
 
-            // --- 3) Warm caches once (DWINGS used by rule context). ---
-            progress?.Report(("Initializing DWINGS caches…", 55));
-            await EnsureDwingsCachesInitializedAsync().ConfigureAwait(false);
+            // --- 3a) If the user provided a DWINGS snapshot, load it into memory and prepare
+            //         the async-local override. Otherwise, warm the regular DWINGS cache.
+            DwingsOverride dwSnapshot = null;
+            if (!string.IsNullOrWhiteSpace(dwingsFilePath))
+            {
+                progress?.Report(("Loading DWINGS snapshot…", 52));
+                var (dwInvoices, dwGuarantees) = await DwingsService.LoadFromPathAsync(dwingsFilePath).ConfigureAwait(false);
+                dwSnapshot = new DwingsOverride
+                {
+                    Invoices = dwInvoices ?? new List<DwingsInvoiceDto>(),
+                    Guarantees = dwGuarantees ?? new List<DwingsGuaranteeDto>()
+                };
+            }
+            else
+            {
+                progress?.Report(("Initializing DWINGS caches…", 55));
+                await EnsureDwingsCachesInitializedAsync().ConfigureAwait(false);
+            }
 
             // --- 4) Evaluate rules for every transformed row. ---
             // We do NOT create/persist Reconciliation rows. For each DataAmbre, we look up the
@@ -87,67 +103,78 @@ namespace RecoTool.Services
             progress?.Report(("Evaluating rules…", 60));
             int total = transformed.Count;
             int done = 0;
-            foreach (var amb in transformed)
+
+            // Install the DWINGS override for the whole evaluation loop if the user picked a snapshot.
+            // AsyncLocal flows through all awaits below, so BuildRuleContextAsync picks it up transparently.
+            using (dwSnapshot != null ? ApplyDwingsOverride(dwSnapshot) : null)
             {
-                if (ct.IsCancellationRequested) break;
-                try
+                foreach (var amb in transformed)
                 {
-                    if (amb == null || string.IsNullOrWhiteSpace(amb.ID)) continue;
-
-                    // Try to read the existing reconciliation (without creating one).
-                    Reconciliation reco = null;
-                    try { reco = await GetReconciliationByIdAsync(countryId, amb.ID).ConfigureAwait(false); } catch { }
-                    bool existsInDb = reco != null;
-                    if (reco == null)
+                    if (ct.IsCancellationRequested) break;
+                    try
                     {
-                        // New row: stub a blank reconciliation so the rule engine has defaults.
-                        reco = new Reconciliation { ID = amb.ID };
+                        if (amb == null || string.IsNullOrWhiteSpace(amb.ID)) continue;
+
+                        // Try to read the existing reconciliation (without creating one).
+                        Reconciliation reco = null;
+                        try { reco = await GetReconciliationByIdAsync(countryId, amb.ID).ConfigureAwait(false); } catch { }
+                        bool existsInDb = reco != null;
+                        if (reco == null)
+                        {
+                            // New row: stub a blank reconciliation so the rule engine has defaults.
+                            reco = new Reconciliation { ID = amb.ID };
+                        }
+
+                        bool isPivot = amb.IsPivotAccount(country.CNT_AmbrePivot);
+                        var ctx = await BuildRuleContextAsync(amb, reco, country, countryId, isPivot).ConfigureAwait(false);
+                        var res = await _rulesEngine.EvaluateAsync(ctx, RuleScope.Import, ct).ConfigureAwait(false);
+
+                        var row = new RuleSimulationRow
+                        {
+                            ReconciliationId = amb.ID,
+                            IsPivot = isPivot,
+                            Account = amb.Account_ID,
+                            Currency = amb.CCY,
+                            SignedAmount = amb.SignedAmount,
+                            RawLabel = amb.RawLabel,
+                            ExistsInDb = existsInDb,
+                            MatchedRuleId = res?.Rule?.RuleId,
+                            MatchedRulePriority = res?.Rule?.Priority,
+                            ProposedActionId = res?.NewActionIdSelf,
+                            ProposedKpiId = res?.NewKpiIdSelf,
+                            ApplyTo = res?.Rule?.ApplyTo,
+                            CurrentActionId = reco.Action,
+                            CurrentKpiId = reco.KPI,
+                            UserMessage = res?.UserMessage,
+                            // Cache refs for on-demand rule debugging (double-click in the UI).
+                            SimulatedAmbre = amb,
+                            SimulatedReco = reco,
+                            // Shared reference: every row keeps the same snapshot pointer (shallow copy).
+                            DwingsSnapshot = dwSnapshot
+                        };
+
+                        // Compute change summary + WouldMutate flag based on actual delta vs existing reco.
+                        if (res?.Rule != null)
+                        {
+                            var changes = BuildSimulationChangeSummary(res, reco);
+                            row.ChangesSummary = changes;
+                            row.WouldMutate = !string.IsNullOrEmpty(changes);
+                        }
+
+                        result.Add(row);
                     }
-
-                    bool isPivot = amb.IsPivotAccount(country.CNT_AmbrePivot);
-                    var ctx = await BuildRuleContextAsync(amb, reco, country, countryId, isPivot).ConfigureAwait(false);
-                    var res = await _rulesEngine.EvaluateAsync(ctx, RuleScope.Import, ct).ConfigureAwait(false);
-
-                    var row = new RuleSimulationRow
+                    catch (Exception rowEx)
                     {
-                        ReconciliationId = amb.ID,
-                        IsPivot = isPivot,
-                        Account = amb.Account_ID,
-                        Currency = amb.CCY,
-                        SignedAmount = amb.SignedAmount,
-                        RawLabel = amb.RawLabel,
-                        ExistsInDb = existsInDb,
-                        MatchedRuleId = res?.Rule?.RuleId,
-                        MatchedRulePriority = res?.Rule?.Priority,
-                        ProposedActionId = res?.NewActionIdSelf,
-                        ProposedKpiId = res?.NewKpiIdSelf,
-                        ApplyTo = res?.Rule?.ApplyTo,
-                        CurrentActionId = reco.Action,
-                        CurrentKpiId = reco.KPI,
-                        UserMessage = res?.UserMessage
-                    };
-
-                    // Compute change summary + WouldMutate flag based on actual delta vs existing reco.
-                    if (res?.Rule != null)
-                    {
-                        var changes = BuildSimulationChangeSummary(res, reco);
-                        row.ChangesSummary = changes;
-                        row.WouldMutate = !string.IsNullOrEmpty(changes);
+                        System.Diagnostics.Debug.WriteLine($"[SimulateAmbre] row {amb?.ID} failed: {rowEx.Message}");
                     }
-
-                    result.Add(row);
-                }
-                catch (Exception rowEx)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[SimulateAmbre] row {amb?.ID} failed: {rowEx.Message}");
-                }
-                finally
-                {
-                    done++;
-                    if (done % 25 == 0 || done == total)
+                    finally
                     {
-                        int pct = 60 + (int)(done * 40.0 / Math.Max(1, total));
-                        progress?.Report(($"Evaluating rules… {done}/{total}", Math.Min(99, pct)));
+                        done++;
+                        if (done % 25 == 0 || done == total)
+                        {
+                            int pct = 60 + (int)(done * 40.0 / Math.Max(1, total));
+                            progress?.Report(($"Evaluating rules… {done}/{total}", Math.Min(99, pct)));
+                        }
                     }
                 }
             }
@@ -218,6 +245,40 @@ namespace RecoTool.Services
             }
 
             return parts.Count == 0 ? null : string.Join("; ", parts);
+        }
+
+        /// <summary>
+        /// Re-evaluates every rule against a simulated row (built earlier by
+        /// <see cref="SimulateAmbreImportFromFileAsync"/>) so the UI can show a per-condition
+        /// debug report on double-click. No DB writes, no cache invalidation.
+        /// </summary>
+        /// <param name="row">Row produced by the AMBRE-file simulator; must carry SimulatedAmbre.</param>
+        /// <param name="countryId">Country in scope (required for the rule context).</param>
+        /// <param name="ct">Cancellation token.</param>
+        /// <returns>(RuleContext, per-rule debug evaluations) or (null, null) if the row is invalid.</returns>
+        public async Task<(RuleContext Context, List<RuleDebugEvaluation> Evaluations)> EvaluateAllRulesForSimulatedRowAsync(
+            Rules.RuleSimulationRow row,
+            string countryId,
+            System.Threading.CancellationToken ct = default)
+        {
+            if (row?.SimulatedAmbre == null) return (null, null);
+            if (_offlineFirstService == null || _rulesEngine == null) return (null, null);
+            if (_countries == null || !_countries.TryGetValue(countryId, out var country) || country == null)
+                return (null, null);
+
+            var amb = row.SimulatedAmbre;
+            var reco = row.SimulatedReco ?? new Reconciliation { ID = amb.ID };
+            bool isPivot = amb.IsPivotAccount(country.CNT_AmbrePivot);
+
+            // Re-apply the simulation-time DWINGS snapshot (if any) so the debug view matches what
+            // the simulation reported. Without this, BuildRuleContextAsync would fall back to the
+            // country's live DW cache and the per-condition report would drift.
+            using (row.DwingsSnapshot != null ? ApplyDwingsOverride(row.DwingsSnapshot) : null)
+            {
+                var ctx = await BuildRuleContextAsync(amb, reco, country, countryId, isPivot).ConfigureAwait(false);
+                var evaluations = await _rulesEngine.EvaluateAllForDebugAsync(ctx, RuleScope.Import, ct).ConfigureAwait(false);
+                return (ctx, evaluations);
+            }
         }
     }
 }
