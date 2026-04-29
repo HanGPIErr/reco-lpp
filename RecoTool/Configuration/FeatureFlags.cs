@@ -1,3 +1,5 @@
+using System;
+
 namespace RecoTool.Configuration
 {
     /// <summary>
@@ -6,10 +8,30 @@ namespace RecoTool.Configuration
     public static class FeatureFlags
     {
         /// <summary>
-        /// Enable/disable multi-user features (TodoList session tracking, heartbeat, editing indicators)
-        /// Set to false to disable all multi-user overhead (heartbeat timer, session tracking, etc.)
+        /// Enable/disable multi-user features at runtime.
+        /// When false, disables: TodoList session tracking, heartbeat timer, editing indicators,
+        /// background pushes/pulls, snapshot publish/pull on the network share, and the
+        /// SyncMonitorService poll timer. Used to investigate UI freezes on slow networks.
+        /// Toggle via the "Multi-user" button in MainWindow.
         /// </summary>
-        public const bool ENABLE_MULTI_USER = true;
+        public static bool ENABLE_MULTI_USER { get; set; } = true;
+
+        /// <summary>
+        /// Fired whenever <see cref="ENABLE_MULTI_USER"/> changes. Subscribers can react
+        /// (e.g. start/stop background workers) without having to poll the flag.
+        /// </summary>
+        public static event EventHandler<bool> MultiUserChanged;
+
+        /// <summary>
+        /// Update <see cref="ENABLE_MULTI_USER"/> and notify subscribers. No-op if the value
+        /// is already what we want (avoids redundant Start/Stop cycles).
+        /// </summary>
+        public static void SetMultiUserEnabled(bool enabled)
+        {
+            if (ENABLE_MULTI_USER == enabled) return;
+            ENABLE_MULTI_USER = enabled;
+            try { MultiUserChanged?.Invoke(null, enabled); } catch { }
+        }
 
         /// <summary>
         /// True when compiled with the UAT build configuration (defines UAT_ENV symbol).

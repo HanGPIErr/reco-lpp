@@ -76,6 +76,38 @@
             </Setter>
         </Style>
         
+        <!-- Style for ToggleButton in header (multi-user toggle, etc.) -->
+        <Style x:Key="HeaderToggleButton" TargetType="ToggleButton">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="Height" Value="44"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="border" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="False">
+                                <!-- OFF state: amber tint to signal degraded/restricted mode -->
+                                <Setter TargetName="border" Property="Background" Value="#66E81123"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#55FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#77FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        
         <!-- Style for close button with red hover -->
         <Style x:Key="CloseButtonStyle" BasedOn="{StaticResource WindowControlButton}" TargetType="Button">
             <Style.Triggers>
@@ -265,6 +297,16 @@
                                 <TextBlock Text="Synchronize" Foreground="White" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
+                        <!-- Multi-user toggle: when OFF disables background pushes/pulls and snapshot publish for better perf on slow networks -->
+                        <ToggleButton x:Name="MultiUserToggleButton" Style="{StaticResource HeaderToggleButton}"
+                                      IsChecked="{Binding IsMultiUserMode, Mode=TwoWay}"
+                                      Margin="8,0" MinWidth="130"
+                                      ToolTip="Toggle multi-user mode. When OFF (red), background sync, snapshot publish/pull and presence tracking are disabled to improve UI responsiveness on slow networks. Local edits are still saved; sync resumes when toggled back ON.">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE125;" FontFamily="Segoe MDL2 Assets" FontSize="18" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <TextBlock Text="{Binding MultiUserButtonText}" Foreground="White" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </ToggleButton>
                         <!-- Network status badge -->
                         <Rectangle Width="1" Height="24" Fill="#4DFFFFFF" Margin="5,0"/>
                         <Border CornerRadius="10" Padding="10,2" Margin="8,0,0,0" Background="{Binding NetworkStatusBrush}" VerticalAlignment="Center">

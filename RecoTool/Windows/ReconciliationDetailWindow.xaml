@@ -608,6 +608,8 @@
                                          ToolTip="Search in BGI, BGPMT, Guarantee ID, and Official Ref"/>
                                 <Button x:Name="DwingsSearchButton" Content="Search DWINGS (All Types)" Click="DwingsSearchButton_Click" Style="{StaticResource ModernPrimaryButtonStyle}" Margin="0,0,8,0" Padding="12,6" Height="32"/>
                                 <Button x:Name="DwingsSuggestButton" Content="Suggest" Click="DwingsSuggestButton_Click" Style="{StaticResource ModernButtonStyle}" Padding="12,6" Height="32"/>
+                                <Button x:Name="NotInDwingsButton" Content="NOT IN DWINGS" Click="NotInDwingsButton_Click" Style="{StaticResource ModernButtonStyle}" Margin="8,0,0,0" Padding="12,6" Height="32"
+                                        ToolTip="Mark this line as out of DWINGS scope: closes the workflow with Action=NA, KPI=Not TFSC, Risky=No (justified by Not TFSC) and adds a tracking comment. Use this for pivot lines that will never be reconciled with a DWINGS invoice."/>
                             </StackPanel>
                         </Grid>
 

@@ -898,9 +898,32 @@ namespace RecoTool.Windows
                     // 4️⃣ Extraction des tokens si le payload existe
                     if (!string.IsNullOrWhiteSpace(payload))
                     {
+                        // ── TOP-1 priority: <pacs:EndToEndId> is the originator's transaction reference.
+                        // Business confirmed this is generally the OfficialRef of the underlying guarantee
+                        // (e.g. "700.678"), so we resolve it FIRST against the GuaranteeCache before
+                        // falling back to the generic regex extractors below.
+                        string foundGid = null;
+                        var endToEndId = DwingsLinkingHelper.ExtractEndToEndId(payload);
+                        if (!string.IsNullOrWhiteSpace(endToEndId))
+                        {
+                            // Primary path: OfficialRef map (typical case for "700.678" style refs)
+                            var resolvedFromE2E = GuaranteeCache.FindGuaranteeId(endToEndId);
+                            if (!string.IsNullOrWhiteSpace(resolvedFromE2E))
+                            {
+                                foundGid = resolvedFromE2E;
+                            }
+                            else
+                            {
+                                // Secondary: some senders embed a structured Gxxxx/Nxxxx directly in EndToEndId
+                                foundGid = DwingsLinkingHelper.ExtractGuaranteeId(endToEndId);
+                            }
+                        }
+
                         var foundBgpmt = DwingsLinkingHelper.ExtractBgpmtToken(payload);
                         var foundBgi = DwingsLinkingHelper.ExtractBgiToken(payload);
-                        var foundGid = DwingsLinkingHelper.ExtractGuaranteeId(payload);
+                        // Generic Guarantee regex on the whole payload — only used if EndToEndId path failed
+                        if (string.IsNullOrWhiteSpace(foundGid))
+                            foundGid = DwingsLinkingHelper.ExtractGuaranteeId(payload);
 
                         if (!string.IsNullOrWhiteSpace(foundGid) && string.IsNullOrWhiteSpace(row.DWINGS_GuaranteeID))
                             row.DWINGS_GuaranteeID = foundGid;
@@ -911,7 +934,7 @@ namespace RecoTool.Windows
                         if (!string.IsNullOrWhiteSpace(foundBgpmt) && string.IsNullOrWhiteSpace(row.DWINGS_BGPMT))
                             row.DWINGS_BGPMT = foundBgpmt;
 
-                        // Fallback: use GuaranteeCache only if no structured G/N-ref was found by regex
+                        // Fallback: use GuaranteeCache on the full payload if EndToEndId+regex still missed
                         if (string.IsNullOrWhiteSpace(row.DWINGS_GuaranteeID))
                         {
                             var officialGid = GuaranteeCache.FindGuaranteeId(payload);

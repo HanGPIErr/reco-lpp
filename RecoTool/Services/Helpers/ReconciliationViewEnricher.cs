@@ -103,6 +103,35 @@ namespace RecoTool.Services.Helpers
                     }
                 }
 
+                // ── Pivot fallback: GuaranteeID + amount + INITIATED → unique invoice ──
+                // When a pivot row has the guarantee reference (typically pasted from email/Free
+                // search) but no BGI/BGPMT yet, try to resolve a unique INITIATED invoice with
+                // matching amount. This mirrors DwingsReferenceResolver.ResolveReferences but
+                // applies at view-refresh time so the link appears as soon as DWINGS data is in
+                // sync (e.g. after a new invoice has been initiated for an existing guarantee).
+                if (inv == null
+                    && string.Equals(row.AccountSide, "P", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(row.DWINGS_GuaranteeID)
+                    && string.IsNullOrWhiteSpace(row.DWINGS_InvoiceID)
+                    && string.IsNullOrWhiteSpace(row.DWINGS_BGPMT))
+                {
+                    var matches = DwingsLinkingHelper.ResolveInvoicesByGuarantee(
+                        invoiceList,
+                        row.DWINGS_GuaranteeID,
+                        row.Operation_Date ?? row.Value_Date,
+                        row.SignedAmount,
+                        take: 1);
+                    var matched = matches?.FirstOrDefault();
+                    if (matched != null)
+                    {
+                        inv = matched;
+                        row.DWINGS_InvoiceID = matched.INVOICE_ID;
+                        if (string.IsNullOrWhiteSpace(row.DWINGS_BGPMT)) row.DWINGS_BGPMT = matched.BGPMT;
+                        if (string.IsNullOrWhiteSpace(row.PaymentReference) && !string.IsNullOrWhiteSpace(matched.BGPMT))
+                            row.PaymentReference = matched.BGPMT;
+                    }
+                }
+
                 if (inv != null)
                 {
                     // OPTIMIZED: Only set the linking fields, all I_* properties are now lazy-loaded

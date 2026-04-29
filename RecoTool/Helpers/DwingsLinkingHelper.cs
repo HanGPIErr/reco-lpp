@@ -117,6 +117,25 @@ namespace RecoTool.Helpers
             return m.Success ? m.Groups[1].Value : null;
         }
 
+        // EndToEndId from MX/pacs payload (any namespace prefix). Examples seen in payloads:
+        //   <pacs:EndToEndId>700.678</pacs:EndToEndId>
+        //   <EndToEndId>BGI20231024E1F84</EndToEndId>
+        // The EndToEndId is the originator's transaction reference and is, in practice,
+        // the most reliable token to identify the underlying DWINGS guarantee/invoice.
+        // See: ISO 20022 PaymentInstruction.PmtId.EndToEndId.
+        private static readonly Regex RxEndToEndId = new Regex(
+            @"<(?:[A-Za-z0-9_]+:)?EndToEndId\b[^>]*>\s*([^<\s]+)\s*</(?:[A-Za-z0-9_]+:)?EndToEndId>",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        public static string ExtractEndToEndId(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return null;
+            var m = RxEndToEndId.Match(s);
+            if (!m.Success) return null;
+            var raw = m.Groups[1].Value?.Trim();
+            return string.IsNullOrEmpty(raw) ? null : raw;
+        }
+
         // -------- Resolution helpers --------
 
         private static string Norm(string s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim().ToUpperInvariant();

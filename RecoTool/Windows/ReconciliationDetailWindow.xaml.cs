@@ -28,6 +28,15 @@ namespace RecoTool.Windows
         private Reconciliation _reconciliation;
         private bool _autoSearched;
 
+        /// <summary>
+        /// Sentinel value written into <c>DWINGS_GuaranteeID</c>, <c>DWINGS_InvoiceID</c> and
+        /// <c>DWINGS_BGPMT</c> when the user marks a line as out of DWINGS scope. Persisted as-is
+        /// in the local Access DB; the import-time UPDATE in <c>AmbreReconciliationUpdater.Persistence.cs</c>
+        /// only writes empty cells (<c>IIF([col] IS NULL OR [col]='', ...)</c>), so this marker is
+        /// preserved across re-imports and never collides with a real DWINGS reference.
+        /// </summary>
+        private const string NotInDwingsMarker = "NOT IN DWINGS";
+
         public event PropertyChangedEventHandler PropertyChanged;
         private void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 
@@ -607,9 +616,35 @@ namespace RecoTool.Windows
 
                 var linkedInvoiceId = _reconciliation?.DWINGS_InvoiceID ?? _item?.DWINGS_InvoiceID;
                 var linkedGuaranteeId = _reconciliation?.DWINGS_GuaranteeID ?? _item?.DWINGS_GuaranteeID;
-                bool linked = !string.IsNullOrWhiteSpace(linkedInvoiceId) || !string.IsNullOrWhiteSpace(linkedGuaranteeId);
+                var linkedBgpmt = _reconciliation?.DWINGS_BGPMT ?? _item?.DWINGS_BGPMT;
 
-                if (linked)
+                // The marker is a sentinel string in the DW fields — never a real DWINGS link.
+                bool markerOnFields = IsNotInDwingsMarker(linkedInvoiceId)
+                                      || IsNotInDwingsMarker(linkedGuaranteeId)
+                                      || IsNotInDwingsMarker(linkedBgpmt);
+
+                // Closed-out combo set by NotInDwingsButton_Click. Either signal alone is sufficient,
+                // so a row stays "NOT IN DWINGS" even if the user manually edits one of the user-fields.
+                bool isNotInDwings = markerOnFields
+                                     || (_reconciliation != null
+                                         && _reconciliation.Action == (int)ActionType.NA
+                                         && _reconciliation.KPI == (int)KPIType.NotTFSC
+                                         && _reconciliation.ReasonNonRisky == (int)Risky.NotTFSC
+                                         && _reconciliation.RiskyItem == false);
+
+                // "linked" must ignore the sentinel — otherwise the LINKED branch would fire on rows
+                // we just stamped as out-of-scope.
+                bool linked = (!string.IsNullOrWhiteSpace(linkedInvoiceId) && !IsNotInDwingsMarker(linkedInvoiceId))
+                              || (!string.IsNullOrWhiteSpace(linkedGuaranteeId) && !IsNotInDwingsMarker(linkedGuaranteeId));
+
+                if (isNotInDwings)
+                {
+                    LinkStatusBadge.Text = "NOT IN DWINGS";
+                    LinkStatusBadge.Foreground = (SolidColorBrush)(new BrushConverter().ConvertFromString("#424242"));
+                    LinkStatusBadgeContainer.Background = (SolidColorBrush)(new BrushConverter().ConvertFromString("#EEEEEE"));
+                    LinkStatusBadgeContainer.ToolTip = "Marked as out of DWINGS scope (Action=NA, KPI=Not TFSC, ReasonNonRisky=Not TFSC).";
+                }
+                else if (linked)
                 {
                     LinkStatusBadge.Text = "LINKED";
                     LinkStatusBadge.Foreground = (SolidColorBrush)(new BrushConverter().ConvertFromString("#0F5132"));
@@ -635,6 +670,106 @@ namespace RecoTool.Windows
             }
         }
 
+        /// <summary>
+        /// Marks the line as out of DWINGS scope (hors process). Sets the closed-out combo
+        /// using existing referential values (no schema change) so the line drops out of the
+        /// active workflow but remains traceable. Mirrors the badge update so the user sees
+        /// the new status immediately.
+        /// </summary>
+        private async void NotInDwingsButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_item == null || _reconciliationService == null)
+                {
+                    if (StatusText != null) StatusText.Text = "Unable to mark: service or item not ready.";
+                    return;
+                }
+
+                var confirm = MessageBox.Show(
+                    "Mark this line as 'NOT IN DWINGS'?\n\n" +
+                    "This will set:\n" +
+                    "  • Action = N/A\n" +
+                    "  • KPI = Not TFSC\n" +
+                    "  • Risky = No (justified by Not TFSC)\n" +
+                    "  • Action Status = DONE\n\n" +
+                    "A tracking comment will be appended. Use this for pivot lines that\n" +
+                    "will never be reconciled with a DWINGS invoice.",
+                    "Confirm NOT IN DWINGS",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question);
+
+                if (confirm != MessageBoxResult.Yes) return;
+
+                var reco = _reconciliation ?? await _reconciliationService.GetOrCreateReconciliationAsync(_item.ID);
+                reco.ID = _item.ID;
+
+                // Closed-out combo using existing referential IDs (validated by business; no schema change).
+                reco.Action = (int)ActionType.NA;
+                reco.KPI = (int)KPIType.NotTFSC;
+                reco.RiskyItem = false;
+                reco.ReasonNonRisky = (int)Risky.NotTFSC;
+                reco.ActionStatus = true;          // DONE
+                reco.ActionDate = DateTime.Now;
+
+                // Append the tracking marker once (idempotent if user clicks twice)
+                var who = string.IsNullOrWhiteSpace(Environment.UserName) ? "?" : Environment.UserName;
+                var stamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+                var marker = $"[NOT IN DWINGS] marked by {who} on {stamp}";
+                if (string.IsNullOrWhiteSpace(reco.Comments))
+                {
+                    reco.Comments = marker;
+                }
+                else if (reco.Comments.IndexOf("[NOT IN DWINGS]", StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    reco.Comments = reco.Comments.TrimEnd() + Environment.NewLine + marker;
+                }
+
+                // Mirror to the in-memory item so the UI shows the new state without a full reload.
+                // ReconciliationViewData.RiskyItem is non-nullable bool, while Reconciliation.RiskyItem
+                // is bool? — collapse null to false (consistent with IsRiskyEffective semantics).
+                _item.Action = reco.Action;
+                _item.KPI = reco.KPI;
+                _item.RiskyItem = reco.RiskyItem ?? false;
+                _item.ReasonNonRisky = reco.ReasonNonRisky;
+                _item.ActionStatus = reco.ActionStatus;
+                _item.ActionDate = reco.ActionDate;
+                _item.Comments = reco.Comments;
+
+                // Stamp the marker into the 3 DW fields so the row is visibly out-of-scope in
+                // the parent grid. Any prior real reference (BGI/BGPMT/GuaranteeID) is overwritten
+                // — that's the user's intent: this line will never be reconciled with DWINGS.
+                // The import UPDATE only writes empty cells, so the marker survives re-imports.
+                reco.DWINGS_GuaranteeID = NotInDwingsMarker;
+                reco.DWINGS_InvoiceID   = NotInDwingsMarker;
+                reco.DWINGS_BGPMT       = NotInDwingsMarker;
+
+                _item.DWINGS_GuaranteeID = NotInDwingsMarker;
+                _item.DWINGS_InvoiceID   = NotInDwingsMarker;
+                _item.DWINGS_BGPMT       = NotInDwingsMarker;
+
+                await _reconciliationService.SaveReconciliationAsync(reco);
+                _reconciliation = reco;
+
+                // Clear all derived I_*/G_* columns so the grid no longer shows leftover invoice/
+                // guarantee details for the (now-detached) link.
+                try { _item.RefreshDwingsData(); } catch { }
+
+                if (StatusText != null) StatusText.Text = "Marked as NOT IN DWINGS and saved.";
+
+                // Refresh editor controls that may already be bound to the old values
+                try { if (CommentTextBox != null) CommentTextBox.Text = reco.Comments; } catch { }
+                UpdateLinkStatusBadge();
+
+                // Signal the parent view that data was modified so it refreshes the row.
+                try { this.DialogResult = true; } catch { }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"NOT IN DWINGS failed: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
             UpdateLinkStatusBadge();
@@ -642,10 +777,16 @@ namespace RecoTool.Windows
 
         private static bool IsMatched(ReconciliationViewData x)
         {
-            return !string.IsNullOrWhiteSpace(x?.DWINGS_GuaranteeID)
-                   || !string.IsNullOrWhiteSpace(x?.DWINGS_InvoiceID)
-                   || !string.IsNullOrWhiteSpace(x?.DWINGS_BGPMT);
+            // A line stamped "NOT IN DWINGS" is explicitly out-of-scope — treat it as unmatched
+            // for the on-screen Status field so it doesn't read "Matched".
+            return (!string.IsNullOrWhiteSpace(x?.DWINGS_GuaranteeID) && !IsNotInDwingsMarker(x.DWINGS_GuaranteeID))
+                   || (!string.IsNullOrWhiteSpace(x?.DWINGS_InvoiceID) && !IsNotInDwingsMarker(x.DWINGS_InvoiceID))
+                   || (!string.IsNullOrWhiteSpace(x?.DWINGS_BGPMT) && !IsNotInDwingsMarker(x.DWINGS_BGPMT));
         }
+
+        private static bool IsNotInDwingsMarker(string value)
+            => !string.IsNullOrEmpty(value)
+               && string.Equals(value.Trim(), NotInDwingsMarker, StringComparison.OrdinalIgnoreCase);
 
 
         private async void DwingsSearchButton_Click(object sender, RoutedEventArgs e)

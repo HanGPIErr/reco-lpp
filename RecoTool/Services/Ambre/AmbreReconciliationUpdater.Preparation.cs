@@ -281,10 +281,27 @@ namespace RecoTool.Services.Ambre
 
                         if (!string.IsNullOrWhiteSpace(payload))
                         {
-                            // Extract tokens from the payload
+                            // ── TOP-1 priority: <pacs:EndToEndId> is the originator's transaction
+                            // reference and is generally the OfficialRef of the underlying guarantee
+                            // (e.g. "700.678"). Resolve it FIRST against the GuaranteeCache before
+                            // falling back to the generic regex extractors below.
+                            string foundGid = null;
+                            var endToEndId = DwingsLinkingHelper.ExtractEndToEndId(payload);
+                            if (!string.IsNullOrWhiteSpace(endToEndId))
+                            {
+                                var resolvedFromE2E = GuaranteeCache.FindGuaranteeId(endToEndId);
+                                if (!string.IsNullOrWhiteSpace(resolvedFromE2E))
+                                    foundGid = resolvedFromE2E;
+                                else
+                                    foundGid = DwingsLinkingHelper.ExtractGuaranteeId(endToEndId);
+                            }
+
+                            // Existing token extraction
                             var foundBgpmt = DwingsLinkingHelper.ExtractBgpmtToken(payload);
                             var foundBgi = DwingsLinkingHelper.ExtractBgiToken(payload);
-                            var foundGid = DwingsLinkingHelper.ExtractGuaranteeId(payload);
+                            // Generic Guarantee regex on the whole payload — only if EndToEndId path failed
+                            if (string.IsNullOrWhiteSpace(foundGid))
+                                foundGid = DwingsLinkingHelper.ExtractGuaranteeId(payload);
 
                             if (!string.IsNullOrWhiteSpace(foundGid) && string.IsNullOrWhiteSpace(reconciliation.DWINGS_GuaranteeID))
                                 reconciliation.DWINGS_GuaranteeID = foundGid;
@@ -293,7 +310,7 @@ namespace RecoTool.Services.Ambre
                             if (!string.IsNullOrWhiteSpace(foundBgpmt) && string.IsNullOrWhiteSpace(reconciliation.DWINGS_BGPMT))
                                 reconciliation.DWINGS_BGPMT = foundBgpmt;
 
-                            // Fallback: use GuaranteeCache only if no structured G/N-ref was found by regex
+                            // Fallback: use GuaranteeCache on full payload if EndToEndId+regex still missed
                             if (string.IsNullOrWhiteSpace(reconciliation.DWINGS_GuaranteeID))
                             {
                                 var searchByOfficial = GuaranteeCache.FindGuaranteeId(payload);

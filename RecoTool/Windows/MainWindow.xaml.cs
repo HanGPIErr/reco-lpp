@@ -334,6 +334,68 @@ namespace RecoTool.Windows
             }
         }
 
+        // Multi-user toggle. Default ON (matches FeatureFlags.ENABLE_MULTI_USER).
+        // When OFF: background pushes/pulls and SyncMonitorService timer are paused
+        // for better UI responsiveness on slow networks. Local edits still persist.
+        private bool _isMultiUserMode = Configuration.FeatureFlags.ENABLE_MULTI_USER;
+        public bool IsMultiUserMode
+        {
+            get => _isMultiUserMode;
+            set
+            {
+                if (_isMultiUserMode == value) return;
+                _isMultiUserMode = value;
+                ApplyMultiUserMode(value);
+                OnPropertyChanged(nameof(IsMultiUserMode));
+                OnPropertyChanged(nameof(MultiUserButtonText));
+            }
+        }
+
+        // Header label that flips between "Multi-user" and "Solo mode" so the active state is obvious
+        // even before reading the red OFF tint applied via the ToggleButton style.
+        public string MultiUserButtonText => _isMultiUserMode ? "Multi-user" : "Solo mode";
+
+        private void ApplyMultiUserMode(bool enabled)
+        {
+            // 1) Propagate flag for code paths guarded by FeatureFlags.ENABLE_MULTI_USER
+            //    (TodoListSessionTracker heartbeat, presence registration, etc.).
+            try { Configuration.FeatureFlags.SetMultiUserEnabled(enabled); } catch { }
+
+            // 2) Hard kill-switch on background pushes/pulls. This stops automatic sync
+            //    in PushReconciliationIfPendingAsync, BackgroundSyncEngine and SyncMonitorService.
+            if (_offlineFirstService != null)
+            {
+                try { _offlineFirstService.AllowBackgroundPushes = enabled; } catch { }
+            }
+
+            // 3) Start/Stop the SyncMonitorService poll timer itself so we don't even
+            //    issue lock/network checks while OFF (these are the main UI freeze culprits
+            //    reported by Gianni on the slow Denmark network share).
+            try
+            {
+                var monitor = SyncMonitorService.Instance;
+                if (enabled) monitor?.Start();
+                else monitor?.Stop();
+            }
+            catch { }
+
+            // 4) Reflect the new state in the status bar so the user sees the change immediately.
+            try
+            {
+                if (enabled)
+                {
+                    SyncStatusText = "✅ Up to date";
+                    SyncStatusBrush = Brushes.DarkGreen;
+                }
+                else
+                {
+                    SyncStatusText = "🐢 Solo mode (sync paused)";
+                    SyncStatusBrush = Brushes.Goldenrod;
+                }
+            }
+            catch { }
+        }
+
         // App Version shown in the header
         private string _appVersion = "v";
         public string AppVersion
