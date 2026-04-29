@@ -310,6 +310,12 @@ namespace RecoTool.UI.ViewModels
             var client = f.Client;
             var comments = f.Comments;
             var guaranteeStatus = f.GuaranteeStatus?.Trim();
+            // Mirror FilterBuilder.MapUiToDb so the in-memory pass matches the SQL one.
+            // Empty/whitespace stays empty (no filter), so trim BEFORE the mapping check.
+            var guaranteeTypeRaw = f.GuaranteeType?.Trim();
+            var guaranteeTypeDb = string.IsNullOrEmpty(guaranteeTypeRaw)
+                ? null
+                : FilterBuilder.MapUiToDb(guaranteeTypeRaw);
             var dwInvoiceId = f.DwInvoiceId;
             var dwGuaranteeId = f.DwGuaranteeId;
             var dwCommissionId = f.DwCommissionId;
@@ -418,6 +424,14 @@ namespace RecoTool.UI.ViewModels
                 // Guarantee status contains
                 if (!string.IsNullOrWhiteSpace(guaranteeStatus) && 
                     (x.GUARANTEE_STATUS ?? string.Empty).IndexOf(guaranteeStatus, System.StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+
+                // Guarantee type — exact match (UI-friendly value mapped to DB code, mirroring
+                // FilterBuilder.MapUiToDb so the SQL and in-memory filters agree). The bug here
+                // was that this in-memory pass had no GuaranteeType branch at all, which is why
+                // the filter "did not work" once the dataset was already loaded into memory.
+                if (!string.IsNullOrWhiteSpace(guaranteeTypeDb) &&
+                    !string.Equals(x.G_GUARANTEE_TYPE, guaranteeTypeDb, System.StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 // Consolidated DWINGS Ref: match across multiple columns

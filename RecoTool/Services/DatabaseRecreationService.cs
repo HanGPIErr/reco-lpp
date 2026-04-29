@@ -90,6 +90,10 @@ namespace RecoTool.Services
                    .WithColumn("RiskyItem", typeof(bool))
                    .WithColumn("ReasonNonRisky", typeof(int), "LONG")
                    .WithColumn("TriggerDate", typeof(DateTime), "DATETIME")
+                   // Phase 2: Partially-paid BGI tracking. When > 0, the row is excluded from
+                   // the bulk Trigger flow until the user resets it (= "fully paid"). NULL means
+                   // the field has never been set (default behaviour, no impact on Trigger).
+                   .WithColumn("RemainingAmount", typeof(decimal), "CURRENCY")
                    // Audit & user-edit protection (Phase 1 robustness)
                    .WithColumn("LastModifiedByUser", typeof(DateTime), "DATETIME")
                    .WithColumn("UserEditedFields", typeof(string), "TEXT(255)")

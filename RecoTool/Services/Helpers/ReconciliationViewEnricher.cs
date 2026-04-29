@@ -136,6 +136,18 @@ namespace RecoTool.Services.Helpers
                 {
                     // OPTIMIZED: Only set the linking fields, all I_* properties are now lazy-loaded
                     row.INVOICE_ID = inv.INVOICE_ID;
+
+                    // ── Seed FirstClaimDate from invoice MT_DATE when ACK'd ──
+                    // Business rule: once the bank has acknowledged the wire, MT_DATE on the linked
+                    // DWINGS invoice is the authoritative "first claim" date. We only fill empty
+                    // FirstClaimDate values (never overwrite a user-edited one) and only when ACK is
+                    // true — for non-ACK rows the MT_DATE is meaningless as a claim reference.
+                    // UI-only seed: persistence happens lazily on the next user save (the value will
+                    // round-trip through SaveReconciliation* after the user opens & saves the row).
+                    if (row.ACK && !row.FirstClaimDate.HasValue && inv.MT_DATE.HasValue)
+                    {
+                        row.FirstClaimDate = inv.MT_DATE;
+                    }
                 }
             }
         }
@@ -180,6 +192,64 @@ namespace RecoTool.Services.Helpers
                 }
             }
             return linked;
+        }
+
+        /// <summary>
+        /// Phase 2 — Partially-paid BGI tracking (Auto by group balance).
+        /// <para>
+        /// Computes <see cref="ReconciliationViewData.GroupBalance"/> for every row by summing
+        /// <c>SignedAmount</c> across all rows sharing the same group key. The grouping is aligned
+        /// with <c>RowActions.SingleProcessDwings_Click</c>: <c>InternalInvoiceReference</c> is
+        /// the primary key, with <c>DWINGS_BGPMT</c> as fallback when no internal ref is set.
+        /// </para>
+        /// <para>
+        /// A row that has neither identifier is left untouched (<c>GroupBalance = null</c>) and is
+        /// therefore considered standalone — never partially paid by the auto rule.
+        /// </para>
+        /// <para>
+        /// Deleted rows are excluded from the balance because the Trigger flow already ignores
+        /// them; including them would skew the sum and cause false "still owed" verdicts.
+        /// </para>
+        /// </summary>
+        /// <remarks>
+        /// O(N) over the input. Run once after every full enrichment pass (refresh, basket link,
+        /// edit) — the result drives the read-only "Effective remaining" displayed in the detail
+        /// dialog and the bulk-Trigger eligibility filter.
+        /// </remarks>
+        public static void ComputeAndApplyGroupBalances(IList<ReconciliationViewData> rows)
+        {
+            if (rows == null || rows.Count == 0) return;
+
+            // Local helper: same precedence rule as the Trigger flow uses to assemble groups.
+            string KeyOf(ReconciliationViewData r)
+            {
+                if (r == null || r.IsDeleted) return null;
+                var inv = r.InternalInvoiceReference?.Trim();
+                if (!string.IsNullOrEmpty(inv)) return "REF:" + inv.ToUpperInvariant();
+                var bg = r.DWINGS_BGPMT?.Trim();
+                if (!string.IsNullOrEmpty(bg)) return "BGPMT:" + bg.ToUpperInvariant();
+                return null;
+            }
+
+            // Single-pass aggregation. Using decimal explicitly — SignedAmount on DataAmbre is
+            // already decimal, so no float drift creeps in.
+            var balances = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in rows)
+            {
+                var k = KeyOf(r);
+                if (k == null) continue;
+                if (balances.TryGetValue(k, out var v)) balances[k] = v + r.SignedAmount;
+                else balances[k] = r.SignedAmount;
+            }
+
+            // Application pass. Rows outside any group get null so the detail UI knows the
+            // auto-rule has nothing to say (vs "computed and equal to 0", which is "fully paid").
+            foreach (var r in rows)
+            {
+                if (r == null) continue;
+                var k = KeyOf(r);
+                r.GroupBalance = (k != null && balances.TryGetValue(k, out var v)) ? v : (decimal?)null;
+            }
         }
 
         /// <summary>

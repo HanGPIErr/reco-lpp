@@ -9,6 +9,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using RecoTool.Infrastructure.DataAccess;
 using RecoTool.Services.DTOs;
+using RecoTool.Services.Helpers;
 
 namespace RecoTool.Services
 {
@@ -180,6 +181,10 @@ namespace RecoTool.Services
                             MT_STATUS = TryToStringSafe(rd, "MT_STATUS"),
                             ERROR_MESSAGE = TryToStringSafe(rd, "ERROR_MESSAGE"),
                             COMM_ID_EMAIL = TryToBool(TryGet(rd, "COMM_ID_EMAIL")),
+                            // MT_DATE is the date the wire transfer was booked. Used to seed
+                            // FirstClaimDate on ACK'd reconciliations (FirstClaimDate stays user-editable
+                            // afterwards — we never overwrite a non-empty value).
+                            MT_DATE = TryToDate(TryGet(rd, "MT_DATE")),
                         });
                     }
                 }
@@ -238,10 +243,34 @@ namespace RecoTool.Services
             try { return Convert.ToDecimal(o, CultureInfo.InvariantCulture); } catch { return null; }
         }
 
+        /// <summary>
+        /// Coerces a DWINGS column value to <see cref="DateTime"/>. Handles both:
+        /// <list type="bullet">
+        /// <item>True DATE columns — the OleDb provider already gives us a <see cref="DateTime"/>.</item>
+        /// <item>TEXT columns that store the date as a string. <c>MT_DATE</c> in <c>T_DW_Data</c>
+        /// is the prime example: column type is TEXT in the source extract, with values such as
+        /// <c>"23-APR-26"</c>. The default <see cref="Convert.ToDateTime(object, IFormatProvider)"/>
+        /// rejects those formats under InvariantCulture and silently returns null, which broke
+        /// the FirstClaimDate seed. We delegate string parsing to <see cref="DwingsDateHelper.TryParseDwingsDate"/>
+        /// (already used for the lazy-loaded I_*/G_* date properties) so all DWINGS date formats
+        /// — <c>dd-MMM-yy</c>, <c>dd/MM/yyyy</c>, ISO, etc. — are recognised consistently.</item>
+        /// </list>
+        /// </summary>
         private static DateTime? TryToDate(object o)
         {
             if (o == null || o == DBNull.Value) return null;
-            try { return Convert.ToDateTime(o, CultureInfo.InvariantCulture); } catch { return null; }
+            if (o is DateTime dt) return dt;
+
+            // Stringified value: DWINGS extracts frequently store dates in TEXT columns.
+            var s = Convert.ToString(o, CultureInfo.InvariantCulture);
+            if (string.IsNullOrWhiteSpace(s)) return null;
+
+            if (DwingsDateHelper.TryParseDwingsDate(s, out var parsed))
+                return parsed;
+
+            // Last-resort generic parse — keeps backward compatibility for any pre-existing
+            // exotic format that the helper would not match (kept inside try/catch on purpose).
+            try { return Convert.ToDateTime(s, CultureInfo.InvariantCulture); } catch { return null; }
         }
 
         private static bool? TryToBool(object o)

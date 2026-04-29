@@ -33,5 +33,8 @@ namespace RecoTool.Services.DTOs
         public string ERROR_MESSAGE { get; set; }
         // New: whether the COMM ID (email) flag is set on the invoice
         public bool? COMM_ID_EMAIL { get; set; }
+        // Date the MT was issued/booked. Used to seed FirstClaimDate on ACK'd reconciliations
+        // (see ReconciliationViewEnricher.EnrichWithDwingsInvoices and ReconciliationDetailWindow.LoadReconciliationAsync).
+        public DateTime? MT_DATE { get; set; }
     }
 }

@@ -39,6 +39,13 @@ namespace RecoTool.Models
         // Trigger date
         public DateTime? TriggerDate { get; set; }
 
+        // Phase 2: Partially-paid BGI tracking. When > 0, the row is treated as "still owed"
+        // and is excluded from the bulk Trigger flow (RowActions.DwingsBlueButton) until the
+        // user clears it (= sets to 0 or null). NULL means the field has never been set —
+        // legacy rows behave exactly as before. Stored as CURRENCY in Access for fixed-point
+        // money precision.
+        public decimal? RemainingAmount { get; set; }
+
         // Action workflow status: false => PENDING, true => DONE
         public bool? ActionStatus { get; set; }
         // Date of status modification (set when Action is set or status changes)

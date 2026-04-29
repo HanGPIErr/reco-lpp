@@ -46,6 +46,7 @@ namespace RecoTool.Services.Queries
                                    r.ReasonNonRisky,
                                    r.IncNumber,
                                    r.TriggerDate,
+                                   r.RemainingAmount,
                                    r.ModifiedBy AS Reco_ModifiedBy,
                                    IIF(dup.DupCount > 1, True, False) AS IsPotentialDuplicate,
 

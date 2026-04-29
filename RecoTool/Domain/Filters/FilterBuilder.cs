@@ -13,8 +13,10 @@ namespace RecoTool.Domain.Filters
         private static string Esc(string s) => string.IsNullOrEmpty(s) ? s : s.Replace("'", "''");
         private static string DateLit(DateTime d) => "#" + d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + "#"; // Access date literal
 
-        // UI -> DB mapping for a few enumerated values (keep compatible with current behavior)
-        private static string MapUiToDb(string s)
+        // UI -> DB mapping for a few enumerated values (keep compatible with current behavior).
+        // Internal so the in-memory ApplyFilters can mirror the same mapping the SQL builder
+        // uses — keeps SQL filter and in-memory filter results identical.
+        internal static string MapUiToDb(string s)
         {
             switch ((s ?? string.Empty).Trim().ToUpperInvariant())
             {

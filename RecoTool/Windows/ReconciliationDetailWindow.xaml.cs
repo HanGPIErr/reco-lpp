@@ -457,6 +457,26 @@ namespace RecoTool.Windows
                 if (TriggerDatePicker != null)
                     TriggerDatePicker.SelectedDate = _reconciliation?.TriggerDate;
 
+                // Remaining to Pay (Partially-paid BGI tracker).
+                // The textbox holds the *override*: empty means "use the auto group balance".
+                // The auto label on the right shows the computed sum so the user can sanity-check
+                // before deciding whether to override or to leave it empty.
+                if (RemainingAmountTextBox != null)
+                {
+                    var manual = _reconciliation?.RemainingAmount;
+                    RemainingAmountTextBox.Text = manual.HasValue
+                        ? manual.Value.ToString("0.##", CultureInfo.InvariantCulture)
+                        : string.Empty;
+                }
+                RefreshRemainingAuxiliaryUI();
+
+                // Auto-seed FirstClaimDate from the linked DWINGS invoice's MT_DATE when ACK is
+                // set but the field is still empty. Fire-and-forget: the lookup is async (cache
+                // hit is sync, miss triggers a background DB read) and we don't want the entire
+                // load to block on it. The value lands on _reconciliation; the user persists it
+                // by clicking Save.
+                _ = SeedFirstClaimDateFromMtDateAsync();
+
                 // Action status/date
                 try
                 {
@@ -773,6 +793,124 @@ namespace RecoTool.Windows
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
             UpdateLinkStatusBadge();
+        }
+
+        /// <summary>
+        /// Looks up the linked DWINGS invoice and returns its <c>MT_DATE</c> (the wire booking
+        /// date). Returns null when no invoice id is provided, the invoice cannot be found, or
+        /// the invoice itself has no MT_DATE yet. Pure read — never mutates state.
+        /// </summary>
+        private async System.Threading.Tasks.Task<DateTime?> TryGetMtDateForLinkedInvoiceAsync(string invoiceId)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(invoiceId) || _reconciliationService == null) return null;
+                var invoices = await _reconciliationService.GetDwingsInvoicesAsync().ConfigureAwait(true);
+                if (invoices == null) return null;
+                var inv = invoices.FirstOrDefault(x => string.Equals(x?.INVOICE_ID, invoiceId, StringComparison.OrdinalIgnoreCase));
+                return inv?.MT_DATE;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// On-load seed: if ACK is true and FirstClaimDate is still empty, fill it from the
+        /// linked DWINGS invoice's MT_DATE so the value is visible to the user (and round-trips
+        /// through Save). The actual UI control for FirstClaimDate is not currently exposed in
+        /// this dialog — the seed reaches the row via the next save and the grid binding.
+        /// </summary>
+        private async System.Threading.Tasks.Task SeedFirstClaimDateFromMtDateAsync()
+        {
+            try
+            {
+                if (_reconciliation == null) return;
+                if (!_reconciliation.ACK) return;
+                if (_reconciliation.FirstClaimDate.HasValue) return;
+                var mtDate = await TryGetMtDateForLinkedInvoiceAsync(_reconciliation.DWINGS_InvoiceID);
+                if (!mtDate.HasValue) return;
+                _reconciliation.FirstClaimDate = mtDate;
+                try { _item.FirstClaimDate = mtDate; } catch { }
+            }
+            catch
+            {
+                // Best-effort: never block dialog load on a DWINGS lookup failure.
+            }
+        }
+
+        /// <summary>
+        /// Refreshes the auto-balance label and the "PARTIALLY PAID" badge based on the current
+        /// override text and the row's <see cref="ReconciliationViewData.GroupBalance"/>.
+        /// </summary>
+        /// <remarks>
+        /// Logic mirrors <see cref="ReconciliationViewData.IsPartiallyPaid"/>: the badge lights
+        /// up when the *effective* remaining (override if typed, else auto balance) is not zero
+        /// within the same 0.005 tolerance. Failures are swallowed because UI fluff must never
+        /// break editing.
+        /// </remarks>
+        private void RefreshRemainingAuxiliaryUI()
+        {
+            try
+            {
+                // 1) Auto balance label — always shows the computed group balance, even when
+                //    the user types an override (so they can compare).
+                decimal? autoBalance = null;
+                try { autoBalance = _item?.GroupBalance; } catch { }
+                if (AutoBalanceText != null)
+                {
+                    if (autoBalance.HasValue)
+                    {
+                        AutoBalanceText.Text = $"Auto: {autoBalance.Value.ToString("N2", CultureInfo.InvariantCulture)}";
+                        AutoBalanceText.Visibility = Visibility.Visible;
+                    }
+                    else
+                    {
+                        AutoBalanceText.Text = string.Empty;
+                        AutoBalanceText.Visibility = Visibility.Collapsed;
+                    }
+                }
+
+                // 2) Effective remaining = override (if parseable) else auto balance.
+                decimal? effective = null;
+                var raw = RemainingAmountTextBox?.Text?.Trim();
+                if (!string.IsNullOrEmpty(raw) && TryParseDecimalFlexible(raw, out var typed))
+                    effective = typed;
+                else
+                    effective = autoBalance;
+
+                // 3) Badge visibility — same tolerance as ReconciliationViewData.IsPartiallyPaid.
+                if (PartiallyPaidBadge != null)
+                {
+                    bool show = effective.HasValue && Math.Abs(effective.Value) > 0.005m;
+                    PartiallyPaidBadge.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+                }
+            }
+            catch
+            {
+                // Best-effort UI refresh — never break editing on a label/badge update.
+            }
+        }
+
+        private void RemainingAmountTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            RefreshRemainingAuxiliaryUI();
+        }
+
+        /// <summary>
+        /// Parses a decimal accepting both "." and "," as the decimal separator (operators paste
+        /// values from Excel/Outlook in either locale). Whitespace and thousand separators ("' ")
+        /// are stripped before parsing.
+        /// </summary>
+        private static bool TryParseDecimalFlexible(string s, out decimal value)
+        {
+            value = 0m;
+            if (string.IsNullOrWhiteSpace(s)) return false;
+            // Normalise: drop spaces and apostrophes (CH/FR thousand sep), unify ',' → '.'.
+            var cleaned = s.Replace(" ", "").Replace("'", "").Replace(",", ".");
+            return decimal.TryParse(cleaned, System.Globalization.NumberStyles.Number,
+                System.Globalization.CultureInfo.InvariantCulture, out value);
         }
 
         private static bool IsMatched(ReconciliationViewData x)
@@ -1204,6 +1342,20 @@ namespace RecoTool.Windows
                 if (AckCheckBox != null && AckCheckBox.IsChecked.HasValue)
                     reco.ACK = AckCheckBox.IsChecked.Value;
 
+                // If ACK was just toggled on (or was already on) and FirstClaimDate is still
+                // empty, seed it from the linked DWINGS invoice's MT_DATE before persisting.
+                // This handles the case where the user toggles ACK and immediately saves
+                // without re-opening the dialog.
+                if (reco.ACK && !reco.FirstClaimDate.HasValue)
+                {
+                    var seeded = await TryGetMtDateForLinkedInvoiceAsync(reco.DWINGS_InvoiceID);
+                    if (seeded.HasValue)
+                    {
+                        reco.FirstClaimDate = seeded;
+                        try { _item.FirstClaimDate = seeded; } catch { }
+                    }
+                }
+
                 if (SwiftCodeTextBox != null)
                     reco.SwiftCode = SwiftCodeTextBox.Text?.Trim();
 
@@ -1254,6 +1406,34 @@ namespace RecoTool.Windows
                 // Persist Trigger Date
                 if (TriggerDatePicker != null)
                     reco.TriggerDate = TriggerDatePicker.SelectedDate;
+
+                // Persist Remaining (Partially-paid).
+                //   Empty textbox => null = no override = fall back to auto group balance.
+                //   "0" or any number  => persisted as a manual override that wins over auto.
+                // Reject malformed input with a focused message rather than a silent NaN —
+                // the user typically expects this to round-trip exactly.
+                // Negative values are kept as-is here (the auto balance can legitimately be
+                // negative, e.g. overpaid pivot — we preserve sign so the user can encode it).
+                if (RemainingAmountTextBox != null)
+                {
+                    var raw = RemainingAmountTextBox.Text?.Trim();
+                    if (string.IsNullOrEmpty(raw))
+                    {
+                        reco.RemainingAmount = null;
+                    }
+                    else if (TryParseDecimalFlexible(raw, out var parsed))
+                    {
+                        reco.RemainingAmount = parsed;
+                    }
+                    else
+                    {
+                        MessageBox.Show($"Remaining amount '{raw}' is not a valid number.",
+                            "Invalid Remaining Amount", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        try { RemainingAmountTextBox.Focus(); } catch { }
+                        return;
+                    }
+                    try { _item.RemainingAmount = reco.RemainingAmount; } catch { }
+                }
 
                 // Defaults: when an Action is set but no status/date provided, set PENDING with today's date
                 if (SelectedActionId.HasValue)

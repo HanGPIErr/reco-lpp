@@ -737,12 +737,17 @@ namespace RecoTool.Windows
                 }
                 
                 // Recalculate MissingAmount using the enricher
+                var allDataList = allData.ToList();
                 ReconciliationViewEnricher.CalculateMissingAmounts(
-                    allData.ToList(), 
+                    allDataList,
                     country.CNT_AmbreReceivable, 
                     country.CNT_AmbrePivot
                 );
-                
+
+                // Phase 2: a re-grouping (e.g. user edited InternalInvoiceReference or BGPMT)
+                // changes which rows belong to which group; refresh GroupBalance accordingly.
+                ReconciliationViewEnricher.ComputeAndApplyGroupBalances(allDataList);
+
                 // Refresh pre-calculated display caches for all affected rows
                 foreach (var row in rowsToRecalculate)
                     row.PreCalculateDisplayProperties();

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -966,6 +967,11 @@ Do you want to apply these automatic rules?
                 var allGroupIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var processedBgpmts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+                // Phase 2 (Partially-paid BGI): groups skipped because at least one row carries
+                // a non-zero RemainingAmount. Surfaced in a single toast at the end so the
+                // operator knows exactly why a Trigger they expected did not fire.
+                var partiallyPaidSkipped = new List<string>();
+
                 foreach (var row in targetRows)
                 {
                     // Only process rows that are not deleted and are grouped
@@ -982,6 +988,24 @@ Do you want to apply these automatic rules?
                         && ((hasInvRef && string.Equals(r.InternalInvoiceReference?.Trim(), row.InternalInvoiceReference?.Trim(), StringComparison.OrdinalIgnoreCase))
                             || (hasBgpmt && string.Equals(r.DWINGS_BGPMT?.Trim(), row.DWINGS_BGPMT?.Trim(), StringComparison.OrdinalIgnoreCase)))
                     ).ToList();
+
+                    // ── Phase 2: skip the group if it is not fully collected yet ──
+                    // IsPartiallyPaid prefers the user's manual override, otherwise it falls
+                    // back to the auto group balance (sum of SignedAmount across receivables
+                    // and matched pivots). Either way, a non-zero effective remaining means
+                    // money is still expected on this BGI and the Trigger must wait.
+                    var partial = groupRows.FirstOrDefault(r => r.IsPartiallyPaid);
+                    if (partial != null)
+                    {
+                        var key = !string.IsNullOrWhiteSpace(row.DWINGS_BGPMT) ? row.DWINGS_BGPMT
+                                : !string.IsNullOrWhiteSpace(row.InternalInvoiceReference) ? row.InternalInvoiceReference
+                                : row.ID;
+                        // Show whichever value the rule used: override wins when present, else auto.
+                        var owed = partial.EffectiveRemaining;
+                        var src = partial.HasManualRemainingOverride ? "override" : "auto";
+                        partiallyPaidSkipped.Add($"{key} (still owed: {owed?.ToString("N2", CultureInfo.InvariantCulture)} [{src}])");
+                        continue;
+                    }
 
                     // Track ALL linked IDs for TRIGGER DONE expansion after success
                     foreach (var g in groupRows)
@@ -1044,9 +1068,20 @@ Do you want to apply these automatic rules?
                     }
                 }
 
+                // Phase 2: tell the operator about anything we deferred BEFORE the count check —
+                // they need this signal even when nothing was triggerable in the rest of the
+                // selection (otherwise the silent no-op looks like a bug).
+                if (partiallyPaidSkipped.Count > 0)
+                {
+                    ShowToast($"Skipped {partiallyPaidSkipped.Count} partially-paid group(s):\n" +
+                              string.Join("\n", partiallyPaidSkipped.Take(8)) +
+                              (partiallyPaidSkipped.Count > 8 ? "\n…" : string.Empty));
+                }
+
                 if (triggerItems.Count == 0)
                 {
-                    ShowToast("No eligible DWINGS trigger rows in selection.");
+                    if (partiallyPaidSkipped.Count == 0)
+                        ShowToast("No eligible DWINGS trigger rows in selection.");
                     return;
                 }
 

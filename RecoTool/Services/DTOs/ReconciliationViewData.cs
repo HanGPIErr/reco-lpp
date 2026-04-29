@@ -398,6 +398,90 @@ namespace RecoTool.Services.DTOs
         // Trigger date from T_Reconciliation
         public DateTime? TriggerDate { get; set; }
 
+        // ── Phase 2: Partially-paid BGI tracking ─────────────────────────────────────
+        // The "remaining to pay" for a BGI is the net balance of its whole group
+        // (sum of SignedAmount across receivables + matched pivots, grouped by BGPMT
+        // or InternalInvoiceReference). When != 0 the BGI is not fully collected yet
+        // and the bulk Trigger flow skips it.
+        //
+        // Two values cohabit:
+        //   • RemainingAmount       — *manual override* persisted on T_Reconciliation.
+        //                             NULL = no override (fall back to auto-balance).
+        //                             Value (incl. 0) = the user has decided this is the
+        //                             remaining-to-pay, regardless of the auto balance.
+        //   • GroupBalance          — *automatic* sum computed at refresh time by
+        //                             ReconciliationViewEnricher. NULL until enriched.
+        //
+        // EffectiveRemaining picks the override when present, otherwise the auto balance.
+        // IsPartiallyPaid is true when the effective value is non-zero (with a small
+        // FX/cent tolerance to avoid false positives from rounding).
+
+        private decimal? _remainingAmount;
+        public decimal? RemainingAmount
+        {
+            get => _remainingAmount;
+            set
+            {
+                if (_remainingAmount != value)
+                {
+                    _remainingAmount = value;
+                    OnPropertyChanged(nameof(RemainingAmount));
+                    OnPropertyChanged(nameof(EffectiveRemaining));
+                    OnPropertyChanged(nameof(IsPartiallyPaid));
+                    OnPropertyChanged(nameof(HasManualRemainingOverride));
+                }
+            }
+        }
+
+        private decimal? _groupBalance;
+        /// <summary>
+        /// Net balance of the BGI group this row belongs to, computed by the enricher as
+        /// sum(SignedAmount) over all rows sharing the same BGPMT (preferred) or
+        /// InternalInvoiceReference. 0 ⇒ fully paid; ≠ 0 ⇒ still owed (or overpaid).
+        /// NULL when the row does not belong to any identifiable group.
+        /// </summary>
+        public decimal? GroupBalance
+        {
+            get => _groupBalance;
+            set
+            {
+                if (_groupBalance != value)
+                {
+                    _groupBalance = value;
+                    OnPropertyChanged(nameof(GroupBalance));
+                    OnPropertyChanged(nameof(EffectiveRemaining));
+                    OnPropertyChanged(nameof(IsPartiallyPaid));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Final value used to decide whether a Trigger is allowed: manual override when
+        /// the user set <see cref="RemainingAmount"/>, otherwise the automatic
+        /// <see cref="GroupBalance"/>. May be null when neither is known.
+        /// </summary>
+        public decimal? EffectiveRemaining => _remainingAmount ?? _groupBalance;
+
+        /// <summary>
+        /// True when the user has explicitly stored a manual override (any value, including 0).
+        /// Used by the detail dialog to differentiate auto vs override in the UI.
+        /// </summary>
+        public bool HasManualRemainingOverride => _remainingAmount.HasValue;
+
+        /// <summary>
+        /// True when the BGI is not fully collected (effective remaining is materially
+        /// different from zero). A 0.005 tolerance absorbs FX/rounding artefacts so we do
+        /// not block the Trigger over a rounding cent.
+        /// </summary>
+        public bool IsPartiallyPaid
+        {
+            get
+            {
+                var v = EffectiveRemaining;
+                return v.HasValue && Math.Abs(v.Value) > 0.005m;
+            }
+        }
+
         // Reconciliation timestamps (used to compute UI indicators)
         public DateTime? Reco_CreationDate { get; set; }
         public DateTime? Reco_LastModified { get; set; }

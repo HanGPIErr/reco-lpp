@@ -482,6 +482,10 @@ namespace RecoTool.Services
                 var country = _countries?.TryGetValue(countryId, out var c) == true ? c : null;
                 if (country != null)
                     ReconciliationViewEnricher.CalculateMissingAmounts(list, country.CNT_AmbreReceivable, country.CNT_AmbrePivot);
+
+                // Phase 2 (Partially-paid auto rule): recompute group balances on the same
+                // pass so the detail dialog and the Trigger filter see the latest state.
+                ReconciliationViewEnricher.ComputeAndApplyGroupBalances(list);
             }
             catch { /* best-effort */ }
         }
@@ -605,6 +609,10 @@ namespace RecoTool.Services
                 {
                     ReconciliationViewEnricher.CalculateMissingAmounts(list, country.CNT_AmbreReceivable, country.CNT_AmbrePivot);
                 }
+
+                // Phase 2 (Partially-paid auto rule): mirror the call above so first-load
+                // grids already carry GroupBalance — no need to wait for a manual refresh.
+                ReconciliationViewEnricher.ComputeAndApplyGroupBalances(list);
             }
             catch { /* best-effort calculation */ }
 

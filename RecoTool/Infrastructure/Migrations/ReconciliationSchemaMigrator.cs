@@ -34,6 +34,10 @@ namespace RecoTool.Infrastructure.Migrations
             ("UserEditedFields",   "TEXT(255)"),
             ("LastRuleAppliedId",  "TEXT(100)"),
             ("LastRuleAppliedAt",  "DATETIME"),
+            // --- Phase 2: Partially-paid BGI tracking ---
+            // When > 0, the row is excluded from the bulk Trigger flow until the user
+            // resets it to 0 (= "fully paid"). NULL means the field has never been set.
+            ("RemainingAmount",    "CURRENCY"),
         };
 
         /// <summary>

@@ -342,6 +342,7 @@ namespace RecoTool.Services
                     row.MbawData = r.MbawData;
                     row.SpiritData = r.SpiritData;
                     row.TriggerDate = r.TriggerDate;
+                    row.RemainingAmount = r.RemainingAmount;
                 }
             }
         }
@@ -370,6 +371,8 @@ namespace RecoTool.Services
                 if (exists)
                 {
                     var changed = new List<string>();
+                    // RemainingAmount appended at the end (ordinal 28) so existing DbVal(0..27)
+                    // ordinals stay stable — minimises diff and avoids accidental field shifts.
                     var selectCmd = new OleDbCommand(@"SELECT 
                                 [DWINGS_GuaranteeID], [DWINGS_InvoiceID], [DWINGS_BGPMT],
                                 [Action], [ActionStatus], [ActionDate], [Assignee], [Comments], [InternalInvoiceReference],
@@ -377,7 +380,8 @@ namespace RecoTool.Services
                                 [ACK], [SwiftCode], [PaymentReference], [KPI],
                                 [IncidentType], [RiskyItem], [ReasonNonRisky], [IncNumber],
                                 [MbawData], [SpiritData], [TriggerDate],
-                                [LastModifiedByUser], [UserEditedFields], [LastRuleAppliedId], [LastRuleAppliedAt]
+                                [LastModifiedByUser], [UserEditedFields], [LastRuleAppliedId], [LastRuleAppliedAt],
+                                [RemainingAmount]
                               FROM T_Reconciliation WHERE [ID] = ?", connection, transaction);
                     selectCmd.Parameters.AddWithValue("@ID", reconciliation.ID);
                     using (var rdr = await selectCmd.ExecuteReaderAsync().ConfigureAwait(false))
@@ -431,6 +435,17 @@ namespace RecoTool.Services
                             if (!Equal(DbVal(25), (object)reconciliation.UserEditedFields)) changed.Add("UserEditedFields");
                             if (!Equal(DbVal(26), (object)reconciliation.LastRuleAppliedId)) changed.Add("LastRuleAppliedId");
                             if (!Equal(DbVal(27), reconciliation.LastRuleAppliedAt.HasValue ? (object)reconciliation.LastRuleAppliedAt.Value : null)) changed.Add("LastRuleAppliedAt");
+                            // Phase 2: partially-paid tracker (ordinal 28). Comparison normalises
+                            // to decimal so that an Access CURRENCY round-trip (which can return
+                            // double on some drivers) does not show a phantom diff every save.
+                            decimal? dbRemaining = null;
+                            try
+                            {
+                                var raw = DbVal(28);
+                                if (raw != null) dbRemaining = Convert.ToDecimal(raw);
+                            }
+                            catch { dbRemaining = null; }
+                            if (dbRemaining != reconciliation.RemainingAmount) changed.Add("RemainingAmount");
 
                             if (changed.Count == 0)
                             {
@@ -599,6 +614,12 @@ namespace RecoTool.Services
                                         p.Value = reconciliation.LastRuleAppliedAt.HasValue ? (object)reconciliation.LastRuleAppliedAt.Value : DBNull.Value;
                                         break;
                                     }
+                                case "RemainingAmount":
+                                    {
+                                        var p = cmd.Parameters.Add("@RemainingAmount", OleDbType.Currency);
+                                        p.Value = reconciliation.RemainingAmount.HasValue ? (object)reconciliation.RemainingAmount.Value : DBNull.Value;
+                                        break;
+                                    }
                             }
                         }
 
@@ -644,10 +665,10 @@ namespace RecoTool.Services
                              ([ID], [DWINGS_GuaranteeID], [DWINGS_InvoiceID], [DWINGS_BGPMT],
                               [Action], [ActionStatus], [ActionDate], [Assignee], [Comments], [InternalInvoiceReference], [FirstClaimDate], [LastClaimDate],
                               [ToRemind], [ToRemindDate], [ACK], [SwiftCode], [PaymentReference], [MbawData], [SpiritData], [KPI],
-                              [IncidentType], [RiskyItem], [ReasonNonRisky], [TriggerDate],
+                              [IncidentType], [RiskyItem], [ReasonNonRisky], [TriggerDate], [RemainingAmount],
                               [LastModifiedByUser], [UserEditedFields], [LastRuleAppliedId], [LastRuleAppliedAt],
                               [CreationDate], [ModifiedBy], [LastModified])
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
                     using (var cmd = new OleDbCommand(insertQuery, connection, transaction))
                     {
@@ -711,6 +732,14 @@ namespace RecoTool.Services
             pReason.Value = reconciliation.ReasonNonRisky.HasValue ? (object)reconciliation.ReasonNonRisky.Value : DBNull.Value;
             var pTrigDate = cmd.Parameters.Add("@TriggerDate", OleDbType.Date);
             pTrigDate.Value = reconciliation.TriggerDate.HasValue ? (object)reconciliation.TriggerDate.Value : DBNull.Value;
+
+            // Phase 2: RemainingAmount placeholder is positioned right after [TriggerDate] in
+            // the INSERT column list above; keep this parameter binding in the same order.
+            if (isInsert)
+            {
+                var pRemain = cmd.Parameters.Add("@RemainingAmount", OleDbType.Currency);
+                pRemain.Value = reconciliation.RemainingAmount.HasValue ? (object)reconciliation.RemainingAmount.Value : DBNull.Value;
+            }
 
             if (isInsert)
             {

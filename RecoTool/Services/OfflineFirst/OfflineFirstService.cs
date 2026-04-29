@@ -2363,6 +2363,60 @@ namespace RecoTool.Services
             catch { }
             onProgress?.Invoke(30, "Configuration initialisée");
 
+            // 1.b-bis) Schema drift: ALTER TABLE for any column declared in
+            // RequiredColumns but missing from the live T_Reconciliation. Must run
+            // BEFORE the push/pull below — both the change-tracking SELECT and the
+            // INSERT in ReconciliationService.Crud reference every column (including
+            // RemainingAmount and other Phase-2 fields), and OleDb fails the whole
+            // statement when a column is unknown. Idempotent and best-effort: any
+            // ALTER failure is logged in the report without aborting startup.
+            //
+            // We migrate the LOCAL database first (always reachable). If that adds
+            // any column, we also try to migrate the NETWORK database so the very
+            // next push can reference the new column on the remote side as well.
+            // The network migration is best-effort: if Access has the file locked
+            // by another user, OleDb will throw; we log and keep going — the next
+            // user / next startup will retry.
+            bool localSchemaChanged = false;
+            try
+            {
+                var localCs = GetCurrentLocalConnectionString();
+                if (!string.IsNullOrWhiteSpace(localCs))
+                {
+                    var report = await RecoTool.Infrastructure.Migrations.ReconciliationSchemaMigrator
+                        .EnsureReconciliationColumnsAsync(localCs).ConfigureAwait(false);
+                    if (!report.IsNoOp)
+                        System.Diagnostics.Debug.WriteLine($"[SchemaMigrator/local] {report}");
+                    localSchemaChanged = report.Added.Count > 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[SchemaMigrator/local] ignored: {ex.Message}");
+            }
+
+            if (localSchemaChanged)
+            {
+                try
+                {
+                    var networkPath = GetNetworkReconciliationDbPath(countryId);
+                    if (!string.IsNullOrWhiteSpace(networkPath) && File.Exists(networkPath))
+                    {
+                        var networkCs = $"Provider=Microsoft.ACE.OLEDB.12.0;Data Source={networkPath};Persist Security Info=False;";
+                        var report = await RecoTool.Infrastructure.Migrations.ReconciliationSchemaMigrator
+                            .EnsureReconciliationColumnsAsync(networkCs).ConfigureAwait(false);
+                        if (!report.IsNoOp)
+                            System.Diagnostics.Debug.WriteLine($"[SchemaMigrator/network] {report}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Common cause: another user has the file locked. Push will retry
+                    // the migration implicitly via the next call to SetCurrentCountryAsync.
+                    System.Diagnostics.Debug.WriteLine($"[SchemaMigrator/network] deferred: {ex.Message}");
+                }
+            }
+
             // 1.b) Positionner également l'objet Country courant depuis les référentiels
             try
             {

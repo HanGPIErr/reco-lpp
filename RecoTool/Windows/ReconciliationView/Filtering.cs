@@ -66,6 +66,9 @@ namespace RecoTool.Windows
                     ReconciliationViewEnricher.CalculateMissingAmounts(
                         _allViewData, country.CNT_AmbreReceivable, country.CNT_AmbrePivot);
 
+                    // Phase 2: keep GroupBalance in sync with the just-applied basket link.
+                    ReconciliationViewEnricher.ComputeAndApplyGroupBalances(_allViewData);
+
                     // Assign alternating colors to rows sharing the same InternalInvoiceReference
                     ReconciliationViewEnricher.AssignInvoiceGroupColors(_allViewData);
 
