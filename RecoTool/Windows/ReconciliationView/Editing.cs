@@ -563,18 +563,40 @@ namespace RecoTool.Windows
                 await _reconciliationService.SaveReconciliationAsync(reco, applyRulesOnEdit: false);
             }
 
-            // Recalculate grouping if linking fields changed
+            // Recalculate grouping if linking fields changed.
+            //
+            // FIX (correctness): when the user changes InternalInvoiceReference from "A" to "B",
+            // BOTH groups need to be recomputed:
+            //   - "B" (the new group) — the row just joined; the previous code already handled this.
+            //   - "A" (the old group) — the row just left it, so the remaining rows in "A" have
+            //     stale MissingAmount/CounterpartTotalAmount/CounterpartCount/IsMatchedAcrossAccounts
+            //     until the next full refresh (sync pull, basket apply, manual reload).
+            //
+            // Each incremental pass is O(group_size), so the extra call is cheap.
             if (linkingFieldsChanged || hasLinkingValue)
             {
                 try
                 {
-                    var changedRef = reco.InternalInvoiceReference ?? reco.DWINGS_InvoiceID;
-                    if (!string.IsNullOrWhiteSpace(changedRef))
+                    var newRef = reco.InternalInvoiceReference ?? reco.DWINGS_InvoiceID;
+                    var oldRef = oldInternalRef ?? oldDwingsInvoice;
+
+                    // 1) Recalc the OLD group first — only when it differs from the new one
+                    //    (avoids a redundant pass when the user merely re-saved without changing the link).
+                    if (!string.IsNullOrWhiteSpace(oldRef)
+                        && !string.Equals(oldRef, newRef, StringComparison.OrdinalIgnoreCase))
                     {
-                        RecalculateGroupingFlagsIncremental(changedRef);
+                        RecalculateGroupingFlagsIncremental(oldRef);
+                    }
+
+                    // 2) Recalc the NEW group (or fall back to a full pass if the row became standalone).
+                    if (!string.IsNullOrWhiteSpace(newRef))
+                    {
+                        RecalculateGroupingFlagsIncremental(newRef);
                     }
                     else
                     {
+                        // Row is now standalone (no internal ref, no DWINGS link) — the safe path is
+                        // to re-run the full recalc so any side-effect on dependent groups is caught.
                         RecalculateGroupingFlags();
                     }
                 }

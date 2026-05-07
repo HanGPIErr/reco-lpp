@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data.OleDb;
 using System.Diagnostics;
 using System.Globalization;
+using System.Linq.Expressions;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using OfflineFirstAccess.Helpers;
@@ -15,6 +18,10 @@ namespace RecoTool.Infrastructure.DataAccess
     /// Lightweight reflection-based ORM for OleDb/Access queries.
     /// Extracted from ReconciliationService to be reusable across all services.
     /// Maps query result columns to DTO properties by name (case-insensitive).
+    ///
+    /// PERF: Property setters are compiled once per (Type, PropertyInfo) via Expression trees
+    /// and cached statically. With 20k+ rows and 80+ columns, this saves ~1.6M reflection
+    /// SetValue calls per ReconciliationView load. Compiled delegates run 5-10x faster.
     /// </summary>
     public class OleDbQueryExecutor
     {
@@ -23,6 +30,81 @@ namespace RecoTool.Infrastructure.DataAccess
         public OleDbQueryExecutor(string mainConnectionString)
         {
             _mainConnectionString = mainConnectionString ?? throw new ArgumentNullException(nameof(mainConnectionString));
+        }
+
+        // ────────────────────────────────────────────────────────────────────
+        // Compiled-setter cache
+        //
+        // Reflection's PropertyInfo.SetValue() does runtime type-checking,
+        // boxing/unboxing, and method dispatch on every call. For a single
+        // ReconciliationView load (~20k rows × ~80 mapped cols = 1.6M calls),
+        // that overhead dominates the row-mapping time.
+        //
+        // We replace it with an Expression-compiled Action<object, object>
+        // delegate that's roughly equivalent to direct IL: unbox + setter call.
+        // The delegate is built once per property the first time we map a row
+        // of that DTO type, then served from a static ConcurrentDictionary.
+        // ────────────────────────────────────────────────────────────────────
+        private static readonly ConcurrentDictionary<Type, ColumnSetter[]> _setterMapCache
+            = new ConcurrentDictionary<Type, ColumnSetter[]>();
+
+        private sealed class ColumnSetter
+        {
+            public string PropertyName;
+            public Type TargetType; // Nullable underlying type when applicable
+            public Action<object, object> Set;
+            // Fallback path used if Expression-compilation throws for some
+            // exotic property (init-only, ref-returns, etc.). Kept so we
+            // never lose the ability to map a column.
+            public PropertyInfo Reflected;
+        }
+
+        private static ColumnSetter[] GetOrBuildSetterMap(Type t)
+        {
+            return _setterMapCache.GetOrAdd(t, type =>
+            {
+                var list = new List<ColumnSetter>(64);
+                foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                {
+                    try
+                    {
+                        if (!prop.CanWrite) continue;
+                        var setMethod = prop.GetSetMethod(nonPublic: true);
+                        if (setMethod == null) continue;
+                        if (prop.GetIndexParameters().Length > 0) continue;
+
+                        var targetType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+
+                        Action<object, object> compiled = null;
+                        try { compiled = CompileSetter(prop, setMethod); }
+                        catch { /* fall back to reflection below */ }
+
+                        list.Add(new ColumnSetter
+                        {
+                            PropertyName = prop.Name,
+                            TargetType = targetType,
+                            Set = compiled,
+                            Reflected = compiled == null ? prop : null
+                        });
+                    }
+                    catch { /* skip props that can't be inspected */ }
+                }
+                return list.ToArray();
+            });
+        }
+
+        private static Action<object, object> CompileSetter(PropertyInfo prop, MethodInfo setMethod)
+        {
+            // (object instance, object value) =>
+            //     ((TDecl)instance).Setter((TProp)value);
+            var instance = Expression.Parameter(typeof(object), "instance");
+            var value = Expression.Parameter(typeof(object), "value");
+
+            var castInstance = Expression.Convert(instance, prop.DeclaringType);
+            var castValue = Expression.Convert(value, prop.PropertyType);
+            var setCall = Expression.Call(castInstance, setMethod, castValue);
+
+            return Expression.Lambda<Action<object, object>>(setCall, instance, value).Compile();
         }
 
         /// <summary>
@@ -48,6 +130,10 @@ namespace RecoTool.Infrastructure.DataAccess
 
             var results = new List<T>();
 
+            // Build (or fetch from cache) the per-property compiled setters for T.
+            // This happens once per Type per process — reused across all queries.
+            var setterMap = GetOrBuildSetterMap(typeof(T));
+
             using (var connection = new OleDbConnection(connectionString))
             {
                 await connection.OpenAsync().ConfigureAwait(false);
@@ -63,52 +149,60 @@ namespace RecoTool.Infrastructure.DataAccess
 
                     using (var reader = await command.ExecuteReaderAsync().ConfigureAwait(false))
                     {
-                        var columnOrdinals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                        // Build the column-ordinal lookup once for this reader.
+                        var columnOrdinals = new Dictionary<string, int>(reader.FieldCount, StringComparer.OrdinalIgnoreCase);
                         for (int i = 0; i < reader.FieldCount; i++)
                         {
-                            var name = reader.GetName(i);
-                            columnOrdinals[name] = i;
+                            columnOrdinals[reader.GetName(i)] = i;
                         }
 
-                        var properties = typeof(T).GetProperties();
-                        var propMaps = new List<(System.Reflection.PropertyInfo Prop, int Ordinal, Type TargetType)>();
-                        foreach (var prop in properties)
+                        // Project the cached setter map onto THIS query's columns:
+                        //   keep only the setters whose property name matches a returned column.
+                        // Using a struct array (instead of List of (struct)) for tighter cache locality.
+                        var activeMaps = new ActiveMap[setterMap.Length];
+                        int activeCount = 0;
+                        for (int i = 0; i < setterMap.Length; i++)
                         {
-                            try
+                            var s = setterMap[i];
+                            if (columnOrdinals.TryGetValue(s.PropertyName, out var ord))
                             {
-                                if (!prop.CanWrite || prop.GetSetMethod(true) == null || prop.GetIndexParameters().Length > 0)
-                                    continue;
-                                if (!columnOrdinals.TryGetValue(prop.Name, out var ord))
-                                    continue;
-                                var targetType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
-                                propMaps.Add((prop, ord, targetType));
+                                activeMaps[activeCount++] = new ActiveMap
+                                {
+                                    Setter = s,
+                                    Ordinal = ord
+                                };
                             }
-                            catch { }
                         }
+
+                        bool isReconciliationViewData = typeof(T) == typeof(ReconciliationViewData);
 
                         while (await reader.ReadAsync().ConfigureAwait(false))
                         {
                             var item = new T();
 
-                            foreach (var map in propMaps)
+                            // Tight loop: index by int (no foreach allocator), array access (no virtcall).
+                            for (int i = 0; i < activeCount; i++)
                             {
+                                ref var map = ref activeMaps[i];
                                 try
                                 {
-                                    if (reader.IsDBNull(map.Ordinal))
-                                        continue;
+                                    if (reader.IsDBNull(map.Ordinal)) continue;
 
-                                    var value = reader.GetValue(map.Ordinal);
-                                    if (value == DBNull.Value)
-                                        continue;
+                                    var raw = reader.GetValue(map.Ordinal);
+                                    if (raw == DBNull.Value) continue;
 
-                                    var converted = ConvertValue(value, map.TargetType);
-                                    if (converted != null)
-                                        map.Prop.SetValue(item, converted);
+                                    var converted = ConvertValue(raw, map.Setter.TargetType);
+                                    if (converted == null) continue;
+
+                                    if (map.Setter.Set != null)
+                                        map.Setter.Set(item, converted);
+                                    else if (map.Setter.Reflected != null)
+                                        map.Setter.Reflected.SetValue(item, converted); // fallback
                                 }
-                                catch { }
+                                catch { /* per-cell mapping errors stay non-fatal — same as before */ }
                             }
 
-                            if (typeof(T) == typeof(ReconciliationViewData))
+                            if (isReconciliationViewData)
                             {
                                 try { DwingsDateHelper.NormalizeDwingsDateStrings(item as ReconciliationViewData); } catch { }
                             }
@@ -120,6 +214,13 @@ namespace RecoTool.Infrastructure.DataAccess
             }
 
             return results;
+        }
+
+        // Per-row map struct — kept tiny so stack/array layout is dense.
+        private struct ActiveMap
+        {
+            public ColumnSetter Setter;
+            public int Ordinal;
         }
 
         /// <summary>
@@ -154,6 +255,9 @@ namespace RecoTool.Infrastructure.DataAccess
 
         private static object ConvertValue(object value, Type targetType)
         {
+            // Hot path: most cells return the matching CLR type directly.
+            if (value.GetType() == targetType) return value;
+
             if (targetType == typeof(DateTime))
                 return ConvertToDateTime(value);
             if (targetType == typeof(bool))
