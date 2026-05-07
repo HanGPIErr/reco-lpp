@@ -19,10 +19,13 @@ namespace RecoTool
     {
         public static IServiceProvider ServiceProvider { get; private set; }
 
-        // Note: in SDK-style WPF projects the entry point is auto-generated from App.xaml
-        // (App.g.cs creates `Main()` that calls InitializeComponent + Run). The manual Main()
-        // that lived here on .NET Framework would conflict with that auto-gen and is no
-        // longer needed — App.OnStartup keeps doing all bootstrapping below.
+        [STAThread]
+        public static void Main()
+        {
+            var app = new App();
+            app.InitializeComponent();
+            app.Run();
+        }
 
         protected override async void OnStartup(StartupEventArgs e)
         {

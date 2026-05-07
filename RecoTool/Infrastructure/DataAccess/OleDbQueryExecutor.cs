@@ -181,9 +181,13 @@ namespace RecoTool.Infrastructure.DataAccess
                             var item = new T();
 
                             // Tight loop: index by int (no foreach allocator), array access (no virtcall).
+                            // Note: we copy the struct (small: 1 class ref + 1 int = 16 bytes) instead of
+                            // using `ref var map = ref activeMaps[i]` which would require C# 11+ inside an
+                            // async method (the project targets C# 8 on .NET Framework 4.8). The copy cost
+                            // is negligible vs the actual reflection/setter call cost.
                             for (int i = 0; i < activeCount; i++)
                             {
-                                ref var map = ref activeMaps[i];
+                                var map = activeMaps[i];
                                 try
                                 {
                                     if (reader.IsDBNull(map.Ordinal)) continue;

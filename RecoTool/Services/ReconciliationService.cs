@@ -3,7 +3,6 @@ using OfflineFirstAccess.Helpers;
 using RecoTool.Models;
 using System;
 using System.Collections.Generic;
-using System.Collections.Frozen;
 using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Data;
@@ -571,23 +570,22 @@ namespace RecoTool.Services
         private readonly object _dwingsCacheLock = new object();
 
         // ────────────────────────────────────────────────────────────────────
-        // Pre-built FrozenDictionary lookups for DWINGS data.
+        // Pre-built Dictionary lookups for DWINGS data, cached for the session.
         //
         // PERF: previously every call to EnrichRowsWithDwingsProperties built
         // 2 fresh Dictionaries from the lists via LINQ GroupBy + ToDictionary.
         // With ~10-50k DWINGS invoices and ~1-5k guarantees, that's noticeable
         // CPU + GC churn on every preload / refresh / cache-hit re-enrichment.
         //
-        // .NET 8's FrozenDictionary trades a more expensive build for ~2-3×
-        // faster reads. Since DWINGS data is static for the whole session
-        // (single load, no live updates), building once and serving everywhere
-        // is a strict win.
+        // We now build once at session-init and reuse. .NET Framework 4.8 doesn't
+        // ship FrozenDictionary, so we use a regular Dictionary — reads are still
+        // O(1) and the big win (no rebuild per call) holds.
         //
         // Volatile read so callers see a fully-initialized snapshot once the
         // builder thread publishes it.
         // ────────────────────────────────────────────────────────────────────
-        private volatile FrozenDictionary<string, DwingsInvoiceDto> _dwingsInvoicesById;
-        private volatile FrozenDictionary<string, DwingsGuaranteeDto> _dwingsGuaranteesById;
+        private volatile Dictionary<string, DwingsInvoiceDto> _dwingsInvoicesById;
+        private volatile Dictionary<string, DwingsGuaranteeDto> _dwingsGuaranteesById;
 
         /// <summary>
         /// Ensures DWINGS caches are initialized once per country session
@@ -618,7 +616,7 @@ namespace RecoTool.Services
         }
 
         /// <summary>
-        /// Builds the DWINGS FrozenDictionary lookups from raw lists. Idempotent:
+        /// Builds the DWINGS Dictionary lookups from raw lists. Idempotent:
         /// safe to call again if the underlying lists are reloaded (the new dict
         /// replaces the old via the volatile field).
         /// </summary>
@@ -640,11 +638,11 @@ namespace RecoTool.Services
                         if (string.IsNullOrWhiteSpace(id)) continue;
                         if (!src.ContainsKey(id)) src.Add(id, inv);
                     }
-                    _dwingsInvoicesById = src.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+                    _dwingsInvoicesById = src;
                 }
                 else
                 {
-                    _dwingsInvoicesById = FrozenDictionary<string, DwingsInvoiceDto>.Empty;
+                    _dwingsInvoicesById = new Dictionary<string, DwingsInvoiceDto>(0, StringComparer.OrdinalIgnoreCase);
                 }
 
                 if (guarantees != null)
@@ -657,11 +655,11 @@ namespace RecoTool.Services
                         if (string.IsNullOrWhiteSpace(id)) continue;
                         if (!src.ContainsKey(id)) src.Add(id, g);
                     }
-                    _dwingsGuaranteesById = src.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+                    _dwingsGuaranteesById = src;
                 }
                 else
                 {
-                    _dwingsGuaranteesById = FrozenDictionary<string, DwingsGuaranteeDto>.Empty;
+                    _dwingsGuaranteesById = new Dictionary<string, DwingsGuaranteeDto>(0, StringComparer.OrdinalIgnoreCase);
                 }
             }
             catch { /* best-effort */ }

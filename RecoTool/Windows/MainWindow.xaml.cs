@@ -15,11 +15,7 @@ using System.Windows.Media.Imaging;
 using Microsoft.Extensions.DependencyInjection;
 using System.Diagnostics;
 using System.Reflection;
-// NOTE: System.Deployment.Application (ClickOnce runtime API) is no longer
-// available on .NET 6+. We now read the assembly version directly. If the
-// app is still deployed via ClickOnce, the publish process embeds the
-// deployment version into AssemblyInformationalVersionAttribute, which we
-// pick up via Assembly.GetName().Version.
+using System.Deployment.Application;
 using RecoTool.Services.External;
 using RecoTool.Services.Helpers;
 
@@ -87,20 +83,26 @@ namespace RecoTool.Windows
             }
             catch { }
 
-            // Set app version for header display.
-            // (.NET 8) Previously this preferred ApplicationDeployment.CurrentDeployment
-            // when running under ClickOnce; that API is gone on .NET 6+. We now use the
-            // assembly version, which the ClickOnce publish pipeline already stamps
-            // with the deployment version at build time, giving us the same value.
+            // Set app version for header display (prefer ClickOnce deployment version when available)
             try
             {
-                var asm = Assembly.GetExecutingAssembly();
-                var ver = asm?.GetName()?.Version;
-                if (ver != null)
+                if (ApplicationDeployment.IsNetworkDeployed)
                 {
-                    AppVersion = ver.Revision > 0
-                        ? $"v{ver.Major}.{ver.Minor}.{ver.Build}.{ver.Revision}"
-                        : $"v{ver.Major}.{ver.Minor}.{ver.Build}";
+                    var depVer = ApplicationDeployment.CurrentDeployment?.CurrentVersion;
+                    if (depVer != null)
+                    {
+                        AppVersion = $"v{depVer.Major}.{depVer.Minor}.{depVer.Build}.{depVer.Revision}";
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(AppVersion) || AppVersion == "v")
+                {
+                    var asm = Assembly.GetExecutingAssembly();
+                    var ver = asm?.GetName()?.Version;
+                    if (ver != null)
+                    {
+                        AppVersion = $"v{ver.Major}.{ver.Minor}.{ver.Build}";
+                    }
                 }
             }
             catch { /* ignore; AppVersion stays default */ }
