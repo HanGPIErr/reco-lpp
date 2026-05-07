@@ -2417,6 +2417,26 @@ namespace RecoTool.Services
                 }
             }
 
+            // 1.b-ter) Housekeeping: remove *.tmp_<guid> / *.compact_<guid>.accdb left
+            // behind by atomic publish patterns when a previous run (this user or any
+            // other) crashed between the temp-copy and the final move. 30-min age
+            // threshold avoids racing with an in-flight publish from a concurrent
+            // client. Cheap directory enumeration; safe on locked files.
+            try
+            {
+                var localDataDir = Path.GetDirectoryName(GetLocalReconciliationDbPath(countryId));
+                var remoteDataDir = Path.GetDirectoryName(GetNetworkReconciliationDbPath(countryId));
+                var minAge = TimeSpan.FromMinutes(30);
+                if (!string.IsNullOrWhiteSpace(localDataDir))
+                    await PurgeOrphanedTempFilesAsync(localDataDir, minAge).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(remoteDataDir))
+                    await PurgeOrphanedTempFilesAsync(remoteDataDir, minAge).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[PurgeOrphanedTempFiles/startup] ignored: {ex.Message}");
+            }
+
             // 1.b) Positionner également l'objet Country courant depuis les référentiels
             try
             {
@@ -2681,6 +2701,11 @@ namespace RecoTool.Services
 
             // Nettoyer le fichier compact temporaire s'il existe
             try { if (!string.IsNullOrEmpty(compactTempLocal) && File.Exists(compactTempLocal)) File.Delete(compactTempLocal); } catch { }
+
+            // Purge orphan *.tmp_<guid> left over by previous crashed publishes (this user
+            // or another user). 30-min age threshold protects an in-flight publish from a
+            // concurrent client. Best-effort: any failure is logged in PurgeOrphanedTempFilesAsync.
+            try { await PurgeOrphanedTempFilesAsync(remoteDir, TimeSpan.FromMinutes(30)).ConfigureAwait(false); } catch { }
         }
 
         /// <summary>

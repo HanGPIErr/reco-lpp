@@ -59,6 +59,73 @@ namespace RecoTool.Services
         }
 
         /// <summary>
+        /// Deletes orphaned temporary files left behind by atomic publish/copy patterns
+        /// (e.g. <c>DB_DATA_DK.accdb.tmp_&lt;guid&gt;</c>, <c>*.compact_&lt;guid&gt;.accdb</c>,
+        /// <c>*.tmp_copy</c>) when the process crashed or lost the network share between
+        /// the temp-copy and the final move/replace. Files younger than <paramref name="minAge"/>
+        /// are kept to avoid stealing temp files that another user is currently writing.
+        /// All operations are best-effort: missing directories or locked files are ignored.
+        /// </summary>
+        /// <param name="directory">Directory to scan (network share or local data directory).</param>
+        /// <param name="minAge">Minimum age before a temp file is considered orphaned.</param>
+        /// <returns>Number of files actually deleted.</returns>
+        public static async Task<int> PurgeOrphanedTempFilesAsync(string directory, TimeSpan minAge)
+        {
+            if (string.IsNullOrWhiteSpace(directory)) return 0;
+            if (!Directory.Exists(directory)) return 0;
+
+            // Patterns produced by the atomic publish helpers across the codebase.
+            // Kept conservative: only files with a guid-like suffix that no production
+            // code path uses for the final artifact name.
+            var patterns = new[]
+            {
+                "*.tmp_*",          // *.accdb.tmp_<guid>, *.zip.tmp_<guid>, *.tmp_copy, *.tmp_copy.bak
+                "*.compact_*.accdb" // Compact & Repair scratch files
+            };
+
+            var cutoffUtc = DateTime.UtcNow - minAge;
+            int deleted = 0;
+
+            await Task.Run(() =>
+            {
+                foreach (var pattern in patterns)
+                {
+                    string[] matches;
+                    try { matches = Directory.GetFiles(directory, pattern, SearchOption.TopDirectoryOnly); }
+                    catch { continue; }
+
+                    foreach (var path in matches)
+                    {
+                        try
+                        {
+                            // De-dup safety: GetFiles("*.tmp_*") on Windows can also match
+                            // files containing ".tmp_" anywhere — re-check with InvariantCulture.
+                            var name = Path.GetFileName(path);
+                            if (name.IndexOf(".tmp_", StringComparison.OrdinalIgnoreCase) < 0
+                                && name.IndexOf(".compact_", StringComparison.OrdinalIgnoreCase) < 0)
+                                continue;
+
+                            var info = new FileInfo(path);
+                            if (!info.Exists) continue;
+                            if (info.LastWriteTimeUtc > cutoffUtc) continue; // too recent → likely in-flight
+
+                            info.Delete();
+                            deleted++;
+                            System.Diagnostics.Debug.WriteLine($"[PurgeOrphanedTempFiles] deleted {path}");
+                        }
+                        catch (Exception ex)
+                        {
+                            // File locked, perms, race condition — try again next time.
+                            System.Diagnostics.Debug.WriteLine($"[PurgeOrphanedTempFiles] skipped {path}: {ex.Message}");
+                        }
+                    }
+                }
+            }).ConfigureAwait(false);
+
+            return deleted;
+        }
+
+        /// <summary>
         /// Deletes all synchronized ChangeLog entries from the control/lock database and then attempts a Compact & Repair.
         /// Safe to call multiple times. Should be called while holding the global lock to avoid external access.
         /// IMPORTANT: May fail if other connections (e.g., TodoListSessionTracker heartbeat) are holding the DB open.
