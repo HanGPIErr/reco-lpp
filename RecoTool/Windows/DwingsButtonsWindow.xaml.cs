@@ -213,14 +213,16 @@ namespace RecoTool.Windows
                     Currency = r.I_BILLING_CURRENCY,
                     Comments = r.Comments,
 
-                    // InternalInvoiceReference grouping → use InternalInvoiceReference as PaymentRef
-                    // BGPMT grouping → use pivot's Reconciliation_Num > PaymentReference > Pivot_TRNFromLabel
-                    PaymentReference = hasInvoiceRef
-                        ? r.InternalInvoiceReference.Trim()
-                        : GetFirstNonEmpty(
+                    // DWINGS externalReference must always be the pivot's Reconciliation_Num
+                    // when present (per business rule). Fallbacks remain for legacy rows that
+                    // never had a Reconciliation_Num populated on the pivot side.
+                    PaymentReference = GetFirstNonEmpty(
                                 pivotItems
                                     .Where(i => i.Reconciliation_Num?.Length > 3)
                                     .Select(i => i.Reconciliation_Num),
+                                hasInvoiceRef
+                                    ? new[] { r.InternalInvoiceReference.Trim() }
+                                    : System.Array.Empty<string>(),
                                 pivotItems.Select(i => i.PaymentReference),
                                 pivotItems.Select(i => i.Pivot_TRNFromLabel)),
 
@@ -331,37 +333,97 @@ namespace RecoTool.Windows
 
                 dw.GetUserInfo();
 
-                var rowsUpdated = 0;
+                // ---- Phase 1: dedupe by BGI/BGPMT ----------------------------------
+                // Each list item is one receivable row in the UI. Multiple receivables can
+                // share the same DWINGS_BGPMT (e.g. 80 receivables ↔ 1 pivot grouped via the
+                // basket, with ~35 distinct BGPMTs). The DWINGS API only fires once per
+                // BGPMT. Grouping by BGPMT here means: one API call per unique key, then
+                // every row that shares that key is marked TRIGGER DONE in step 2 — even
+                // duplicates that the API would have rejected with a "already triggered"
+                // error.
+                string DedupeKey(DwingsTriggerItem it) =>
+                    !string.IsNullOrWhiteSpace(it.DWINGS_BGPMT)
+                        ? it.DWINGS_BGPMT.Trim()
+                        : (it.PaymentReference ?? string.Empty).Trim();
 
-                // ---- boucle de traitement -------------------------------------------------
-                foreach (var item in list)
+                var grouped = list
+                    .GroupBy(DedupeKey, StringComparer.OrdinalIgnoreCase)
+                    .Where(g => !string.IsNullOrWhiteSpace(g.Key))
+                    .ToList();
+
+                Progress.Maximum = grouped.Count == 0 ? 1 : grouped.Count;
+
+                var rowsUpdated = 0;
+                var nowUtc = DateTime.UtcNow;
+                var triggerActionId = (int)ActionType.Trigger;
+                var paidNotReconciledKpi = (int)KPIType.PaidButNotReconciled;
+                var commissionsCollectedReason = (int)Risky.CollectedCommissionsCredit67P;
+
+                // Track IDs we already updated to avoid loading the same Reconciliation twice
+                // when multiple grouped items resolve to the same row.
+                var processedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                // ---- Phase 2: one API call per unique BGPMT, then fan out --------------
+                foreach (var group in grouped)
                 {
-                    (bool ok, string msg) = dw.Dwings_PressBlueButton(item.PaymentReference, item.ValueDate.Value, item.RequestedAmount, _country.CNT_DWID, item.Currency, item.DWINGS_BGPMT);
-                    item.Result = msg;
+                    // Use the first item in the group as the API payload source. All items
+                    // in a group share the same BGPMT/PaymentReference/Currency by definition.
+                    var head = group.First();
+
+                    (bool ok, string msg) = dw.Dwings_PressBlueButton(
+                        head.PaymentReference,
+                        head.ValueDate.Value,
+                        head.RequestedAmount,
+                        _country.CNT_DWID,
+                        head.Currency,
+                        head.DWINGS_BGPMT);
+
+                    // Mirror the Result onto every UI row in the group so the operator sees
+                    // OK / FAIL on each receivable line, not just the head.
+                    foreach (var it in group) it.Result = msg;
 
                     if (ok)
                     {
-                        // Tous les IDs de la ligne groupée (séparés par virgule)
-                        var ids = item.ID.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+                        // Union of all IDs across every item that shared this BGPMT key —
+                        // this is what guarantees ALL 80 receivables get TRIGGER DONE even
+                        // when the API only fired once for their shared BGPMT.
+                        var ids = group
+                            .SelectMany(it => it.ID.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+                            .Select(s => s.Trim())
+                            .Where(s => !string.IsNullOrEmpty(s) && !processedIds.Contains(s))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+
                         foreach (var id in ids)
                         {
-                            var reco = await _reconciliationService.GetReconciliationByIdAsync(_country.CNT_Id, id.Trim());
+                            var reco = await _reconciliationService.GetReconciliationByIdAsync(_country.CNT_Id, id);
                             if (reco != null)
                             {
+                                // Canonical TRIGGER DONE payload — keep in sync with
+                                // RowActions.ApplyTriggerDonePayload (right-click flow).
+                                reco.Action = triggerActionId;
                                 reco.ActionStatus = true;
-                                reco.TriggerDate = DateTime.UtcNow;
+                                reco.ActionDate = nowUtc;
+                                reco.TriggerDate = nowUtc;
+                                reco.KPI = paidNotReconciledKpi;
+                                reco.ReasonNonRisky = commissionsCollectedReason;
+                                reco.RiskyItem = false;
+                                RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(
+                                    reco, "Action", "ActionStatus", "ActionDate", "TriggerDate",
+                                    "KPI", "ReasonNonRisky", "RiskyItem");
 
                                 // Si la ligne n’est pas groupée et que l’utilisateur a saisi un
                                 // PaymentReference, on le sauvegarde.
-                                if (!item.IsGrouped && !string.IsNullOrWhiteSpace(item.PaymentReference))
-                                    reco.PaymentReference = item.PaymentReference;
+                                if (!head.IsGrouped && !string.IsNullOrWhiteSpace(head.PaymentReference))
+                                    reco.PaymentReference = head.PaymentReference;
 
                                 updated.Add(reco);
+                                processedIds.Add(id);
                             }
                         }
                     }
 
-                    rowsUpdated++;
+                    rowsUpdated += group.Count();
                     Progress.Value += 1;
                 }
 

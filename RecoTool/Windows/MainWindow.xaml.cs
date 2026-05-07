@@ -15,7 +15,11 @@ using System.Windows.Media.Imaging;
 using Microsoft.Extensions.DependencyInjection;
 using System.Diagnostics;
 using System.Reflection;
-using System.Deployment.Application;
+// NOTE: System.Deployment.Application (ClickOnce runtime API) is no longer
+// available on .NET 6+. We now read the assembly version directly. If the
+// app is still deployed via ClickOnce, the publish process embeds the
+// deployment version into AssemblyInformationalVersionAttribute, which we
+// pick up via Assembly.GetName().Version.
 using RecoTool.Services.External;
 using RecoTool.Services.Helpers;
 
@@ -38,6 +42,15 @@ namespace RecoTool.Windows
         private bool _closingPushHandled; // guard to avoid re-entrancy on Closing
         private HomePage _homePage; // cached instance to avoid reloading referentials on each navigation
         private ReconciliationPage _reconciliationPage; // cached instance to avoid recreating the heavy reconciliation page
+        // PERF: track whether HomePage data is up-to-date. Refresh on return to Home only when:
+        //   - it's the very first navigation to Home (cold start), OR
+        //   - the country has changed, OR
+        //   - a child ReconciliationView modified data (DataChanged event bubbled up).
+        // This avoids the systematic re-load triggered by the (always-true) "IsLoaded == false"
+        // test that used to run every time MainContent.Content was swapped back to _homePage.
+        private bool _homeFirstShown;
+        private bool _homeIsStale;
+        private bool _reconciliationDataChangedHooked;
         private IFreeApiClient _freeApi;
         private bool _showFreeAuthButton;
 
@@ -74,26 +87,20 @@ namespace RecoTool.Windows
             }
             catch { }
 
-            // Set app version for header display (prefer ClickOnce deployment version when available)
+            // Set app version for header display.
+            // (.NET 8) Previously this preferred ApplicationDeployment.CurrentDeployment
+            // when running under ClickOnce; that API is gone on .NET 6+. We now use the
+            // assembly version, which the ClickOnce publish pipeline already stamps
+            // with the deployment version at build time, giving us the same value.
             try
             {
-                if (ApplicationDeployment.IsNetworkDeployed)
+                var asm = Assembly.GetExecutingAssembly();
+                var ver = asm?.GetName()?.Version;
+                if (ver != null)
                 {
-                    var depVer = ApplicationDeployment.CurrentDeployment?.CurrentVersion;
-                    if (depVer != null)
-                    {
-                        AppVersion = $"v{depVer.Major}.{depVer.Minor}.{depVer.Build}.{depVer.Revision}";
-                    }
-                }
-
-                if (string.IsNullOrWhiteSpace(AppVersion) || AppVersion == "v")
-                {
-                    var asm = Assembly.GetExecutingAssembly();
-                    var ver = asm?.GetName()?.Version;
-                    if (ver != null)
-                    {
-                        AppVersion = $"v{ver.Major}.{ver.Minor}.{ver.Build}";
-                    }
+                    AppVersion = ver.Revision > 0
+                        ? $"v{ver.Major}.{ver.Minor}.{ver.Build}.{ver.Revision}"
+                        : $"v{ver.Major}.{ver.Minor}.{ver.Build}";
                 }
             }
             catch { /* ignore; AppVersion stays default */ }
@@ -334,9 +341,11 @@ namespace RecoTool.Windows
             }
         }
 
-        // Multi-user toggle. Default ON (matches FeatureFlags.ENABLE_MULTI_USER).
+        // Multi-user toggle. Default OFF — we start in Solo mode so a fresh launch never
+        // blocks on the slow network share (matches FeatureFlags.ENABLE_MULTI_USER = false).
         // When OFF: background pushes/pulls and SyncMonitorService timer are paused
         // for better UI responsiveness on slow networks. Local edits still persist.
+        // The user can toggle to "Multi-user" in the header to opt in for the current session.
         private bool _isMultiUserMode = Configuration.FeatureFlags.ENABLE_MULTI_USER;
         public bool IsMultiUserMode
         {
@@ -1242,39 +1251,60 @@ namespace RecoTool.Windows
         {
             try
             {
+                bool refreshNeeded = false;
+
                 if (_homePage == null)
                 {
                     _homePage = new HomePage(_offlineFirstService, _reconciliationService);
+                    // First instantiation: HomePage.UserControl_Loaded will run its own initial load
+                    // (guarded by _hasLoadedOnce inside HomePage). No explicit Refresh() needed here.
                 }
                 else
                 {
-                    // Only refresh dashboard data if the country has changed
+                    // Refresh only if the country changed since last visit, or if a sibling
+                    // ReconciliationView raised DataChanged (= the cached dashboard is now stale).
                     var prevCid = _homePage.CurrentCountryId;
                     _homePage.UpdateServices(_offlineFirstService, _reconciliationService);
                     var newCid = _offlineFirstService?.CurrentCountryId;
-                    if (!string.IsNullOrEmpty(newCid) && !string.Equals(prevCid, newCid, StringComparison.OrdinalIgnoreCase))
-                    {
-                        _homePage.Refresh();
-                    }
+                    bool countryChanged = !string.IsNullOrEmpty(newCid)
+                        && !string.Equals(prevCid, newCid, StringComparison.OrdinalIgnoreCase);
+                    refreshNeeded = countryChanged || _homeIsStale;
                 }
 
                 NavigateToPage(_homePage);
                 UpdateNavigationButtons("Home");
 
-                // Si un pays est déjà sélectionné, rafraîchir immédiatement le dashboard
-                if (!string.IsNullOrEmpty(_offlineFirstService?.CurrentCountryId))
+                // Cold start fallback: if the page was just created and a country is already selected,
+                // its own Loaded handler will load data. We do NOT trigger an extra Refresh here
+                // (avoids the previous "IsLoaded == false on every reattach" bug that forced a full
+                // dashboard rebuild on every navigation back to Home).
+                if (refreshNeeded && !string.IsNullOrEmpty(_offlineFirstService?.CurrentCountryId))
                 {
-                    if (_homePage != null && _homePage.IsLoaded == false)
-                    {
-                        // First navigation to Home after app start: trigger initial refresh
-                        _homePage.Refresh();
-                    }
+                    _homePage.Refresh();
+                    _homeIsStale = false;
                 }
+
+                _homeFirstShown = true;
             }
             catch (Exception ex)
             {
                 ShowError("Navigation error", $"Unable to navigate to home page: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Subscribes to <see cref="ReconciliationPage.DataChanged"/> exactly once.
+        /// Marks the cached HomePage as stale so the next navigation to Home triggers a refresh.
+        /// </summary>
+        private void HookReconciliationDataChanged(ReconciliationPage page)
+        {
+            if (page == null || _reconciliationDataChangedHooked) return;
+            try
+            {
+                page.DataChanged += () => { _homeIsStale = true; };
+                _reconciliationDataChangedHooked = true;
+            }
+            catch { /* best-effort */ }
         }
 
         /// <summary>
@@ -1435,6 +1465,10 @@ private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
                 }
                 var reconciliationPage = _reconciliationPage;
 
+                // PERF: subscribe to DataChanged so we can mark HomePage stale only when
+                // a child view actually modifies data (avoids systematic Home refresh).
+                HookReconciliationDataChanged(reconciliationPage);
+
                 if (isFirstNavigation)
                 {
                     // First navigation: the page will execute its initial load; show the overlay now.
@@ -1580,6 +1614,9 @@ private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
                     _reconciliationPage = App.ServiceProvider.GetRequiredService<ReconciliationPage>();
                 }
                 var reconciliationPage = _reconciliationPage;
+
+                // PERF: same DataChanged subscription as the regular Reconciliation entry point.
+                HookReconciliationDataChanged(reconciliationPage);
 
                 if (isFirstNavigation)
                 {

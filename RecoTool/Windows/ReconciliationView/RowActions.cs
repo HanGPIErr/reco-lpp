@@ -566,17 +566,38 @@ Do you want to apply these automatic rules?
                 var targetRows = GetTargetRows(sender);
                 if (targetRows.Count == 0) return;
 
+                var triggerActionId = (int)ActionType.Trigger;
+                var now = DateTime.UtcNow;
                 var updates = new List<Reconciliation>();
                 foreach (var r in targetRows)
                 {
                     if (!r.Action.HasValue) continue;
                     var reco = await _reconciliationService.GetOrCreateReconciliationAsync(r.ID);
-                    r.ActionStatus = isDone;
-                    r.ActionDate = DateTime.Now;
-                    reco.ActionStatus = isDone;
-                    reco.ActionDate = r.ActionDate;
-                    // Stamp user-edit protection on ActionStatus
-                    RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(reco, "ActionStatus");
+
+                    // When the user marks a TRIGGER row as DONE via the menu, apply the
+                    // full TRIGGER DONE payload (KPI + ReasonNonRisky + RiskyItem) so the
+                    // outcome matches what the right-click DWINGS flow produces. Mirror to
+                    // the view-row so the grid reflects the change immediately.
+                    if (isDone && r.Action.Value == triggerActionId)
+                    {
+                        ApplyTriggerDonePayload(reco, now);
+                        r.Action = reco.Action;
+                        r.ActionStatus = reco.ActionStatus;
+                        r.ActionDate = reco.ActionDate;
+                        r.KPI = reco.KPI;
+                        r.ReasonNonRisky = reco.ReasonNonRisky;
+                        // ReconciliationViewData.RiskyItem is non-nullable bool; reco.RiskyItem is bool?.
+                        r.RiskyItem = reco.RiskyItem.GetValueOrDefault(false);
+                    }
+                    else
+                    {
+                        r.ActionStatus = isDone;
+                        r.ActionDate = DateTime.Now;
+                        reco.ActionStatus = isDone;
+                        reco.ActionDate = r.ActionDate;
+                        // Stamp user-edit protection on ActionStatus
+                        RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(reco, "ActionStatus");
+                    }
                     updates.Add(reco);
                 }
                 if (updates.Count == 0) return;
@@ -794,13 +815,17 @@ Do you want to apply these automatic rules?
         }
 
         /// <summary>
-        /// Marks a set of reconciliation rows as TRIGGER DONE (Action=Trigger, ActionStatus=true).
+        /// Marks a set of reconciliation rows as TRIGGER DONE.
+        /// Sets Action=Trigger, ActionStatus=true, ActionDate=TriggerDate=now,
+        /// and the post-trigger business state KPI=PaidButNotReconciled,
+        /// ReasonNonRisky=CollectedCommissionsCredit67P, RiskyItem=false (commissions
+        /// have already been collected on the 67P account, so the line is no longer risky).
+        /// User-edit stamps are applied so the rules engine respects this state.
         /// Skips IDs already present in <paramref name="alreadyProcessedIds"/>.
         /// </summary>
         private async Task<List<Reconciliation>> MarkTriggerDoneAsync(
             IEnumerable<string> ids, HashSet<string> alreadyProcessedIds = null)
         {
-            var triggerActionId = (int)ActionType.Trigger;
             var now = DateTime.UtcNow;
             var updates = new List<Reconciliation>();
             foreach (var id in ids)
@@ -811,14 +836,31 @@ Do you want to apply these automatic rules?
                 var reco = await _reconciliationService.GetReconciliationByIdAsync(_currentCountryId, trimmed);
                 if (reco != null)
                 {
-                    reco.Action = triggerActionId;
-                    reco.ActionStatus = true;
-                    reco.ActionDate = now;
-                    reco.TriggerDate = now;
+                    ApplyTriggerDonePayload(reco, now);
                     updates.Add(reco);
                 }
             }
             return updates;
+        }
+
+        /// <summary>
+        /// Applies the canonical TRIGGER DONE payload to an existing Reconciliation. Used by
+        /// the right-click flow, the DWINGS Blue Button bulk window, and the menu-based
+        /// "Mark Action Done" handler so all three paths produce the same final state.
+        /// </summary>
+        internal static void ApplyTriggerDonePayload(Reconciliation reco, DateTime now)
+        {
+            if (reco == null) return;
+            reco.Action = (int)ActionType.Trigger;
+            reco.ActionStatus = true;
+            reco.ActionDate = now;
+            reco.TriggerDate = now;
+            // Post-trigger business state: commissions already collected on 67P.
+            reco.KPI = (int)KPIType.PaidButNotReconciled;            // 18
+            reco.ReasonNonRisky = (int)Risky.CollectedCommissionsCredit67P; // 30
+            reco.RiskyItem = false;
+            RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(
+                reco, "Action", "ActionStatus", "ActionDate", "TriggerDate", "KPI", "ReasonNonRisky", "RiskyItem");
         }
 
         /// <summary>
@@ -974,19 +1016,27 @@ Do you want to apply these automatic rules?
 
                 foreach (var row in targetRows)
                 {
-                    // Only process rows that are not deleted and are grouped
-                    if (row.IsDeleted || !row.IsMatchedAcrossAccounts)
-                        continue;
+                    // Skip deleted rows. The "IsMatchedAcrossAccounts" flag used to gate this
+                    // loop, but that excluded basket-linked rows whose only linkage is
+                    // Reconciliation_Num (no shared BGPMT/InvRef). The fan-out below now
+                    // groups by Reconciliation_Num too, so a row is eligible if it has ANY
+                    // linkable key.
+                    if (row.IsDeleted) continue;
 
                     bool hasInvRef = !string.IsNullOrWhiteSpace(row.InternalInvoiceReference);
                     bool hasBgpmt = !string.IsNullOrWhiteSpace(row.DWINGS_BGPMT);
-                    if (!hasInvRef && !hasBgpmt) continue;
+                    bool hasRecoNum = !string.IsNullOrWhiteSpace(row.Reconciliation_Num);
+                    if (!hasInvRef && !hasBgpmt && !hasRecoNum) continue;
 
-                    // Find all related rows (by InternalInvoiceReference OR BGPMT)
+                    // Find all related rows by ANY of the three linkage keys. The third key
+                    // (Reconciliation_Num) is essential when the user has linked rows via the
+                    // basket — at that point pivot and receivable share the basket-stamped
+                    // group ref but each receivable can still carry its own BGPMT.
                     var groupRows = allData.Where(r =>
                         !r.IsDeleted
                         && ((hasInvRef && string.Equals(r.InternalInvoiceReference?.Trim(), row.InternalInvoiceReference?.Trim(), StringComparison.OrdinalIgnoreCase))
-                            || (hasBgpmt && string.Equals(r.DWINGS_BGPMT?.Trim(), row.DWINGS_BGPMT?.Trim(), StringComparison.OrdinalIgnoreCase)))
+                            || (hasBgpmt && string.Equals(r.DWINGS_BGPMT?.Trim(), row.DWINGS_BGPMT?.Trim(), StringComparison.OrdinalIgnoreCase))
+                            || (hasRecoNum && string.Equals(r.Reconciliation_Num?.Trim(), row.Reconciliation_Num?.Trim(), StringComparison.OrdinalIgnoreCase)))
                     ).ToList();
 
                     // ── Phase 2: skip the group if it is not fully collected yet ──
@@ -1017,10 +1067,9 @@ Do you want to apply these automatic rules?
 
                     if (recvLines.Count == 0 || pivotLines.Count == 0) continue;
 
-                    // When grouped by InternalInvoiceReference: BGPMT comes from receivable only,
-                    // and PaymentRef = InternalInvoiceReference (the pivot's ref).
-                    // When grouped by BGPMT only: BGPMT from group, PaymentRef from pivot fields.
-                    var distinctBgpmts = (hasInvRef ? recvLines : groupRows)
+                    // Distinct BGPMTs in the group (always taken from the receivable side —
+                    // pivots typically don't carry BGPMT). The DWINGS API fires once per BGPMT.
+                    var distinctBgpmts = recvLines
                         .Where(r => !string.IsNullOrWhiteSpace(r.DWINGS_BGPMT))
                         .Select(r => r.DWINGS_BGPMT.Trim())
                         .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1028,36 +1077,35 @@ Do you want to apply these automatic rules?
 
                     if (distinctBgpmts.Count == 0) continue; // BGPMT is required for the DWINGS API
 
+                    // Pre-compute the canonical PaymentRef for this group: pivot's
+                    // Reconciliation_Num is the business-mandated externalReference. We fall
+                    // back to InternalInvoiceReference / pivot.PaymentReference / Pivot_TRNFromLabel
+                    // only when the pivot has no usable Reconciliation_Num.
+                    string groupPayRef = pivotLines
+                            .Where(p => p.Reconciliation_Num?.Length > 3)
+                            .Select(p => p.Reconciliation_Num.Trim())
+                            .FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
+                        ?? (hasInvRef ? row.InternalInvoiceReference?.Trim() : null)
+                        ?? pivotLines.Select(p => p.PaymentReference).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
+                        ?? pivotLines.Select(p => p.Pivot_TRNFromLabel).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
+                        ?? string.Empty;
+
                     foreach (var bgpmt in distinctBgpmts)
                     {
                         if (processedBgpmts.Contains(bgpmt)) continue;
                         processedBgpmts.Add(bgpmt);
 
+                        // For each unique BGPMT in this group, the AllIds payload includes
+                        // EVERY linked id (all receivables + all pivots in the group). When a
+                        // single DWINGS call succeeds, the fan-out below marks every linked
+                        // line as TRIGGER DONE — even receivables whose own BGPMT call may
+                        // have failed (e.g. duplicate-trigger errors on shared BGPMTs).
                         var groupIds = recvLines.Select(r => r.ID).Concat(pivotLines.Select(r => r.ID)).ToList();
 
-                        // PaymentReference depends on grouping strategy:
-                        // - InternalInvoiceReference grouping → use InternalInvoiceReference as PaymentRef
-                        // - BGPMT grouping → use pivot's Reconciliation_Num > PaymentReference > Pivot_TRNFromLabel
-                        string payRef;
-                        if (hasInvRef)
-                        {
-                            payRef = row.InternalInvoiceReference.Trim();
-                        }
-                        else
-                        {
-                            payRef = pivotLines
-                                .Where(p => p.Reconciliation_Num?.Length > 3)
-                                .Select(p => p.Reconciliation_Num)
-                                .FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
-                                ?? pivotLines.Select(p => p.PaymentReference).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
-                                ?? pivotLines.Select(p => p.Pivot_TRNFromLabel).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))
-                                ?? string.Empty;
-                        }
-
-                        var recvFirst = recvLines.First();
+                        var recvFirst = recvLines.First(rl => string.Equals(rl.DWINGS_BGPMT?.Trim(), bgpmt, StringComparison.OrdinalIgnoreCase));
                         triggerItems.Add((
                             AllIds: string.Join(",", groupIds),
-                            PaymentRef: payRef,
+                            PaymentRef: groupPayRef,
                             ValueDate: pivotLines.Select(p => p.Value_Date).FirstOrDefault(),
                             RequestedAmount: recvFirst.I_REQUESTED_INVOICE_AMOUNT,
                             Currency: recvFirst.I_BILLING_CURRENCY,
@@ -1156,7 +1204,13 @@ Do you want to apply these automatic rules?
 
                 Mouse.OverrideCursor = null;
 
-                // ---- persist: also expand TRIGGER DONE to all linked/grouped rows ----
+                // ---- persist: expand TRIGGER DONE to ALL linked/grouped rows ----
+                // We expand whenever at least one DWINGS call succeeded for the group OR
+                // when the operator confirmed the group was already triggered upstream
+                // (handled implicitly by relying on successCount > 0). Receivables that
+                // share a BGPMT with another succeeded receivable are still marked DONE
+                // through this expansion, which is the requested behaviour for the
+                // "1 pivot ↔ 80 receivables" / shared-BGPMT scenario.
                 if (allUpdates.Count > 0)
                 {
                     var alreadyUpdatedIds = new HashSet<string>(allUpdates.Select(u => u.ID ?? ""), StringComparer.OrdinalIgnoreCase);
@@ -1166,14 +1220,24 @@ Do you want to apply these automatic rules?
                     await _reconciliationService.SaveReconciliationsAsync(allUpdates, applyRulesOnEdit: false);
                 }
 
-                // ---- refresh UI ----
-                var triggerActionIdUi = (int)ActionType.Trigger;
-                var nowUi = DateTime.UtcNow;
-                foreach (var viewRow in allData.Where(r => allGroupIds.Contains(r.ID)))
+                // ---- refresh UI: mirror the full TRIGGER DONE payload onto the view rows
+                //      so the grid reflects KPI + ReasonNonRisky + RiskyItem immediately,
+                //      not only Action/ActionStatus/ActionDate as before.
+                if (allUpdates.Count > 0)
                 {
-                    viewRow.Action = triggerActionIdUi;
-                    viewRow.ActionStatus = true;
-                    viewRow.ActionDate = nowUi;
+                    var triggerActionIdUi = (int)ActionType.Trigger;
+                    var nowUi = DateTime.UtcNow;
+                    var paidNotReconciledKpi = (int)KPIType.PaidButNotReconciled;
+                    var commissionsCollectedReason = (int)Risky.CollectedCommissionsCredit67P;
+                    foreach (var viewRow in allData.Where(r => allGroupIds.Contains(r.ID)))
+                    {
+                        viewRow.Action = triggerActionIdUi;
+                        viewRow.ActionStatus = true;
+                        viewRow.ActionDate = nowUi;
+                        viewRow.KPI = paidNotReconciledKpi;
+                        viewRow.ReasonNonRisky = commissionsCollectedReason;
+                        viewRow.RiskyItem = false;
+                    }
                 }
                 AfterSave(raiseDataChanged: true);
 

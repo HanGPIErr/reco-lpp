@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
 using System.Windows.Data;
+using RecoTool.Services.DTOs;
 using RecoTool.Services.Helpers;
 
 namespace RecoTool.Windows
@@ -18,12 +19,24 @@ namespace RecoTool.Windows
             if (_allViewData == null) return;
             var sw = Stopwatch.StartNew();
 
-            // Refresh TransactionType options with all other filters applied
-            var preTransactionType = VM.ApplyFilters(_allViewData, excludeTransactionType: true);
-            VM.UpdateTransactionTypeOptionsForData(preTransactionType);
-
-            // Apply full filter set
-            var filteredList = VM.ApplyFilters(_allViewData);
+            // PERF (QW-4): when no TransactionType filter is active the "exclude TxType" pass
+            // produces exactly the same set as the full pass. Skip the redundant scan in that case
+            // (the common path) and reuse the filtered list to refresh combo options.
+            List<ReconciliationViewData> filteredList;
+            bool hasTxTypeFilter = VM?.CurrentFilter?.TransactionTypeId.HasValue == true;
+            if (hasTxTypeFilter)
+            {
+                // The combo must keep showing TransactionTypes available with OTHER filters applied,
+                // so the user can switch values — hence the dedicated pass without TxType.
+                var preTransactionType = VM.ApplyFilters(_allViewData, excludeTransactionType: true);
+                VM.UpdateTransactionTypeOptionsForData(preTransactionType);
+                filteredList = VM.ApplyFilters(_allViewData);
+            }
+            else
+            {
+                filteredList = VM.ApplyFilters(_allViewData);
+                VM.UpdateTransactionTypeOptionsForData(filteredList);
+            }
 
             // Apply status filter if active (client-side only)
             if (!string.IsNullOrEmpty(_activeStatusFilter))
@@ -31,54 +44,64 @@ namespace RecoTool.Windows
                 filteredList = filteredList.Where(row => MatchesStatusFilter(row)).ToList();
             }
 
-            // Recalculate grouping flags and MissingAmount on ALL data (both account sides)
-            // so that IsMatchedAcrossAccounts and MissingAmount are always correct.
-            // CRITICAL: Must use _allViewData, NOT filteredList, because filteredList may
-            // contain only one account side (e.g. Pivot only) and ComputeMatchedAcrossAccounts
-            // needs both P and R rows to detect cross-account matches.
-            // Since filteredList items are the same object references, computed values propagate.
-            try
+            // PERF (QW-2): the heavy grouping/MissingAmount/PreCalculate block only needs to run
+            // when row-level data actually changed (initial load, edit on InternalInvoiceReference,
+            // basket link). For plain filter changes the per-row values are unchanged — running
+            // this block on every filter click costs O(N) reset + 4 group-by passes + N PreCalculate
+            // calls for nothing. The _allViewDataDirty flag is set by LoadReconciliationDataAsync
+            // and by edit/linking handlers; cleared once consumed here.
+            if (_allViewDataDirty)
             {
-                var country = CurrentCountryObject;
-                if (country != null)
+                try
                 {
-                    // Reset grouping + MissingAmount for ALL rows first
-                    foreach (var r in _allViewData)
+                    var country = CurrentCountryObject;
+                    if (country != null)
                     {
-                        r.IsMatchedAcrossAccounts = false;
-                        r.MissingAmount = null;
-                        r.CounterpartTotalAmount = null;
-                        r.CounterpartCount = null;
+                        // Reset grouping + MissingAmount for ALL rows first
+                        foreach (var r in _allViewData)
+                        {
+                            r.IsMatchedAcrossAccounts = false;
+                            r.MissingAmount = null;
+                            r.CounterpartTotalAmount = null;
+                            r.CounterpartCount = null;
+                        }
+
+                        // Recompute IsMatchedAcrossAccounts on ALL rows (both account sides).
+                        // CRITICAL: must use _allViewData (not filteredList) — filteredList may
+                        // contain only one account side and ComputeMatchedAcrossAccounts needs both
+                        // P and R rows to detect cross-account matches.
+                        AccountSideCalculator.ComputeMatchedAcrossAccounts(_allViewData,
+                            r => r.AccountSide,
+                            r => r.DWINGS_InvoiceID,
+                            r => r.InternalInvoiceReference,
+                            (r, matched) => r.IsMatchedAcrossAccounts = matched,
+                            r => AccountSideCalculator.ExtractFallbackBgiKey(
+                                r.DWINGS_InvoiceID, r.Receivable_InvoiceFromAmbre,
+                                r.Reconciliation_Num, r.Comments, r.RawLabel,
+                                r.Receivable_DWRefFromAmbre, r.InternalInvoiceReference));
+
+                        // Recompute MissingAmount on ALL rows (needs both sides)
+                        ReconciliationViewEnricher.CalculateMissingAmounts(
+                            _allViewData, country.CNT_AmbreReceivable, country.CNT_AmbrePivot);
+
+                        // Phase 2: keep GroupBalance in sync with the just-applied basket link.
+                        ReconciliationViewEnricher.ComputeAndApplyGroupBalances(_allViewData);
+
+                        // Assign alternating colors to rows sharing the same InternalInvoiceReference
+                        ReconciliationViewEnricher.AssignInvoiceGroupColors(_allViewData);
+
+                        // Refresh pre-calculated display caches (StatusColor, MissingAmount colors,
+                        // G visibility, etc.) so the grid reads final values without re-computing on scroll
+                        foreach (var r in _allViewData)
+                            r.PreCalculateDisplayProperties();
                     }
-
-                    // Recompute IsMatchedAcrossAccounts on ALL rows (both account sides)
-                    AccountSideCalculator.ComputeMatchedAcrossAccounts(_allViewData,
-                        r => r.AccountSide,
-                        r => r.DWINGS_InvoiceID,
-                        r => r.InternalInvoiceReference,
-                        (r, matched) => r.IsMatchedAcrossAccounts = matched,
-                        r => AccountSideCalculator.ExtractFallbackBgiKey(
-                            r.DWINGS_InvoiceID, r.Receivable_InvoiceFromAmbre,
-                            r.Reconciliation_Num, r.Comments, r.RawLabel,
-                            r.Receivable_DWRefFromAmbre, r.InternalInvoiceReference));
-
-                    // Recompute MissingAmount on ALL rows (needs both sides for correct calculation)
-                    ReconciliationViewEnricher.CalculateMissingAmounts(
-                        _allViewData, country.CNT_AmbreReceivable, country.CNT_AmbrePivot);
-
-                    // Phase 2: keep GroupBalance in sync with the just-applied basket link.
-                    ReconciliationViewEnricher.ComputeAndApplyGroupBalances(_allViewData);
-
-                    // Assign alternating colors to rows sharing the same InternalInvoiceReference
-                    ReconciliationViewEnricher.AssignInvoiceGroupColors(_allViewData);
-
-                    // Refresh all pre-calculated display caches (StatusColor, MissingAmount colors,
-                    // G visibility, etc.) so the grid reads final values without re-computing on scroll
-                    foreach (var r in _allViewData)
-                        r.PreCalculateDisplayProperties();
+                }
+                catch { }
+                finally
+                {
+                    _allViewDataDirty = false;
                 }
             }
-            catch { }
 
             // 1️⃣  Sauvegarde du tri actuel
             var view = CollectionViewSource.GetDefaultView(_viewData);

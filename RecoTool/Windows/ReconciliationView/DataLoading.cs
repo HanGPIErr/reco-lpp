@@ -49,13 +49,14 @@ namespace RecoTool.Windows
 
                     // Peupler les options pour les ComboBox référentielles (Action/KPI/Incident Type)
                     PopulateReferentialOptions();
-                    // Charger les utilisateurs pour le filtre d'assignation
-                    await LoadAssigneeOptionsAsync();
-
-                    // Charger dynamiquement les options des filtres de haut de page
-                    await LoadGuaranteeStatusOptionsAsync();
-                    await LoadGuaranteeTypeOptionsAsync();
-                    await LoadCurrencyOptionsAsync();
+                    // PERF: Lancer les 4 SELECT DISTINCT en parallèle au lieu de les sérialiser.
+                    // Sur des bases volumineuses cela divise le coût d'init des combos par ~3-4.
+                    await Task.WhenAll(
+                        LoadAssigneeOptionsAsync(),
+                        LoadGuaranteeStatusOptionsAsync(),
+                        LoadGuaranteeTypeOptionsAsync(),
+                        LoadCurrencyOptionsAsync()
+                    );
                     // Charger les types de transaction (enum) dans le VM
                     VM.LoadTransactionTypeOptions();
                 }
@@ -146,20 +147,16 @@ namespace RecoTool.Windows
                 bool usedPreloaded = false;
                 if (_preloadedAllData != null)
                 {
-                    // Utiliser les données préchargées (ne pas toucher au service)
+                    // Utiliser les données préchargées (ne pas toucher au service).
+                    // PERF (QW-2): _preloadedAllData was populated by ConfigureAndPreloadView via
+                    // localSvc.GetReconciliationViewAsync, which already runs the full enrichment
+                    // pipeline (EnrichWithDwingsInvoices, EnrichRowsWithDwingsProperties,
+                    // CalculateMissingAmounts, ComputeAndApplyGroupBalances, AssignAccountSides,
+                    // ComputeMatchedAcrossAccounts) — and ReapplyEnrichmentsAsync for cache hits.
+                    // No need to re-run any of that here.
                     viewList = _preloadedAllData.ToList();
                     usedPreloaded = true;
                     swDb.Stop();
-                    
-                    // CRITICAL: Preloaded data may have stale DWINGS links, re-enrich them
-                    // This ensures MissingAmount, grouping flags, etc. are always calculated
-                    // IMPORTANT: Must initialize DWINGS caches first (may not have been done yet)
-                    try
-                    {
-                        await _reconciliationService?.EnsureDwingsCachesInitializedAsync();
-                        await _reconciliationService?.ReapplyEnrichmentsToListAsync(viewList, _currentCountryId);
-                    }
-                    catch { /* best-effort */ }
                 }
                 else
                 {
@@ -173,17 +170,13 @@ namespace RecoTool.Windows
                                          || (VM?.CurrentFilter?.DeletedDate != null);
                     }
                     catch { }
+                    // PERF (QW-2): GetReconciliationViewAsync internally runs ReapplyEnrichmentsAsync
+                    // on cache hits and the full BuildReconciliationViewAsyncCore enrichment on cache
+                    // misses. Both paths leave the list with up-to-date DWINGS fields, MissingAmount,
+                    // and IsMatchedAcrossAccounts. Calling ReapplyEnrichmentsToListAsync here would be
+                    // a redundant 4th group-by pass over the data — removed.
                     viewList = await _reconciliationService.GetReconciliationViewAsync(_currentCountryId, _backendFilterSql, includeDeleted);
                     swDb.Stop();
-
-                    // IMPORTANT: Even when fetching fresh from the service, DWINGS-derived fields
-                    // (e.g., OfficialRef, grouping flags) must be re-enriched to reflect recent link/unlink
-                    try
-                    {
-                        await _reconciliationService?.EnsureDwingsCachesInitializedAsync();
-                        await _reconciliationService?.ReapplyEnrichmentsToListAsync(viewList, _currentCountryId);
-                    }
-                    catch { /* best-effort */ }
                 }
                 int totalRows = viewList?.Count ?? 0;
                 _preloadedAllData = null;
@@ -281,6 +274,12 @@ namespace RecoTool.Windows
                     }
                 }
                 catch { }
+
+                // PERF (QW-2): the heavy grouping/PreCalculate block in ApplyFilters is gated
+                // by _allViewDataDirty. After a fresh load we DO want it to run once so
+                // AssignInvoiceGroupColors + per-row PreCalculateDisplayProperties are applied.
+                // For all subsequent filter clicks the flag stays false and ApplyFilters is filter-only.
+                _allViewDataDirty = true;
 
                 // Appliquer les filtres courants (ex: compte/Status) si déjà définis par la page parente
                 var swFilter = Stopwatch.StartNew();
@@ -445,10 +444,12 @@ namespace RecoTool.Windows
                 // Start/restart presence engine for the new country
                 try { StartPresenceEngine(); } catch { }
 
-                // Recharger les options de devise dépendantes du pays
-                _ = LoadCurrencyOptionsAsync();
-                _ = LoadGuaranteeTypeOptionsAsync();
-                _ = LoadGuaranteeStatusOptionsAsync();
+                // Recharger les options dépendantes du pays en parallèle (fire-and-forget)
+                _ = Task.WhenAll(
+                    LoadCurrencyOptionsAsync(),
+                    LoadGuaranteeTypeOptionsAsync(),
+                    LoadGuaranteeStatusOptionsAsync()
+                );
                 if (refresh)
                     Refresh();
             }

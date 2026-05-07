@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using Microsoft.Office.Interop.Excel;
 using RecoTool.Models;
+using Range = Microsoft.Office.Interop.Excel.Range;
 
 namespace RecoTool.Infrastructure.IO
 {

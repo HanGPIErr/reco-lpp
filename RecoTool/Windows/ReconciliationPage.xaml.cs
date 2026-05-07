@@ -982,6 +982,14 @@ namespace RecoTool.Windows
         public event EventHandler RefreshStarted;
         public event EventHandler RefreshCompleted;
 
+        /// <summary>
+        /// Raised when ANY child <see cref="ReconciliationView"/> hosted on this page modifies data
+        /// (bulk action, rule application, edit, basket linking, etc.). Listeners (e.g. <c>MainWindow</c>)
+        /// can use this signal to mark sibling pages (HomePage) as "stale" so they reload only when
+        /// the user actually navigates back to them — instead of refreshing on every navigation.
+        /// </summary>
+        public event Action DataChanged;
+
         public void Refresh()
         {
             _ = RefreshAsync();
@@ -1940,6 +1948,9 @@ namespace RecoTool.Windows
                         if (sibling != view)
                             try { sibling.Refresh(); } catch { }
                     }
+                    // Propagate up so MainWindow can mark HomePage as stale.
+                    // Without this, returning to Home shows outdated KPIs/charts.
+                    try { DataChanged?.Invoke(); } catch { }
                 }
                 catch { }
             };
@@ -2154,11 +2165,17 @@ namespace RecoTool.Windows
                         // Use service overload to include deleted when needed
                         list = await localSvc.GetReconciliationViewAsync(countryId, backendSql, includeDeleted: true).ConfigureAwait(false);
                     }
+                    else if (localSvc != null)
+                    {
+                        // PERF: prefer the service path so we benefit from _recoViewCache (Lazy<Task>)
+                        // and _recoViewDataCache (materialized list). Going through the repository
+                        // bypasses both caches and forces an OLE DB round-trip on every view open.
+                        list = await localSvc.GetReconciliationViewAsync(countryId, backendSql).ConfigureAwait(false);
+                    }
                     else
                     {
-                        list = localRepo != null
-                            ? await localRepo.GetReconciliationViewAsync(countryId, backendSql).ConfigureAwait(false)
-                            : await localSvc.GetReconciliationViewAsync(countryId, backendSql).ConfigureAwait(false);
+                        // Fallback only when service is unavailable
+                        list = await localRepo.GetReconciliationViewAsync(countryId, backendSql).ConfigureAwait(false);
                     }
                     await view.Dispatcher.InvokeAsync(() =>
                     {
@@ -2464,6 +2481,8 @@ namespace RecoTool.Windows
                 if (recoSvc == null) return;
 
                 int linked = 0;
+                var triggerActionId = (int)ActionType.Trigger;
+                var nowUtc = DateTime.UtcNow;
                 foreach (var id in allIds)
                 {
                     try
@@ -2472,6 +2491,20 @@ namespace RecoTool.Windows
                         if (reco == null) continue;
 
                         reco.InternalInvoiceReference = groupRef;
+
+                        // Always set TRIGGER PENDING after a basket link (per business rule).
+                        // We do this in code rather than relying on the "Linking - Grouped
+                        // Balance Zero" rule, which only fires when IsGrouped + IsAmountMatch
+                        // are both true. The user wants this state regardless of balance.
+                        reco.Action = triggerActionId;
+                        reco.ActionStatus = false;       // PENDING
+                        reco.ActionDate = nowUtc;
+
+                        // Stamp user-edit so subsequent rule passes won't silently overwrite
+                        // the freshly-stamped Trigger state.
+                        RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(
+                            reco, "InternalInvoiceReference", "Action", "ActionStatus", "ActionDate");
+
                         reco.ModifiedBy = Environment.UserName;
                         reco.LastModified = DateTime.Now;
                         await recoSvc.SaveReconciliationAsync(reco, applyRulesOnEdit: false);
@@ -2647,6 +2680,9 @@ namespace RecoTool.Windows
                 {
                     try { view.Refresh(); } catch { }
                 }
+                // Mark HomePage as stale: bulk operations / linking / import all change data
+                // that is reflected in the dashboard (KPIs, charts).
+                try { DataChanged?.Invoke(); } catch { }
             }
             catch { }
         }

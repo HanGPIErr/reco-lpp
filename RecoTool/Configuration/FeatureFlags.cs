@@ -9,12 +9,14 @@ namespace RecoTool.Configuration
     {
         /// <summary>
         /// Enable/disable multi-user features at runtime.
-        /// When false, disables: TodoList session tracking, heartbeat timer, editing indicators,
+        /// When false (default): TodoList session tracking, heartbeat timer, editing indicators,
         /// background pushes/pulls, snapshot publish/pull on the network share, and the
-        /// SyncMonitorService poll timer. Used to investigate UI freezes on slow networks.
-        /// Toggle via the "Multi-user" button in MainWindow.
+        /// SyncMonitorService poll timer are all paused. The app starts in Solo mode by default
+        /// so a fresh launch never blocks on the slow network share. The user can flip the
+        /// "Solo mode" / "Multi-user" toggle in MainWindow to enable multi-user features for
+        /// the current session.
         /// </summary>
-        public static bool ENABLE_MULTI_USER { get; set; } = true;
+        public static bool ENABLE_MULTI_USER { get; set; } = false;
 
         /// <summary>
         /// Fired whenever <see cref="ENABLE_MULTI_USER"/> changes. Subscribers can react

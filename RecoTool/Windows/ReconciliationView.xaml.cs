@@ -76,6 +76,14 @@ namespace RecoTool.Windows
         // Données préchargées par la page parente (si présentes, on évite un fetch service)
         private IReadOnlyList<ReconciliationViewData> _preloadedAllData;
 
+        // PERF (QW-2): when true, the next ApplyFilters() must run the heavy "grouping" block
+        // (reset MissingAmount/IsMatched, ComputeMatchedAcrossAccounts, CalculateMissingAmounts,
+        //  ComputeAndApplyGroupBalances, AssignInvoiceGroupColors, per-row PreCalculateDisplayProperties).
+        // Set true after data load and after edits that change grouping (InternalInvoiceReference,
+        // basket linking). Stays false for plain filter changes — those don't alter row-level
+        // grouping data, so we save a O(N) pass + N PreCalculate calls per filter click.
+        private bool _allViewDataDirty;
+
         // Propriétés de filtrage (legacy display-only field kept)
         private string _filterCountry;
 
