@@ -28,6 +28,39 @@ namespace RecoTool
         {
             base.OnStartup(e);
 
+            // ─────────────────────────────────────────────────────────────────
+            // PERF DIAGNOSTIC: WPF render tier
+            // Tier 0 = software rendering (slow, scroll will never be smooth)
+            // Tier 1 = partial hardware acceleration (ok)
+            // Tier 2 = full hardware acceleration (best — what we want)
+            //
+            // Corporate VMs / Citrix / RDP sessions often run at Tier 0. If we
+            // see this in the logs, no XAML optimization will rescue scroll perf.
+            // Workarounds: enable GPU acceleration in the VM/RDP profile, or
+            // ProcessRenderMode.Software → ProcessRenderMode.Default (default
+            // is correct, but listed here for if a previous tweak forced it).
+            // ─────────────────────────────────────────────────────────────────
+            try
+            {
+                var renderTier = System.Windows.Media.RenderCapability.Tier >> 16;
+                var tierLabel = renderTier switch
+                {
+                    0 => "SOFTWARE (slow)",
+                    1 => "partial hardware",
+                    2 => "full hardware",
+                    _ => "unknown"
+                };
+                System.Diagnostics.Debug.WriteLine($"[Startup] WPF RenderCapability.Tier = {renderTier} ({tierLabel})");
+                if (renderTier == 0)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        "[Startup] WARNING: WPF is using software rendering. " +
+                        "Scroll performance will be severely limited regardless of XAML optimizations. " +
+                        "Investigate: GPU drivers, RDP/Citrix session, ProcessRenderMode.");
+                }
+            }
+            catch { /* best-effort diagnostic */ }
+
             // Syncfusion license key — loaded from secrets.config (gitignored, never committed).
             // To set up: copy secrets.config.template to secrets.config and fill in your key.
             // Get your key at: https://www.syncfusion.com/account/manage-trials/start-trials
