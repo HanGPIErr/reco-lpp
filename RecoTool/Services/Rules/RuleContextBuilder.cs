@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Data.OleDb;
 using System.Linq;
 using System.Threading.Tasks;
+using RecoTool.Infrastructure;
+using RecoTool.Infrastructure.DataAccess;
 using RecoTool.Models;
 using RecoTool.Services.DTOs;
 
@@ -14,13 +16,29 @@ namespace RecoTool.Services.Rules
     /// </summary>
     public class RuleContextBuilder
     {
-        private readonly ReconciliationService _reconciliationService;
-        private readonly OfflineFirstService _offlineFirstService;
+        private readonly IReconciliationService _reconciliationService;
+        private readonly IOfflineFirstService _offlineFirstService;
 
-        public RuleContextBuilder(ReconciliationService reconciliationService, OfflineFirstService offlineFirstService)
+        /// <summary>
+        /// Loader for "related ambre lines" (lines sharing a grouping reference with the
+        /// current row). Defaults to the production OleDb implementation; tests can swap
+        /// it out via <see cref="__SetRelatedLinesLoaderForTesting"/> to avoid hitting Access.
+        /// </summary>
+        private Func<string, string, string, Task<List<DataAmbre>>> _relatedLinesLoader = LoadRelatedLinesAsync;
+
+        public RuleContextBuilder(IReconciliationService reconciliationService, IOfflineFirstService offlineFirstService)
         {
             _reconciliationService = reconciliationService;
             _offlineFirstService = offlineFirstService;
+        }
+
+        /// <summary>
+        /// Test seam: replace the OleDb-backed related-lines loader with an in-memory fake.
+        /// Internal: only the unit-test assembly is allowed to use it (InternalsVisibleTo).
+        /// </summary>
+        internal void __SetRelatedLinesLoaderForTesting(Func<string, string, string, Task<List<DataAmbre>>> loader)
+        {
+            _relatedLinesLoader = loader ?? LoadRelatedLinesAsync;
         }
 
         public async Task<RuleContext> BuildAsync(DataAmbre a, Reconciliation r, Country country, string countryId, bool isPivot, bool? isGrouped = null, bool? isAmountMatch = null)
@@ -170,7 +188,7 @@ namespace RecoTool.Services.Rules
                 if (string.IsNullOrWhiteSpace(ambreCs) || string.IsNullOrWhiteSpace(reconCs))
                     return (null, null, null);
 
-                var relatedLines = await LoadRelatedLinesAsync(groupingRef, reconCs, ambreCs).ConfigureAwait(false);
+                var relatedLines = await _relatedLinesLoader(groupingRef, reconCs, ambreCs).ConfigureAwait(false);
                 var batch = CalculateGroupingFlagsBatch(relatedLines, country);
                 if (batch.TryGetValue(a.ID, out var flags))
                     return (flags.isGrouped, flags.isAmountMatch, flags.missingAmount);
@@ -226,54 +244,58 @@ namespace RecoTool.Services.Rules
 
         private static async Task<List<DataAmbre>> LoadRelatedLinesAsync(string groupingRef, string reconCs, string ambreCs)
         {
-            var relatedLines = new List<DataAmbre>();
-            using (var reconConn = new OleDbConnection(reconCs))
-            using (var ambreConn = new OleDbConnection(ambreCs))
+            // Step 1: collect related IDs from T_Reconciliation
+            var relatedIds = await OleDbAsyncExecutor.RunWithConnectionAsync(reconCs, reconConn =>
             {
-                await reconConn.OpenAsync().ConfigureAwait(false);
-                await ambreConn.OpenAsync().ConfigureAwait(false);
-
-                var relatedIds = new List<string>();
+                var ids = new List<string>();
                 using (var cmd = reconConn.CreateCommand())
                 {
-                    cmd.CommandText = @"SELECT ID FROM T_Reconciliation 
-                                      WHERE (DWINGS_BGPMT = ? OR DWINGS_InvoiceID = ? OR DWINGS_GuaranteeID = ? OR InternalInvoiceReference = ?)";
+                    cmd.CommandText = $@"SELECT {Schema.Columns.Reconciliation.ID} FROM {Schema.Tables.T_Reconciliation}
+                                      WHERE ({Schema.Columns.Reconciliation.DWINGS_BGPMT} = ? OR {Schema.Columns.Reconciliation.DWINGS_InvoiceID} = ? OR {Schema.Columns.Reconciliation.DWINGS_GuaranteeID} = ? OR {Schema.Columns.Reconciliation.InternalInvoiceReference} = ?)";
                     for (int i = 0; i < 4; i++)
                         cmd.Parameters.Add($"@ref{i}", OleDbType.VarWChar).Value = groupingRef;
 
-                    using (var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false))
+                    using (var reader = cmd.ExecuteReader())
                     {
-                        while (await reader.ReadAsync().ConfigureAwait(false))
+                        while (reader.Read())
                         {
-                            var id = reader["ID"]?.ToString();
-                            if (!string.IsNullOrWhiteSpace(id)) relatedIds.Add(id);
+                            var id = reader[Schema.Columns.Reconciliation.ID]?.ToString();
+                            if (!string.IsNullOrWhiteSpace(id)) ids.Add(id);
                         }
                     }
                 }
+                return ids;
+            }).ConfigureAwait(false);
 
+            if (relatedIds.Count == 0) return new List<DataAmbre>();
+
+            // Step 2: fetch matching AMBRE rows
+            return await OleDbAsyncExecutor.RunWithConnectionAsync(ambreCs, ambreConn =>
+            {
+                var relatedLines = new List<DataAmbre>();
                 foreach (var id in relatedIds)
                 {
                     using (var cmd = ambreConn.CreateCommand())
                     {
-                        cmd.CommandText = "SELECT ID, Account_ID, SignedAmount FROM T_Data_Ambre WHERE ID = ? AND DeleteDate IS NULL";
+                        cmd.CommandText = $"SELECT {Schema.Columns.Ambre.ID}, {Schema.Columns.Ambre.Account_ID}, {Schema.Columns.Ambre.SignedAmount} FROM {Schema.Tables.T_Data_Ambre} WHERE {Schema.Columns.Ambre.ID} = ? AND {Schema.Columns.Ambre.DeleteDate} IS NULL";
                         cmd.Parameters.Add("@id", OleDbType.VarWChar).Value = id;
 
-                        using (var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false))
+                        using (var reader = cmd.ExecuteReader())
                         {
-                            if (await reader.ReadAsync().ConfigureAwait(false))
+                            if (reader.Read())
                             {
                                 relatedLines.Add(new DataAmbre
                                 {
-                                    ID = reader["ID"]?.ToString(),
-                                    Account_ID = reader["Account_ID"]?.ToString(),
-                                    SignedAmount = Convert.ToDecimal(reader["SignedAmount"])
+                                    ID = reader[Schema.Columns.Ambre.ID]?.ToString(),
+                                    Account_ID = reader[Schema.Columns.Ambre.Account_ID]?.ToString(),
+                                    SignedAmount = Convert.ToDecimal(reader[Schema.Columns.Ambre.SignedAmount])
                                 });
                             }
                         }
                     }
                 }
-            }
-            return relatedLines;
+                return relatedLines;
+            }).ConfigureAwait(false);
         }
 
         #endregion

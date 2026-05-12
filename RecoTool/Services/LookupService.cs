@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using RecoTool.Infrastructure.DataAccess;
 
 namespace RecoTool.Services
 {
@@ -14,9 +15,9 @@ namespace RecoTool.Services
     /// </summary>
     public class LookupService
     {
-        private readonly OfflineFirstService _offlineFirstService;
+        private readonly IOfflineFirstService _offlineFirstService;
 
-        public LookupService(OfflineFirstService offlineFirstService)
+        public LookupService(IOfflineFirstService offlineFirstService)
         {
             _offlineFirstService = offlineFirstService ?? throw new ArgumentNullException(nameof(offlineFirstService));
         }
@@ -76,12 +77,11 @@ namespace RecoTool.Services
             catch { return new List<string>(); }
         }
 
-        private static async Task<List<T>> ExecuteScalarListAsync<T>(string query, string connectionString, params object[] parameters)
+        private static Task<List<T>> ExecuteScalarListAsync<T>(string query, string connectionString, params object[] parameters)
         {
-            var results = new List<T>();
-            using (var connection = new OleDbConnection(connectionString))
+            return OleDbAsyncExecutor.RunWithConnectionAsync(connectionString, connection =>
             {
-                await connection.OpenAsync().ConfigureAwait(false);
+                var results = new List<T>();
                 using (var command = new OleDbCommand(query, connection))
                 {
                     if (parameters != null)
@@ -92,9 +92,9 @@ namespace RecoTool.Services
                         }
                     }
 
-                    using (var reader = await command.ExecuteReaderAsync().ConfigureAwait(false))
+                    using (var reader = command.ExecuteReader())
                     {
-                        while (await reader.ReadAsync().ConfigureAwait(false))
+                        while (reader.Read())
                         {
                             object value = reader.IsDBNull(0) ? null : reader.GetValue(0);
                             if (value == null)
@@ -122,8 +122,8 @@ namespace RecoTool.Services
                         }
                     }
                 }
-            }
-            return results;
+                return results;
+            });
         }
     }
 }

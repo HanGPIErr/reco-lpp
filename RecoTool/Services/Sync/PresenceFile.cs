@@ -4,13 +4,14 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using RecoTool.Infrastructure.Time;
 
 namespace RecoTool.Services.Sync
 {
     /// <summary>
     /// Ultra-lightweight presence system using a single binary file per country on the network share.
     /// No OleDb connections. File is ~4KB max, read/written in <1ms.
-    /// 
+    ///
     /// File format (v2 — multi-row):
     ///   [4 bytes] SyncVersion (uint32) - incremented after each push
     ///   [4 bytes] UserCount (int32)
@@ -22,6 +23,9 @@ namespace RecoTool.Services.Sync
     /// </summary>
     public static class PresenceFile
     {
+        /// <summary>Clock used for heartbeat timestamps. Defaults to <see cref="SystemClock.Instance"/>; swappable for tests.</summary>
+        public static IClock Clock { get; set; } = SystemClock.Instance;
+
         private const int UserNameLen = 20;
         private const int RowIdLen = 36;
         private const int MaxActiveRows = 10;
@@ -41,7 +45,7 @@ namespace RecoTool.Services.Sync
             public string UserName { get; set; }
             public DateTime LastHeartbeat { get; set; }
             public List<string> ActiveRowIds { get; set; } = new List<string>();
-            public bool IsStale => (DateTime.UtcNow - LastHeartbeat) > StaleTimeout;
+            public bool IsStale => (PresenceFile.Clock.UtcNow - LastHeartbeat) > StaleTimeout;
 
             // Display name resolved on the UI side (not stored in file)
             public string DisplayName { get; set; }
@@ -139,7 +143,7 @@ namespace RecoTool.Services.Sync
                     var entry = new UserPresence
                     {
                         UserName = userName,
-                        LastHeartbeat = DateTime.UtcNow,
+                        LastHeartbeat = Clock.UtcNow,
                     };
                     if (activeRowIds != null)
                     {

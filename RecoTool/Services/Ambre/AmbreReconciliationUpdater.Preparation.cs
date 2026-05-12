@@ -77,12 +77,13 @@ namespace RecoTool.Services.Ambre
                     new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
                     dataAmbre =>
                     {
+                        var nowUtcFast = _clock.UtcNow;
                         var reconciliation = new Reconciliation
                         {
                             ID = dataAmbre.ID,
-                            CreationDate = DateTime.UtcNow,
+                            CreationDate = nowUtcFast,
                             ModifiedBy = _currentUser,
-                            LastModified = DateTime.UtcNow,
+                            LastModified = nowUtcFast,
                             Version = 1
                         };
 
@@ -245,12 +246,13 @@ namespace RecoTool.Services.Ambre
             IReadOnlyList<DwingsGuaranteeDto> dwGuarantees,
             CancellationToken cancellationToken = default)
         {
+            var nowUtcCreate = _clock.UtcNow;
             var reconciliation = new Reconciliation
             {
                 ID = dataAmbre.ID,
-                CreationDate = DateTime.UtcNow,
+                CreationDate = nowUtcCreate,
                 ModifiedBy = _currentUser,
-                LastModified = DateTime.UtcNow,
+                LastModified = nowUtcCreate,
                 Version = 1
             };
 

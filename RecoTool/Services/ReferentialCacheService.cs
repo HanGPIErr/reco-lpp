@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using RecoTool.Infrastructure.Time;
 using RecoTool.Models;
 
 namespace RecoTool.Services
@@ -14,21 +15,23 @@ namespace RecoTool.Services
     public class ReferentialCacheService
     {
         private readonly ReferentialService _referentialService;
+        private readonly IClock _clock;
         private readonly object _lock = new object();
 
         // Cache dictionaries
         private List<(string Id, string Name)> _usersCache = null;
         private Dictionary<string, string> _paramCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        
+
         // Cache timestamps
         private DateTime? _usersCacheTime = null;
 
         // Cache lifetime (optional - set to null for infinite cache with manual invalidation only)
         private static readonly TimeSpan? CacheLifetime = null; // Infinite cache, invalidate manually
 
-        public ReferentialCacheService(ReferentialService referentialService)
+        public ReferentialCacheService(ReferentialService referentialService, IClock clock = null)
         {
             _referentialService = referentialService ?? throw new ArgumentNullException(nameof(referentialService));
+            _clock = clock ?? SystemClock.Instance;
         }
 
         #region Users Cache
@@ -52,7 +55,7 @@ namespace RecoTool.Services
             lock (_lock)
             {
                 _usersCache = users.ToList();
-                _usersCacheTime = DateTime.UtcNow;
+                _usersCacheTime = _clock.UtcNow;
             }
 
             return users.ToList();
@@ -134,10 +137,10 @@ namespace RecoTool.Services
         private bool IsCacheValid(DateTime? cacheTime)
         {
             if (CacheLifetime == null) return true; // Infinite cache
-            
+
             if (!cacheTime.HasValue) return false;
-            
-            return DateTime.UtcNow - cacheTime.Value < CacheLifetime.Value;
+
+            return _clock.UtcNow - cacheTime.Value < CacheLifetime.Value;
         }
 
         /// <summary>

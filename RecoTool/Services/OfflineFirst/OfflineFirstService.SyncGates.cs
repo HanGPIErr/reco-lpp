@@ -30,7 +30,7 @@ namespace RecoTool.Services
             if (!IsNetworkSyncAvailable) return;
 
             // Debounce
-            var now = DateTime.UtcNow;
+            var now = _clock.UtcNow;
             var cooldown = minInterval ?? TimeSpan.FromMilliseconds(500);
             var last = _lastBgSyncRequestUtc.GetOrAdd(countryId, DateTime.MinValue);
             if (now - last < cooldown)

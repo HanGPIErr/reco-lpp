@@ -9,11 +9,47 @@ using System.Windows.Input;
 using RecoTool.Services;
 using RecoTool.Services.Rules;
 using RecoTool.UI.Models;
+using RecoTool.ViewModels;
 
 namespace RecoTool.Windows
 {
     public partial class RuleEditorWindow : Window
     {
+        /// <summary>
+        /// MVVM constructor. The VM exposes the same surface as the legacy
+        /// <c>DataContext = this</c> path (BoolChoices/MtStatusChoices/etc.
+        /// with Label/Value), so the XAML bindings work unchanged.
+        /// On Save the VM signals <see cref="RuleEditorViewModel.CloseRequested"/>
+        /// with <c>true</c> ; the window closes and sets <see cref="DialogResult"/>
+        /// + populates <see cref="ResultRule"/> / <see cref="RunNow"/> for caller compatibility.
+        /// </summary>
+        public RuleEditorWindow(RuleEditorViewModel vm)
+        {
+            if (vm == null) throw new ArgumentNullException(nameof(vm));
+            InitializeComponent();
+            DataContext = vm;
+            // Mirror the rule into the Window-level property so the legacy
+            // Save_Click handler (wired in XAML) sees a non-null EditedRule and
+            // passes its validation. The bindings against DataContext.EditedRule
+            // already drive the UI from the VM.
+            EditedRule = vm.EditedRule;
+            // Bridge VM events back to the legacy Window-level properties so existing
+            // callers (which inspect ResultRule / RunNow after ShowDialog) keep working.
+            vm.CloseRequested += (_, saved) =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    if (saved)
+                    {
+                        ResultRule = vm.ResultRule;
+                        RunNow = vm.RunNow;
+                    }
+                    try { DialogResult = saved; } catch { }
+                    Close();
+                });
+            };
+        }
+
         // When true, caller will run rules immediately after saving
         public bool RunNow { get; set; }
 

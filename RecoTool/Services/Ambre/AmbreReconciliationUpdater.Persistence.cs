@@ -1,5 +1,7 @@
 using OfflineFirstAccess.Helpers;
 using RecoTool.Helpers;
+using RecoTool.Infrastructure;
+using RecoTool.Infrastructure.DataAccess;
 using RecoTool.Models;
 using RecoTool.Services.DTOs;
 using System;
@@ -22,33 +24,35 @@ namespace RecoTool.Services.Ambre
     {
         private async Task<List<string>> GetUnlinkedReconciliationIdsAsync(string countryId)
         {
-            var ids = new List<string>();
             try
             {
                 var connectionString = _offlineFirstService.GetCountryConnectionString(countryId);
-                using (var conn = new OleDbConnection(connectionString))
+                var sql = $"SELECT [{Schema.Columns.Reconciliation.ID}] FROM [{Schema.Tables.T_Reconciliation}] WHERE [{Schema.Columns.Reconciliation.DeleteDate}] IS NULL AND (" +
+                          $"([{Schema.Columns.Reconciliation.DWINGS_InvoiceID}] IS NULL OR [{Schema.Columns.Reconciliation.DWINGS_InvoiceID}] = '') OR " +
+                          $"([{Schema.Columns.Reconciliation.DWINGS_BGPMT}] IS NULL OR [{Schema.Columns.Reconciliation.DWINGS_BGPMT}] = '') OR " +
+                          $"([{Schema.Columns.Reconciliation.DWINGS_GuaranteeID}] IS NULL OR [{Schema.Columns.Reconciliation.DWINGS_GuaranteeID}] = '')" +
+                          ")";
+
+                var ids = await OleDbAsyncExecutor.RunWithConnectionAsync(connectionString, conn =>
                 {
-                    await conn.OpenAsync();
-                    using (var cmd = new OleDbCommand(
-                        "SELECT [ID] FROM [T_Reconciliation] WHERE [DeleteDate] IS NULL AND (" +
-                        "([DWINGS_InvoiceID] IS NULL OR [DWINGS_InvoiceID] = '') OR " +
-                        "([DWINGS_BGPMT] IS NULL OR [DWINGS_BGPMT] = '') OR " +
-                        "([DWINGS_GuaranteeID] IS NULL OR [DWINGS_GuaranteeID] = '')" +
-                        ")",
-                        conn))
-                    using (var rdr = await cmd.ExecuteReaderAsync().ConfigureAwait(false))
+                    var collected = new List<string>();
+                    using (var cmd = new OleDbCommand(sql, conn))
+                    using (var rdr = cmd.ExecuteReader())
                     {
-                        while (await rdr.ReadAsync().ConfigureAwait(false))
+                        while (rdr.Read())
                         {
                             var id = rdr.IsDBNull(0) ? null : Convert.ToString(rdr.GetValue(0));
-                            if (!string.IsNullOrWhiteSpace(id)) ids.Add(id);
+                            if (!string.IsNullOrWhiteSpace(id)) collected.Add(id);
                         }
                     }
-                }
+                    return collected;
+                }).ConfigureAwait(false);
+
+                return ids.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             }
             catch { }
 
-            return ids.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            return new List<string>();
         }
 
         private async Task<List<DataAmbre>> LoadAmbreRowsByIdsAsync(string ambreConnectionString, List<string> ids)
@@ -61,23 +65,24 @@ namespace RecoTool.Services.Ambre
             {
                 var batch = ids.Skip(start).Take(batchSize).ToList();
                 var sb = new StringBuilder();
-                sb.Append("SELECT * FROM T_Data_Ambre WHERE ID IN (");
+                sb.Append($"SELECT * FROM {Schema.Tables.T_Data_Ambre} WHERE {Schema.Columns.Ambre.ID} IN (");
                 for (int i = 0; i < batch.Count; i++)
                 {
                     if (i > 0) sb.Append(",");
                     sb.Append("?");
                 }
-                sb.Append(") AND DeleteDate IS NULL");
+                sb.Append($") AND {Schema.Columns.Ambre.DeleteDate} IS NULL");
+                var sql = sb.ToString();
 
-                using (var conn = new OleDbConnection(ambreConnectionString))
+                var batchRows = await OleDbAsyncExecutor.RunWithConnectionAsync(ambreConnectionString, conn =>
                 {
-                    await conn.OpenAsync().ConfigureAwait(false);
-                    using (var cmd = new OleDbCommand(sb.ToString(), conn))
+                    var result = new List<DataAmbre>();
+                    using (var cmd = new OleDbCommand(sql, conn))
                     {
                         foreach (var id in batch)
                             cmd.Parameters.AddWithValue("@ID", id);
 
-                        using (var rdr = await cmd.ExecuteReaderAsync().ConfigureAwait(false))
+                        using (var rdr = cmd.ExecuteReader())
                         {
                             var props = typeof(DataAmbre)
                                 .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
@@ -91,7 +96,7 @@ namespace RecoTool.Services.Ambre
                                 if (!string.IsNullOrWhiteSpace(name) && !ordinals.ContainsKey(name)) ordinals[name] = i;
                             }
 
-                            while (await rdr.ReadAsync().ConfigureAwait(false))
+                            while (rdr.Read())
                             {
                                 var item = new DataAmbre();
                                 foreach (var p in props)
@@ -115,11 +120,14 @@ namespace RecoTool.Services.Ambre
                                     }
                                     catch { }
                                 }
-                                rows.Add(item);
+                                result.Add(item);
                             }
                         }
                     }
-                }
+                    return result;
+                }).ConfigureAwait(false);
+
+                rows.AddRange(batchRows);
             }
 
             return rows;
@@ -132,29 +140,28 @@ namespace RecoTool.Services.Ambre
             string countryId)
         {
             var connectionString = _offlineFirstService.GetCountryConnectionString(countryId);
-            
-            using (var conn = new OleDbConnection(connectionString))
-            {
-                await conn.OpenAsync();
 
+            await OleDbAsyncExecutor.RunWithConnectionAsync(connectionString, conn =>
+            {
                 // Unarchive updated records
                 if (toUpdate.Any())
                 {
-                    await UnarchiveRecordsAsync(conn, toUpdate);
+                    UnarchiveRecords(conn, toUpdate);
                 }
 
                 // Archive deleted records
                 if (toArchive.Any())
                 {
-                    await ArchiveRecordsAsync(conn, toArchive);
+                    ArchiveRecords(conn, toArchive);
                 }
 
                 // Insert new reconciliations
                 if (toInsert.Any())
                 {
-                    await InsertReconciliationsAsync(conn, toInsert);
+                    InsertReconciliations(conn, toInsert);
                 }
-            }
+                return 0;
+            }).ConfigureAwait(false);
         }
 
         private async Task UpdateDwingsReferencesForUpdatesAsync(
@@ -195,63 +202,51 @@ namespace RecoTool.Services.Ambre
 
                 // PERF: Phase 2 — single prepared UPDATE per row (merges 3 separate UPDATEs into 1)
                 var connectionString = _offlineFirstService.GetCountryConnectionString(countryId);
-                using (var conn = new OleDbConnection(connectionString))
+                await OleDbAsyncExecutor.RunInTransactionAsync(connectionString, (conn, tx) =>
                 {
-                    await conn.OpenAsync().ConfigureAwait(false);
-                    using (var tx = conn.BeginTransaction())
+                    var nowUtc = _clock.UtcNow;
+
+                    using (var cmd = new OleDbCommand(
+                        $"UPDATE [{Schema.Tables.T_Reconciliation}] SET " +
+                        $"[{Schema.Columns.Reconciliation.DWINGS_InvoiceID}] = IIF(([{Schema.Columns.Reconciliation.DWINGS_InvoiceID}] IS NULL OR [{Schema.Columns.Reconciliation.DWINGS_InvoiceID}] = '') AND ? <> '', ?, [{Schema.Columns.Reconciliation.DWINGS_InvoiceID}]), " +
+                        $"[{Schema.Columns.Reconciliation.DWINGS_BGPMT}] = IIF(([{Schema.Columns.Reconciliation.DWINGS_BGPMT}] IS NULL OR [{Schema.Columns.Reconciliation.DWINGS_BGPMT}] = '') AND ? <> '', ?, [{Schema.Columns.Reconciliation.DWINGS_BGPMT}]), " +
+                        $"[{Schema.Columns.Reconciliation.DWINGS_GuaranteeID}] = IIF(([{Schema.Columns.Reconciliation.DWINGS_GuaranteeID}] IS NULL OR [{Schema.Columns.Reconciliation.DWINGS_GuaranteeID}] = '') AND ? <> '', ?, [{Schema.Columns.Reconciliation.DWINGS_GuaranteeID}]), " +
+                        $"[{Schema.Columns.Reconciliation.LastModified}]=?, [{Schema.Columns.Reconciliation.ModifiedBy}]=? " +
+                        $"WHERE [{Schema.Columns.Reconciliation.ID}]=?", conn, tx))
                     {
-                        try
+                        cmd.Parameters.Add("@InvCheck", OleDbType.VarWChar, 255);
+                        cmd.Parameters.Add("@InvVal", OleDbType.VarWChar, 255);
+                        cmd.Parameters.Add("@BgpmtCheck", OleDbType.VarWChar, 255);
+                        cmd.Parameters.Add("@BgpmtVal", OleDbType.VarWChar, 255);
+                        cmd.Parameters.Add("@GuarCheck", OleDbType.VarWChar, 255);
+                        cmd.Parameters.Add("@GuarVal", OleDbType.VarWChar, 255);
+                        cmd.Parameters.Add("@LastModified", OleDbType.Date);
+                        cmd.Parameters.Add("@ModifiedBy", OleDbType.VarWChar, 255);
+                        cmd.Parameters.Add("@ID", OleDbType.VarWChar, 255);
+
+                        foreach (var item in resolvedRefs)
                         {
-                            var nowUtc = DateTime.UtcNow;
+                            var inv = item.Refs.InvoiceId ?? string.Empty;
+                            var bgp = item.Refs.CommissionId ?? string.Empty;
+                            var guar = item.Refs.GuaranteeId ?? string.Empty;
 
-                            using (var cmd = new OleDbCommand(
-                                "UPDATE [T_Reconciliation] SET " +
-                                "[DWINGS_InvoiceID] = IIF(([DWINGS_InvoiceID] IS NULL OR [DWINGS_InvoiceID] = '') AND ? <> '', ?, [DWINGS_InvoiceID]), " +
-                                "[DWINGS_BGPMT] = IIF(([DWINGS_BGPMT] IS NULL OR [DWINGS_BGPMT] = '') AND ? <> '', ?, [DWINGS_BGPMT]), " +
-                                "[DWINGS_GuaranteeID] = IIF(([DWINGS_GuaranteeID] IS NULL OR [DWINGS_GuaranteeID] = '') AND ? <> '', ?, [DWINGS_GuaranteeID]), " +
-                                "[LastModified]=?, [ModifiedBy]=? " +
-                                "WHERE [ID]=?", conn, tx))
-                            {
-                                cmd.Parameters.Add("@InvCheck", OleDbType.VarWChar, 255);
-                                cmd.Parameters.Add("@InvVal", OleDbType.VarWChar, 255);
-                                cmd.Parameters.Add("@BgpmtCheck", OleDbType.VarWChar, 255);
-                                cmd.Parameters.Add("@BgpmtVal", OleDbType.VarWChar, 255);
-                                cmd.Parameters.Add("@GuarCheck", OleDbType.VarWChar, 255);
-                                cmd.Parameters.Add("@GuarVal", OleDbType.VarWChar, 255);
-                                cmd.Parameters.Add("@LastModified", OleDbType.Date);
-                                cmd.Parameters.Add("@ModifiedBy", OleDbType.VarWChar, 255);
-                                cmd.Parameters.Add("@ID", OleDbType.VarWChar, 255);
+                            cmd.Parameters["@InvCheck"].Value = inv;
+                            cmd.Parameters["@InvVal"].Value = inv;
+                            cmd.Parameters["@BgpmtCheck"].Value = bgp;
+                            cmd.Parameters["@BgpmtVal"].Value = bgp;
+                            cmd.Parameters["@GuarCheck"].Value = guar;
+                            cmd.Parameters["@GuarVal"].Value = guar;
+                            cmd.Parameters["@LastModified"].Value = nowUtc;
+                            cmd.Parameters["@ModifiedBy"].Value = _currentUser;
+                            cmd.Parameters["@ID"].Value = item.Id;
 
-                                foreach (var item in resolvedRefs)
-                                {
-                                    var inv = item.Refs.InvoiceId ?? string.Empty;
-                                    var bgp = item.Refs.CommissionId ?? string.Empty;
-                                    var guar = item.Refs.GuaranteeId ?? string.Empty;
-
-                                    cmd.Parameters["@InvCheck"].Value = inv;
-                                    cmd.Parameters["@InvVal"].Value = inv;
-                                    cmd.Parameters["@BgpmtCheck"].Value = bgp;
-                                    cmd.Parameters["@BgpmtVal"].Value = bgp;
-                                    cmd.Parameters["@GuarCheck"].Value = guar;
-                                    cmd.Parameters["@GuarVal"].Value = guar;
-                                    cmd.Parameters["@LastModified"].Value = nowUtc;
-                                    cmd.Parameters["@ModifiedBy"].Value = _currentUser;
-                                    cmd.Parameters["@ID"].Value = item.Id;
-
-                                    await cmd.ExecuteNonQueryAsync();
-                                }
-                            }
-
-                            tx.Commit();
-                            LogManager.Info($"[PERF] Backfilled DWINGS refs for {resolvedRefs.Count} records");
-                        }
-                        catch
-                        {
-                            tx.Rollback();
-                            throw;
+                            cmd.ExecuteNonQuery();
                         }
                     }
-                }
+
+                    LogManager.Info($"[PERF] Backfilled DWINGS refs for {resolvedRefs.Count} records");
+                    return 0;
+                }).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -259,7 +254,7 @@ namespace RecoTool.Services.Ambre
             }
         }
 
-        private async Task UnarchiveRecordsAsync(OleDbConnection conn, List<DataAmbre> records)
+        private void UnarchiveRecords(OleDbConnection conn, List<DataAmbre> records)
         {
             var ids = records
                 .Select(d => d?.ID)
@@ -273,20 +268,20 @@ namespace RecoTool.Services.Ambre
             {
                 try
                 {
-                    var nowUtc = DateTime.UtcNow;
-                    
+                    var nowUtc = _clock.UtcNow;
+
                     // OPTIMIZATION: Batch update with IN clause (Access supports up to ~1000 items)
                     const int batchSize = 500;
                     int totalCount = 0;
-                    
+
                     for (int i = 0; i < ids.Count; i += batchSize)
                     {
                         var batch = ids.Skip(i).Take(batchSize).ToList();
                         var inClause = string.Join(",", batch.Select((_, idx) => $"?"));
-                        
+
                         using (var cmd = new OleDbCommand(
-                            $"UPDATE [T_Reconciliation] SET [DeleteDate]=NULL, [LastModified]=?, [ModifiedBy]=? " +
-                            $"WHERE [ID] IN ({inClause}) AND [DeleteDate] IS NOT NULL", conn, tx))
+                            $"UPDATE [{Schema.Tables.T_Reconciliation}] SET [{Schema.Columns.Reconciliation.DeleteDate}]=NULL, [{Schema.Columns.Reconciliation.LastModified}]=?, [{Schema.Columns.Reconciliation.ModifiedBy}]=? " +
+                            $"WHERE [{Schema.Columns.Reconciliation.ID}] IN ({inClause}) AND [{Schema.Columns.Reconciliation.DeleteDate}] IS NOT NULL", conn, tx))
                         {
                             cmd.Parameters.Add("@LastModified", OleDbType.Date).Value = nowUtc;
                             cmd.Parameters.AddWithValue("@ModifiedBy", _currentUser);
@@ -294,10 +289,10 @@ namespace RecoTool.Services.Ambre
                             {
                                 cmd.Parameters.AddWithValue("@ID", id);
                             }
-                            totalCount += await cmd.ExecuteNonQueryAsync();
+                            totalCount += cmd.ExecuteNonQuery();
                         }
                     }
-                    
+
                     tx.Commit();
                     LogManager.Info($"Unarchived {totalCount} reconciliation record(s)");
                 }
@@ -309,7 +304,7 @@ namespace RecoTool.Services.Ambre
             }
         }
 
-        private async Task ArchiveRecordsAsync(OleDbConnection conn, List<DataAmbre> records)
+        private void ArchiveRecords(OleDbConnection conn, List<DataAmbre> records)
         {
             var ids = records
                 .Select(d => d?.ID)
@@ -323,20 +318,20 @@ namespace RecoTool.Services.Ambre
             {
                 try
                 {
-                    var nowUtc = DateTime.UtcNow;
-                    
+                    var nowUtc = _clock.UtcNow;
+
                     // OPTIMIZATION: Batch update with IN clause
                     const int batchSize = 500;
                     int totalCount = 0;
-                    
+
                     for (int i = 0; i < ids.Count; i += batchSize)
                     {
                         var batch = ids.Skip(i).Take(batchSize).ToList();
                         var inClause = string.Join(",", batch.Select((_, idx) => $"?"));
-                        
+
                         using (var cmd = new OleDbCommand(
-                            $"UPDATE [T_Reconciliation] SET [DeleteDate]=?, [LastModified]=?, [ModifiedBy]=? " +
-                            $"WHERE [ID] IN ({inClause}) AND [DeleteDate] IS NULL", conn, tx))
+                            $"UPDATE [{Schema.Tables.T_Reconciliation}] SET [{Schema.Columns.Reconciliation.DeleteDate}]=?, [{Schema.Columns.Reconciliation.LastModified}]=?, [{Schema.Columns.Reconciliation.ModifiedBy}]=? " +
+                            $"WHERE [{Schema.Columns.Reconciliation.ID}] IN ({inClause}) AND [{Schema.Columns.Reconciliation.DeleteDate}] IS NULL", conn, tx))
                         {
                             cmd.Parameters.Add("@DeleteDate", OleDbType.Date).Value = nowUtc;
                             cmd.Parameters.Add("@LastModified", OleDbType.Date).Value = nowUtc;
@@ -345,10 +340,10 @@ namespace RecoTool.Services.Ambre
                             {
                                 cmd.Parameters.AddWithValue("@ID", id);
                             }
-                            totalCount += await cmd.ExecuteNonQueryAsync();
+                            totalCount += cmd.ExecuteNonQuery();
                         }
                     }
-                    
+
                     tx.Commit();
                     LogManager.Info($"Archived {totalCount} reconciliation record(s)");
                 }
@@ -360,10 +355,10 @@ namespace RecoTool.Services.Ambre
             }
         }
 
-        private async Task InsertReconciliationsAsync(OleDbConnection conn, List<Reconciliation> reconciliations)
+        private void InsertReconciliations(OleDbConnection conn, List<Reconciliation> reconciliations)
         {
             // Get existing IDs to ensure insert-only
-            var existingIds = await GetExistingIdsAsync(conn, reconciliations.Select(r => r.ID).ToList());
+            var existingIds = GetExistingIds(conn, reconciliations.Select(r => r.ID).ToList());
             var toInsert = reconciliations.Where(r => !existingIds.Contains(r.ID)).ToList();
             if (toInsert.Count == 0) return;
 
@@ -375,11 +370,11 @@ namespace RecoTool.Services.Ambre
 
                     // PERF: Create a single prepared command and reuse it for all inserts
                     // (avoids 20k+ OleDbCommand allocations + parameter setup)
-                    using (var cmd = new OleDbCommand(@"INSERT INTO [T_Reconciliation] (
-                        [ID],[DWINGS_GuaranteeID],[DWINGS_InvoiceID],[DWINGS_BGPMT],
-                        [Action],[ActionStatus],[ActionDate],[Comments],[InternalInvoiceReference],[FirstClaimDate],[LastClaimDate],
-                        [ToRemind],[ToRemindDate],[ACK],[SwiftCode],[PaymentReference],[MbawData],[SpiritData],[KPI],
-                        [IncidentType],[RiskyItem],[ReasonNonRisky],[CreationDate],[ModifiedBy],[LastModified]
+                    using (var cmd = new OleDbCommand($@"INSERT INTO [{Schema.Tables.T_Reconciliation}] (
+                        [{Schema.Columns.Reconciliation.ID}],[{Schema.Columns.Reconciliation.DWINGS_GuaranteeID}],[{Schema.Columns.Reconciliation.DWINGS_InvoiceID}],[{Schema.Columns.Reconciliation.DWINGS_BGPMT}],
+                        [{Schema.Columns.Reconciliation.Action}],[{Schema.Columns.Reconciliation.ActionStatus}],[{Schema.Columns.Reconciliation.ActionDate}],[{Schema.Columns.Reconciliation.Comments}],[{Schema.Columns.Reconciliation.InternalInvoiceReference}],[{Schema.Columns.Reconciliation.FirstClaimDate}],[{Schema.Columns.Reconciliation.LastClaimDate}],
+                        [{Schema.Columns.Reconciliation.ToRemind}],[{Schema.Columns.Reconciliation.ToRemindDate}],[{Schema.Columns.Reconciliation.ACK}],[{Schema.Columns.Reconciliation.SwiftCode}],[{Schema.Columns.Reconciliation.PaymentReference}],[{Schema.Columns.Reconciliation.MbawData}],[{Schema.Columns.Reconciliation.SpiritData}],[{Schema.Columns.Reconciliation.KPI}],
+                        [{Schema.Columns.Reconciliation.IncidentType}],[{Schema.Columns.Reconciliation.RiskyItem}],[{Schema.Columns.Reconciliation.ReasonNonRisky}],[{Schema.Columns.Reconciliation.CreationDate}],[{Schema.Columns.Reconciliation.ModifiedBy}],[{Schema.Columns.Reconciliation.LastModified}]
                     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", conn, tx))
                     {
                         // Pre-create parameters once with explicit types
@@ -457,10 +452,10 @@ namespace RecoTool.Services.Ambre
                             
                             cmd.Parameters["@ModifiedBy"].Value = (object)rec.ModifiedBy ?? DBNull.Value;
                             
-                            cmd.Parameters["@LastModified"].Value = 
+                            cmd.Parameters["@LastModified"].Value =
                                 rec.LastModified.HasValue ? (object)rec.LastModified.Value : DBNull.Value;
 
-                            insertedCount += await cmd.ExecuteNonQueryAsync();
+                            insertedCount += cmd.ExecuteNonQuery();
                         }
                     }
 
@@ -475,10 +470,10 @@ namespace RecoTool.Services.Ambre
             }
         }
 
-        private async Task<HashSet<string>> GetExistingIdsAsync(OleDbConnection conn, List<string> ids)
+        private HashSet<string> GetExistingIds(OleDbConnection conn, List<string> ids)
         {
             var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            
+
             if (!ids.Any()) return existing;
 
             const int chunkSize = 500;
@@ -486,16 +481,16 @@ namespace RecoTool.Services.Ambre
             {
                 var chunk = ids.Skip(i).Take(chunkSize).ToList();
                 var placeholders = string.Join(",", Enumerable.Repeat("?", chunk.Count));
-                
+
                 using (var cmd = new OleDbCommand(
-                    $"SELECT [ID] FROM [T_Reconciliation] WHERE [ID] IN ({placeholders})", conn))
+                    $"SELECT [{Schema.Columns.Reconciliation.ID}] FROM [{Schema.Tables.T_Reconciliation}] WHERE [{Schema.Columns.Reconciliation.ID}] IN ({placeholders})", conn))
                 {
                     foreach (var id in chunk)
                         cmd.Parameters.AddWithValue("@ID", id);
-                        
-                    using (var reader = await cmd.ExecuteReaderAsync())
+
+                    using (var reader = cmd.ExecuteReader())
                     {
-                        while (await reader.ReadAsync())
+                        while (reader.Read())
                         {
                             var id = reader[0]?.ToString();
                             if (!string.IsNullOrWhiteSpace(id))
@@ -504,7 +499,7 @@ namespace RecoTool.Services.Ambre
                     }
                 }
             }
-            
+
             return existing;
         }
     }

@@ -74,19 +74,12 @@ namespace RecoTool.Services.Ambre
             var errors = new List<string>();
             var validData = new List<DataAmbre>();
 
-            foreach (var item in data)
-            {
-                var itemErrors = ValidateDataCoherence(item, country);
-                if (itemErrors.Any())
-                {
-                    errors.AddRange(itemErrors.Select(e => $"Line {item.Event_Num}: {e}"));
-                }
-                else
-                {
-                    validData.Add(item);
-                }
-            }
-
+            // Coherence validation is intentionally a no-op here — see
+            // AmbreImportValidatorTests.ValidateTransformedData_AllValid_ReturnsAllInValidList
+            // for the contract. If you need to reject malformed rows (zero amounts,
+            // wrong account for country, etc.), call ValidationHelper.ValidateDataCoherence
+            // per item and route failures into `errors` below.
+            validData.AddRange(data);
             return (errors, validData);
         }
 
@@ -123,54 +116,6 @@ namespace RecoTool.Services.Ambre
                 return false;
 
             return accounts.Any(a => string.Equals(a, expectedAccount, StringComparison.OrdinalIgnoreCase));
-        }
-
-        private List<string> ValidateDataCoherence(DataAmbre item, Country country)
-        {
-            var errors = new List<string>();
-
-            //// Validation des champs obligatoires
-            //if (string.IsNullOrWhiteSpace(item.Account_ID))
-            //    errors.Add("Account_ID is required");
-
-            //if (string.IsNullOrWhiteSpace(item.Event_Num))
-            //    errors.Add("Event_Num is required");
-
-            ////if (!item.Operation_Date.HasValue && !item.Value_Date.HasValue)
-            ////    errors.Add("At least one date (Operation_Date or Value_Date) is required");
-
-            //// Validation de cohérence des montants
-            //if (item.SignedAmount == 0 && item.LocalSignedAmount == 0)
-            //    errors.Add("Amount cannot be zero");
-
-            //// Validation du compte par rapport au pays
-            //if (!IsValidAccountForCountry(item.Account_ID, country))
-            //    errors.Add($"Account {item.Account_ID} is not valid for country {country?.CNT_Id}");
-
-            //// Validation des dates
-            //if (item.Operation_Date.HasValue && item.Value_Date.HasValue)
-            //{
-            //    if (item.Value_Date.Value < item.Operation_Date.Value.AddDays(-30))
-            //        errors.Add("Value date is too far before operation date");
-            //}
-
-            return errors;
-        }
-
-        private bool IsValidAccountForCountry(string accountId, Country country)
-        {
-            if (country == null || string.IsNullOrWhiteSpace(accountId))
-                return false;
-
-            var account = accountId.Trim();
-            var pivot = country.CNT_AmbrePivot?.Trim();
-            var receivable = country.CNT_AmbreReceivable?.Trim();
-
-            return (!string.IsNullOrWhiteSpace(pivot) && 
-                    string.Equals(account, pivot, StringComparison.OrdinalIgnoreCase))
-                   ||
-                   (!string.IsNullOrWhiteSpace(receivable) && 
-                    string.Equals(account, receivable, StringComparison.OrdinalIgnoreCase));
         }
     }
 }

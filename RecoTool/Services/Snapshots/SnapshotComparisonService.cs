@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using OfflineFirstAccess.Helpers;
+using RecoTool.Infrastructure;
 using RecoTool.Services.DTOs;
 // ViewDataEnricher exposes the UserField/Assignee name caches we reuse to render
 // raw FK ids as semantic labels inside diff tooltips.
@@ -56,12 +57,13 @@ namespace RecoTool.Services.Snapshots
         // on every mutation and would swamp the diff with pure noise.
         private static readonly string[] ReconciliationDiffColumns = new[]
         {
-            "DWINGS_GuaranteeID", "DWINGS_InvoiceID", "DWINGS_BGPMT",
-            "Action", "Assignee", "Comments", "InternalInvoiceReference",
-            "FirstClaimDate", "LastClaimDate", "ToRemind", "ToRemindDate",
-            "ACK", "SwiftCode", "PaymentReference", "MbawData", "SpiritData",
-            "KPI", "IncidentType", "RiskyItem", "ReasonNonRisky",
-            "IncNumber", "TriggerDate", "ActionStatus", "ActionDate",
+            Schema.Columns.Reconciliation.DWINGS_GuaranteeID, Schema.Columns.Reconciliation.DWINGS_InvoiceID, Schema.Columns.Reconciliation.DWINGS_BGPMT,
+            Schema.Columns.Reconciliation.Action, Schema.Columns.Reconciliation.Assignee, Schema.Columns.Reconciliation.Comments, Schema.Columns.Reconciliation.InternalInvoiceReference,
+            Schema.Columns.Reconciliation.FirstClaimDate, Schema.Columns.Reconciliation.LastClaimDate, Schema.Columns.Reconciliation.ToRemind, Schema.Columns.Reconciliation.ToRemindDate,
+            Schema.Columns.Reconciliation.ACK, Schema.Columns.Reconciliation.SwiftCode, Schema.Columns.Reconciliation.PaymentReference, Schema.Columns.Reconciliation.MbawData, Schema.Columns.Reconciliation.SpiritData,
+            Schema.Columns.Reconciliation.KPI, Schema.Columns.Reconciliation.IncidentType, Schema.Columns.Reconciliation.RiskyItem, Schema.Columns.Reconciliation.ReasonNonRisky,
+            "IncNumber", // TODO: add to Schema.Columns.Reconciliation
+            Schema.Columns.Reconciliation.TriggerDate, Schema.Columns.Reconciliation.ActionStatus, Schema.Columns.Reconciliation.ActionDate,
         };
 
         // DWINGS invoice fields we diff + their grid MappingName. The FieldName stored in the
@@ -69,12 +71,12 @@ namespace RecoTool.Services.Snapshots
         // no translation layer needed downstream.
         private static readonly (string DbColumn, string FieldName)[] DwingsInvoiceDiffFields = new[]
         {
-            ("MT_STATUS",                "I_MT_STATUS"),
-            ("T_INVOICE_STATUS",         "I_T_INVOICE_STATUS"),
-            ("T_PAYMENT_REQUEST_STATUS", "I_T_PAYMENT_REQUEST_STATUS"),
-            ("PAYMENT_METHOD",           "I_PAYMENT_METHOD"),
-            ("ERROR_MESSAGE",            "I_ERROR_MESSAGE"),
-            ("COMM_ID_EMAIL",            "HasEmail"),
+            (Schema.Columns.DwingsData.MT_STATUS,                "I_MT_STATUS"),
+            (Schema.Columns.DwingsData.T_INVOICE_STATUS,         "I_T_INVOICE_STATUS"),
+            (Schema.Columns.DwingsData.T_PAYMENT_REQUEST_STATUS, "I_T_PAYMENT_REQUEST_STATUS"),
+            (Schema.Columns.DwingsData.PAYMENT_METHOD,           "I_PAYMENT_METHOD"),
+            (Schema.Columns.DwingsData.ERROR_MESSAGE,            "I_ERROR_MESSAGE"),
+            ("COMM_ID_EMAIL", "HasEmail"), // TODO: add COMM_ID_EMAIL to Schema.Columns.DwingsData
         };
 
         // DB-column array derived once — the OleDb SELECT list + the Format pass both consume it.
@@ -201,7 +203,7 @@ namespace RecoTool.Services.Snapshots
             // "Next entry"         == latest snapshot vs one before, etc.
             try
             {
-                var currentRow = await LoadSingleRowAsync(liveCs, "T_Reconciliation", ReconciliationDiffColumns, rowId, isConnStr: true).ConfigureAwait(false);
+                var currentRow = await LoadSingleRowAsync(liveCs, Schema.Tables.T_Reconciliation, ReconciliationDiffColumns, rowId, isConnStr: true).ConfigureAwait(false);
 
                 for (int i = 0; i < runs.Count; i++)
                 {
@@ -209,7 +211,7 @@ namespace RecoTool.Services.Snapshots
                     if (snap == null || string.IsNullOrEmpty(snap.RecoPath) || !File.Exists(snap.RecoPath))
                         continue;
 
-                    var snapRow = await LoadSingleRowAsync(snap.RecoPath, "T_Reconciliation", ReconciliationDiffColumns, rowId).ConfigureAwait(false);
+                    var snapRow = await LoadSingleRowAsync(snap.RecoPath, Schema.Tables.T_Reconciliation, ReconciliationDiffColumns, rowId).ConfigureAwait(false);
                     var diffs = BuildFieldDiffs(snapRow, currentRow, rowId, $"Run:{runs[i].ImportRunId}", runs[i].StartedUtc);
                     result.AddRange(diffs);
 
@@ -245,8 +247,8 @@ namespace RecoTool.Services.Snapshots
             var runTs = paths.StartedUtc;
 
             // ── Reconciliation diff ───────────────────────────────────────────────────────────
-            var oldRecoRows = await LoadRowsAsync(paths.RecoPath, "T_Reconciliation", ReconciliationDiffColumns, includeDeleteDate: true).ConfigureAwait(false);
-            var newRecoRows = await LoadRowsAsync(liveRecoCs, "T_Reconciliation", ReconciliationDiffColumns, includeDeleteDate: true, isConnStr: true).ConfigureAwait(false);
+            var oldRecoRows = await LoadRowsAsync(paths.RecoPath, Schema.Tables.T_Reconciliation, ReconciliationDiffColumns, includeDeleteDate: true).ConfigureAwait(false);
+            var newRecoRows = await LoadRowsAsync(liveRecoCs, Schema.Tables.T_Reconciliation, ReconciliationDiffColumns, includeDeleteDate: true, isConnStr: true).ConfigureAwait(false);
 
             // Added since snapshot (row seen in live but not in snapshot, and not archived in live).
             foreach (var kv in newRecoRows)
@@ -339,8 +341,8 @@ namespace RecoTool.Services.Snapshots
                 var row = kv.Value;
                 if (IsDeleted(row)) continue; // archived reco → no UI visibility anyway
 
-                row.TryGetValue("DWINGS_BGPMT", out var bgpmtObj);
-                row.TryGetValue("DWINGS_InvoiceID", out var invObj);
+                row.TryGetValue(Schema.Columns.Reconciliation.DWINGS_BGPMT, out var bgpmtObj);
+                row.TryGetValue(Schema.Columns.Reconciliation.DWINGS_InvoiceID, out var invObj);
                 var bgpmt = Convert.ToString(bgpmtObj, CultureInfo.InvariantCulture);
                 var inv = Convert.ToString(invObj, CultureInfo.InvariantCulture);
 
@@ -412,7 +414,7 @@ namespace RecoTool.Services.Snapshots
             if (!string.IsNullOrEmpty(bgpmt) && recoByBgpmt.TryGetValue(bgpmt, out var byBgpmt))
                 foreach (var id in byBgpmt) if (seen.Add(id)) result.Add(id);
 
-            invoiceRow.TryGetValue("INVOICE_ID", out var invObj);
+            invoiceRow.TryGetValue(Schema.Columns.DwingsData.INVOICE_ID, out var invObj);
             var invId = Convert.ToString(invObj, CultureInfo.InvariantCulture);
             if (!string.IsNullOrEmpty(invId) && recoByInvoice.TryGetValue(invId, out var byInv))
                 foreach (var id in byInv) if (seen.Add(id)) result.Add(id);
@@ -430,14 +432,14 @@ namespace RecoTool.Services.Snapshots
             var result = new Dictionary<string, Dictionary<string, object>>(StringComparer.OrdinalIgnoreCase);
             var cs = $"Provider=Microsoft.ACE.OLEDB.16.0;Data Source={dbPath};Mode=Read";
 
-            var wanted = new List<string> { "BGPMT", "INVOICE_ID" };
+            var wanted = new List<string> { Schema.Columns.DwingsData.BGPMT, Schema.Columns.DwingsData.INVOICE_ID };
             wanted.AddRange(DwingsInvoiceDbColumns);
             var selectList = string.Join(", ", wanted.Select(c => $"[{c}]"));
 
             using (var conn = new OleDbConnection(cs))
             {
                 await conn.OpenAsync().ConfigureAwait(false);
-                using (var cmd = new OleDbCommand($"SELECT {selectList} FROM [T_DW_Data]", conn))
+                using (var cmd = new OleDbCommand($"SELECT {selectList} FROM [{Schema.Tables.T_DW_Data}]", conn))
                 using (var rd = await cmd.ExecuteReaderAsync().ConfigureAwait(false))
                 {
                     var ords = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -446,7 +448,7 @@ namespace RecoTool.Services.Snapshots
                         try { ords[c] = rd.GetOrdinal(c); }
                         catch { /* missing column on older DW schema — skip */ }
                     }
-                    if (!ords.TryGetValue("BGPMT", out var ordBgpmt)) return result;
+                    if (!ords.TryGetValue(Schema.Columns.DwingsData.BGPMT, out var ordBgpmt)) return result;
 
                     while (await rd.ReadAsync().ConfigureAwait(false))
                     {
@@ -474,9 +476,9 @@ namespace RecoTool.Services.Snapshots
             var result = new Dictionary<string, Dictionary<string, object>>(StringComparer.OrdinalIgnoreCase);
             var cs = isConnStr ? source : $"Provider=Microsoft.ACE.OLEDB.16.0;Data Source={source};Mode=Read";
 
-            var cols = new List<string> { "ID" };
+            var cols = new List<string> { Schema.Columns.Reconciliation.ID };
             cols.AddRange(columns);
-            if (includeDeleteDate) cols.Add("DeleteDate");
+            if (includeDeleteDate) cols.Add(Schema.Columns.Reconciliation.DeleteDate);
             var selectList = string.Join(", ", cols.Select(c => $"[{c}]"));
 
             using (var conn = new OleDbConnection(cs))
@@ -485,7 +487,7 @@ namespace RecoTool.Services.Snapshots
                 using (var cmd = new OleDbCommand($"SELECT {selectList} FROM [{tableName}]", conn))
                 using (var rd = await cmd.ExecuteReaderAsync().ConfigureAwait(false))
                 {
-                    int ordId = rd.GetOrdinal("ID");
+                    int ordId = rd.GetOrdinal(Schema.Columns.Reconciliation.ID);
                     var fieldOrdinals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
                     foreach (var c in cols)
                     {
@@ -516,15 +518,15 @@ namespace RecoTool.Services.Snapshots
             string source, string tableName, string[] columns, string rowId, bool isConnStr = false)
         {
             var cs = isConnStr ? source : $"Provider=Microsoft.ACE.OLEDB.16.0;Data Source={source};Mode=Read";
-            var cols = new List<string> { "ID" };
+            var cols = new List<string> { Schema.Columns.Reconciliation.ID };
             cols.AddRange(columns);
-            cols.Add("DeleteDate");
+            cols.Add(Schema.Columns.Reconciliation.DeleteDate);
             var selectList = string.Join(", ", cols.Select(c => $"[{c}]"));
 
             using (var conn = new OleDbConnection(cs))
             {
                 await conn.OpenAsync().ConfigureAwait(false);
-                using (var cmd = new OleDbCommand($"SELECT {selectList} FROM [{tableName}] WHERE [ID]=?", conn))
+                using (var cmd = new OleDbCommand($"SELECT {selectList} FROM [{tableName}] WHERE [{Schema.Columns.Reconciliation.ID}]=?", conn))
                 {
                     cmd.Parameters.Add("@Id", OleDbType.VarWChar, 255).Value = rowId;
                     using (var rd = await cmd.ExecuteReaderAsync().ConfigureAwait(false))
@@ -574,7 +576,7 @@ namespace RecoTool.Services.Snapshots
         private static bool IsDeleted(Dictionary<string, object> row)
         {
             if (row == null) return false;
-            if (!row.TryGetValue("DeleteDate", out var v)) return false;
+            if (!row.TryGetValue(Schema.Columns.Reconciliation.DeleteDate, out var v)) return false;
             return v != null;
         }
 

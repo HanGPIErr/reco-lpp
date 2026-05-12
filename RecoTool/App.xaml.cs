@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using RecoTool.Services;
@@ -10,8 +11,14 @@ using RecoTool.Windows;
 using RecoTool.Services.External;
 using RecoTool.API;
 using System.Globalization;
+using RecoTool.Configuration;
 using RecoTool.Infrastructure.DI;
+using RecoTool.Infrastructure.Health;
+using RecoTool.Infrastructure.Health.Checks;
+using RecoTool.Infrastructure.Logging;
 using RecoTool.Services.Helpers;
+using Microsoft.Extensions.Logging;
+using Serilog;
 
 namespace RecoTool
 {
@@ -91,8 +98,63 @@ namespace RecoTool
 
             var services = new ServiceCollection();
 
+            #region Structured Logging
+            // Serilog → ILoggerFactory bridge. Built BEFORE the rest of ConfigureServices so
+            // every downstream registration can resolve ILogger<T> if needed. The legacy
+            // LogHelper (file-based actions/perf/rules logs) keeps working unchanged and now
+            // also forwards to this pipeline. See Infrastructure/Logging/LoggingSetup.cs.
+            var loggerFactory = LoggingSetup.CreateLoggerFactory();
+            services.AddSingleton<ILoggerFactory>(loggerFactory);
+            services.AddLogging(builder => builder.AddSerilog(dispose: true));
+            #endregion
+
+            // ── Cross-cutting infrastructure (Lot 0) ──
+            services.AddSingleton<RecoTool.Infrastructure.Time.IClock>(RecoTool.Infrastructure.Time.SystemClock.Instance);
+            services.AddSingleton<RecoTool.Infrastructure.IO.IFileSystem>(RecoTool.Infrastructure.IO.SystemFileSystem.Instance);
+
+            // ── UI service (Lot 2) ──
+            services.AddSingleton<RecoTool.Services.UI.IDialogService, RecoTool.Services.UI.WpfDialogService>();
+
+            // ── ViewModels (live VMs only — orphan VMs removed during cleanup) ──
+            services.AddTransient<RecoTool.ViewModels.MainWindowViewModel>();
+            services.AddTransient<RecoTool.ViewModels.HomePageViewModel>();
+            services.AddTransient<RecoTool.ViewModels.ProgressWindowViewModel>();
+            services.AddTransient<RecoTool.ViewModels.ImportAmbreViewModel>();
+            // Register UserFilter / UserTodoList services as interfaces so VMs and
+            // other consumers can be mocked in tests.
+            services.AddTransient<IUserFilterService>(sp =>
+                new UserFilterService(sp.GetRequiredService<OfflineFirstService>().ReferentialConnectionString,
+                    Environment.UserName ?? "Unknown"));
+            services.AddTransient<IUserTodoListService>(sp =>
+                new UserTodoListService(sp.GetRequiredService<OfflineFirstService>().ReferentialConnectionString));
+            services.AddTransient<IUserViewPreferenceService>(sp =>
+                new UserViewPreferenceService(sp.GetRequiredService<OfflineFirstService>().ReferentialConnectionString,
+                    Environment.UserName ?? "Unknown"));
+
+            services.AddTransient<RecoTool.ViewModels.ReconciliationPageViewModel>(sp =>
+                new RecoTool.ViewModels.ReconciliationPageViewModel(
+                    sp.GetRequiredService<OfflineFirstService>(),
+                    sp.GetRequiredService<ReconciliationService>(),
+                    sp.GetRequiredService<IUserFilterService>(),
+                    sp.GetRequiredService<IUserTodoListService>(),
+                    sp.GetRequiredService<RecoTool.Services.UI.IDialogService>(),
+                    sp.GetRequiredService<RecoTool.Infrastructure.Time.IClock>()));
+
+            // Rules-related VMs : IRulesAdmin via TruthTableRepository.
+            services.AddTransient<RecoTool.Services.Rules.IRulesAdmin>(sp =>
+                new RecoTool.Services.Rules.TruthTableRepository(sp.GetRequiredService<OfflineFirstService>()));
+            services.AddTransient<RecoTool.ViewModels.RulesAdminViewModel>();
+
+            // ── Network path provider (used by NetworkShareHealthCheck) ──
+            // Kept after the Sync V2 cleanup because the health check needs it.
+            services.AddSingleton<RecoTool.Services.Sync.INetworkPathProvider>(sp =>
+                new RecoTool.Services.Sync.OfflineFirstNetworkPathProvider(
+                    sp.GetRequiredService<OfflineFirstService>()));
+
             // Notre service offline-first (singleton pour tout l'app)
             services.AddSingleton<OfflineFirstService>();
+            // Expose-le aussi via l'interface pour que les services testables le résolvent
+            services.AddSingleton<IOfflineFirstService>(sp => sp.GetRequiredService<OfflineFirstService>());
 
             // Free API service (singleton): wraps authentication, throttling (max 3), and caching
             // Register concrete instance via factory to force parameterless ctor and avoid circular dependency
@@ -104,6 +166,7 @@ namespace RecoTool
 
             // Services métiers
             services.AddTransient<AmbreImportService>();
+            services.AddTransient<IAmbreImportService>(sp => sp.GetRequiredService<AmbreImportService>());
             services.AddTransient<ReconciliationService>(sp =>
             {
                 var offline = sp.GetRequiredService<OfflineFirstService>();
@@ -111,8 +174,20 @@ namespace RecoTool
                 var connStr = offline.GetCurrentLocalConnectionString();
                 var currentUser = Environment.UserName ?? "Unknown";
                 var countries = offline.Countries;
-                return new ReconciliationService(connStr, currentUser, countries, offline);
+                // Inject IDataAmbreRepository so GetAmbreDataAsync routes through the repository pattern.
+                // Cascades benefit: HomePageViewModel, ReconciliationMatchingService, DashboardExportService
+                // all fall back to ReconciliationService.GetAmbreDataAsync — they now transparently
+                // go through the repo. GetService (not GetRequiredService) keeps the registration
+                // robust if the repo registration is removed later.
+                var ambreRepo = sp.GetService<RecoTool.Domain.Repositories.IDataAmbreRepository>();
+                var clock = sp.GetService<RecoTool.Infrastructure.Time.IClock>();
+                var logger = sp.GetService<Microsoft.Extensions.Logging.ILogger<ReconciliationService>>();
+                return new ReconciliationService(connStr, currentUser, countries, offline, clock, logger, ambreRepo);
             });
+            // Expose ReconciliationService via its interface so VMs and other consumers
+            // (HomePageViewModel, ReconciliationDetailViewModel, etc.) can be mocked in tests.
+            services.AddTransient<IReconciliationService>(sp => sp.GetRequiredService<ReconciliationService>());
+
             // Lookup/Referential/Options services
             services.AddTransient<LookupService>(sp => new LookupService(sp.GetRequiredService<OfflineFirstService>()));
             services.AddTransient<ReferentialService>(sp =>
@@ -126,24 +201,79 @@ namespace RecoTool
                 sp.GetRequiredService<ReferentialService>(),
                 sp.GetRequiredService<LookupService>()));
 
-            // Repositories (transition: wraps existing services)
-            services.AddTransient<IReconciliationRepository, ReconciliationRepository>();
+            #region Repository Pattern (Domain Repos)
+            // Domain repositories for the most-touched Access tables. Concrete OleDb
+            // impls live in RecoTool.Infrastructure.Repositories; in-memory fakes ship
+            // from RecoTool.Tests for consumer unit tests.
+
+            // Per-country Ambre rows. The connection-string factory routes a country id
+            // (e.g. "FR") to the matching .accdb. We resolve OfflineFirstService lazily
+            // because per-country files come and go as the user switches country.
+            services.AddTransient<RecoTool.Domain.Repositories.IDataAmbreRepository>(sp =>
+            {
+                var offline = sp.GetRequiredService<OfflineFirstService>();
+                var logger = sp.GetService<ILogger<RecoTool.Infrastructure.Repositories.DataAmbreRepository>>();
+                return new RecoTool.Infrastructure.Repositories.DataAmbreRepository(
+                    countryId => offline.GetAmbreConnectionString(countryId),
+                    logger);
+            });
+
+            // Referential T_Ref_User_Fields (Actions / KPIs / Incident Types / …).
+            // Connection string is resolved lazily so changes after startup are picked up.
+            services.AddTransient<RecoTool.Domain.Repositories.IUserFieldsRepository>(sp =>
+            {
+                var offline = sp.GetRequiredService<OfflineFirstService>();
+                var logger = sp.GetService<ILogger<RecoTool.Infrastructure.Repositories.UserFieldsRepository>>();
+                return new RecoTool.Infrastructure.Repositories.UserFieldsRepository(
+                    () => offline.ReferentialConnectionString,
+                    logger);
+            });
+            #endregion
 
             // Referential cache service (singleton for app-wide caching)
             services.AddSingleton<ReferentialCacheService>();
 
-            // Fenêtres principales
-            services.AddTransient<MainWindow>();
+            // Fenêtres principales — MVVM ctor explicite (les deux services sont résolus depuis DI)
+            services.AddTransient<MainWindow>(sp => new MainWindow(
+                sp.GetRequiredService<OfflineFirstService>(),
+                sp.GetRequiredService<RecoTool.ViewModels.MainWindowViewModel>()));
             services.AddTransient<ImportAmbreWindow>();
+            // ── Secondary windows (Option B — Wave 2) ──
+            // Register so callers can resolve via App.ServiceProvider.GetRequiredService<>().
+            // MEDI picks the ctor with the most resolvable parameters, which is the
+            // MVVM-aware one for each of these windows.
+            services.AddTransient<HomePage>();
+            services.AddTransient<RulesAdminWindow>();
+            services.AddTransient<RulesHealthWindow>();
+            // RuleDebugWindow has only a parameterless ctor; registering it for
+            // consistency so call sites can use the same DI resolution pattern.
+            services.AddTransient<RuleDebugWindow>();
             services.AddTransient<ReconciliationPage>(sp =>
             {
                 var recoSvc = sp.GetRequiredService<ReconciliationService>();
                 var offline = sp.GetRequiredService<OfflineFirstService>();
-                var repo = sp.GetRequiredService<IReconciliationRepository>();
                 var freeApi = sp.GetRequiredService<FreeApiService>();
-                return new ReconciliationPage(recoSvc, offline, repo, freeApi);
+                return new ReconciliationPage(recoSvc, offline, freeApi);
             });
             services.AddTransient<ReconciliationView>();
+
+            #region Health Checks
+            // Startup probes: surface infrastructure failures BEFORE the user discovers
+            // them via a hidden click path. See Infrastructure/Health/*. Each check is
+            // registered as IStartupHealthCheck so the runner picks them all up via
+            // IEnumerable<IStartupHealthCheck> injection. Concrete classes also stay
+            // resolvable for individual tests/diagnostics.
+            services.AddSingleton<RecoTool.Infrastructure.Health.Checks.LocalDatabaseHealthCheck>();
+            services.AddSingleton<RecoTool.Infrastructure.Health.Checks.NetworkShareHealthCheck>();
+            services.AddSingleton<RecoTool.Infrastructure.Health.Checks.FreeApiHealthCheck>();
+            services.AddSingleton<RecoTool.Infrastructure.Health.IStartupHealthCheck>(sp =>
+                sp.GetRequiredService<RecoTool.Infrastructure.Health.Checks.LocalDatabaseHealthCheck>());
+            services.AddSingleton<RecoTool.Infrastructure.Health.IStartupHealthCheck>(sp =>
+                sp.GetRequiredService<RecoTool.Infrastructure.Health.Checks.NetworkShareHealthCheck>());
+            services.AddSingleton<RecoTool.Infrastructure.Health.IStartupHealthCheck>(sp =>
+                sp.GetRequiredService<RecoTool.Infrastructure.Health.Checks.FreeApiHealthCheck>());
+            services.AddSingleton<RecoTool.Infrastructure.Health.HealthCheckRunner>();
+            #endregion
 
             ServiceProvider = services.BuildServiceProvider();
             ServiceLocator.Initialize(ServiceProvider);
@@ -187,6 +317,28 @@ namespace RecoTool
                 System.Diagnostics.Debug.WriteLine($"[Startup] OfflineFirst initialization warning: {ex.Message}");
             }
 
+            #region Health Checks
+            // Run startup probes after OFS init (so the local DB / network share / Free API
+            // are all in a meaningful state) but BEFORE the main window is shown. The
+            // runner enforces an overall ~10s timeout — even a completely broken
+            // environment cannot block startup longer than that.
+            try
+            {
+                var runner = ServiceProvider.GetRequiredService<HealthCheckRunner>();
+                var results = await runner.RunAllAsync().ConfigureAwait(true);
+                var failures = results.Where(r => !r.Result.IsHealthy).ToList();
+                if (failures.Count > 0)
+                {
+                    ShowHealthDialog(failures);
+                }
+            }
+            catch (Exception exHealth)
+            {
+                // Health infrastructure itself broke — log but never block startup.
+                System.Diagnostics.Debug.WriteLine($"[Startup] Health check infrastructure error: {exHealth.Message}");
+            }
+            #endregion
+
             var main = ServiceProvider.GetRequiredService<MainWindow>();
             main.Show();
 
@@ -204,6 +356,77 @@ namespace RecoTool
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        #region Health Checks
+        /// <summary>
+        /// Surfaces startup health-check failures to the user.
+        ///
+        /// <para>
+        /// Behaviour by environment:
+        /// <list type="bullet">
+        ///   <item><b>UAT</b> (<see cref="FeatureFlags.IsUAT"/> = true): show the detailed
+        ///         <see cref="HealthCheckDialog"/> modally with a Continue / Exit choice.
+        ///         If the user picks Exit, we shut the app down via <see cref="Application.Shutdown()"/>.</item>
+        ///   <item><b>Production</b>: do not block the user with a modal — log every
+        ///         failure, and only fire a brief <see cref="MessageBox"/> for critical
+        ///         failures (local DB unavailable means nothing else will work; we want
+        ///         the user to know before they try anything).</item>
+        /// </list>
+        /// </para>
+        /// </summary>
+        private void ShowHealthDialog(System.Collections.Generic.IList<(string Name, HealthCheckResult Result)> failures)
+        {
+            if (failures == null || failures.Count == 0) return;
+
+            // Always log. The runner already logged each result, but emit one summary
+            // line so a quick log scan shows "N failures at startup".
+            try
+            {
+                var factory = ServiceProvider?.GetService<ILoggerFactory>();
+                var logger = factory?.CreateLogger("RecoTool.App.StartupHealth");
+                logger?.LogWarning("Startup health checks: {Count} failure(s) — {Names}",
+                    failures.Count,
+                    string.Join(", ", failures.Select(f => f.Name)));
+            }
+            catch { /* logging is best-effort during startup */ }
+
+            if (FeatureFlags.IsUAT)
+            {
+                try
+                {
+                    var dialog = new HealthCheckDialog(failures);
+                    var ok = dialog.ShowDialog();
+                    if (ok == false && !dialog.UserChoseContinue)
+                    {
+                        // User explicitly chose Exit — terminate the app cleanly.
+                        Shutdown();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Startup] Could not show health dialog: {ex.Message}");
+                }
+                return;
+            }
+
+            // Production path: show a single MessageBox only when a *critical* check failed
+            // (the local DB — without it the user cannot even list reconciliations).
+            var critical = failures.FirstOrDefault(f =>
+                string.Equals(f.Name, "Local database", StringComparison.OrdinalIgnoreCase));
+            if (critical.Result != null)
+            {
+                try
+                {
+                    MessageBox.Show(
+                        critical.Result.Message,
+                        "RecoTool — startup warning",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }
+                catch { /* MessageBox can fail on headless test runners — ignore */ }
+            }
+        }
+        #endregion
 
         protected override void OnExit(ExitEventArgs e)
         {

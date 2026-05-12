@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Data.OleDb;
 using System.Threading;
 using System.Threading.Tasks;
+using RecoTool.Infrastructure;
+using RecoTool.Infrastructure.DataAccess;
 
 namespace RecoTool.Services
 {
@@ -13,10 +15,10 @@ namespace RecoTool.Services
     /// </summary>
     public class ReferentialService
     {
-        private readonly OfflineFirstService _offlineFirstService;
+        private readonly IOfflineFirstService _offlineFirstService;
         private readonly string _currentUser;
 
-        public ReferentialService(OfflineFirstService offlineFirstService, string currentUser = null)
+        public ReferentialService(IOfflineFirstService offlineFirstService, string currentUser = null)
         {
             _offlineFirstService = offlineFirstService ?? throw new ArgumentNullException(nameof(offlineFirstService));
             _currentUser = currentUser;
@@ -60,37 +62,40 @@ namespace RecoTool.Services
             var (connection, ownsConnection) = await GetConnectionAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                // Ensure current user exists in T_User (USR_ID, USR_Name)
-                try
+                await OleDbAsyncExecutor.RunAsync(c =>
                 {
-                    if (!string.IsNullOrWhiteSpace(_currentUser))
+                    // Ensure current user exists in T_User (USR_ID, USR_Name)
+                    try
                     {
-                        var checkCmd = new OleDbCommand("SELECT COUNT(*) FROM T_User WHERE USR_ID = ?", connection);
-                        checkCmd.Parameters.AddWithValue("@p1", _currentUser);
-                        var obj = await checkCmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-                        var exists = obj != null && int.TryParse(obj.ToString(), out var n) && n > 0;
-                        if (!exists)
+                        if (!string.IsNullOrWhiteSpace(_currentUser))
                         {
-                            var insertCmd = new OleDbCommand("INSERT INTO T_User (USR_ID, USR_Name) VALUES (?, ?)", connection);
-                            insertCmd.Parameters.AddWithValue("@p1", _currentUser);
-                            insertCmd.Parameters.AddWithValue("@p2", _currentUser);
-                            await insertCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                            var checkCmd = new OleDbCommand($"SELECT COUNT(*) FROM {Schema.Tables.T_User} WHERE {Schema.Columns.User.USR_ID} = ?", c);
+                            checkCmd.Parameters.AddWithValue("@p1", _currentUser);
+                            var obj = checkCmd.ExecuteScalar();
+                            var exists = obj != null && int.TryParse(obj.ToString(), out var n) && n > 0;
+                            if (!exists)
+                            {
+                                var insertCmd = new OleDbCommand($"INSERT INTO {Schema.Tables.T_User} ({Schema.Columns.User.USR_ID}, {Schema.Columns.User.USR_Name}) VALUES (?, ?)", c);
+                                insertCmd.Parameters.AddWithValue("@p1", _currentUser);
+                                insertCmd.Parameters.AddWithValue("@p2", _currentUser);
+                                insertCmd.ExecuteNonQuery();
+                            }
                         }
                     }
-                }
-                catch { /* best effort; not critical */ }
+                    catch { /* best effort; not critical */ }
 
-                var cmd = new OleDbCommand("SELECT USR_ID, USR_Name FROM T_User ORDER BY USR_Name", connection);
-                using (var rdr = await cmd.ExecuteReaderAsync().ConfigureAwait(false))
-                {
-                    while (await rdr.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    var cmd = new OleDbCommand($"SELECT {Schema.Columns.User.USR_ID}, {Schema.Columns.User.USR_Name} FROM {Schema.Tables.T_User} ORDER BY {Schema.Columns.User.USR_Name}", c);
+                    using (var rdr = cmd.ExecuteReader())
                     {
-                        var id = rdr.IsDBNull(0) ? null : rdr.GetValue(0)?.ToString();
-                        var name = rdr.IsDBNull(1) ? null : rdr.GetValue(1)?.ToString();
-                        if (!string.IsNullOrWhiteSpace(id))
-                            list.Add((id, name ?? id));
+                        while (rdr.Read())
+                        {
+                            var id = rdr.IsDBNull(0) ? null : rdr.GetValue(0)?.ToString();
+                            var name = rdr.IsDBNull(1) ? null : rdr.GetValue(1)?.ToString();
+                            if (!string.IsNullOrWhiteSpace(id))
+                                list.Add((id, name ?? id));
+                        }
                     }
-                }
+                }, connection, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -110,30 +115,36 @@ namespace RecoTool.Services
             var (connection, ownsConnection) = await GetConnectionAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                // Try common key column names to avoid coupling to a specific schema naming
-                string[] keyColumns = { "Par_Key", "Par_Code", "Par_Name", "PAR_Key", "PAR_Code", "PAR_Name" };
-                foreach (var col in keyColumns)
+                return await OleDbAsyncExecutor.RunAsync(c =>
                 {
-                    try
+                    // Try common key column names to avoid coupling to a specific schema naming.
+                    // Note: only PAR_Key has a Schema.Columns.Param constant; the *_Code / *_Name
+                    // variants are legacy probes that do not appear in Schema and stay as literals.
+                    // TODO: add to Schema.Columns.Param if Par_Code / Par_Name are ever standardized.
+                    string[] keyColumns = { "Par_Key", "Par_Code", "Par_Name", Schema.Columns.Param.PAR_Key, "PAR_Code", "PAR_Name" };
+                    foreach (var col in keyColumns)
                     {
-                        var cmd = new OleDbCommand($"SELECT TOP 1 Par_Value FROM T_param WHERE {col} = ?", connection);
-                        cmd.Parameters.AddWithValue("@p1", paramKey);
-                        cancellationToken.ThrowIfCancellationRequested();
-                        var obj = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-                        if (obj != null && obj != DBNull.Value)
-                            return obj.ToString();
+                        try
+                        {
+                            var cmd = new OleDbCommand($"SELECT TOP 1 {Schema.Columns.Param.PAR_Value} FROM {Schema.Tables.T_Param} WHERE {col} = ?", c);
+                            cmd.Parameters.AddWithValue("@p1", paramKey);
+                            cancellationToken.ThrowIfCancellationRequested();
+                            var obj = cmd.ExecuteScalar();
+                            if (obj != null && obj != DBNull.Value)
+                                return obj.ToString();
+                        }
+                        catch
+                        {
+                            // Ignore and try next column variant
+                        }
                     }
-                    catch
-                    {
-                        // Ignore and try next column variant
-                    }
-                }
+                    return (string)null;
+                }, connection, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
                 if (ownsConnection) connection?.Dispose();
             }
-            return null;
         }
     }
 }

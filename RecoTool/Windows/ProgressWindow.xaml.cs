@@ -11,14 +11,26 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using RecoTool.ViewModels;
 
 namespace RecoTool.Windows
 {
     /// <summary>
-    /// Fenêtre de progression simple
+    /// Fenêtre de progression simple. Supporte deux modes :
+    /// <list type="bullet">
+    ///   <item>Legacy : construit avec un titre string, l'UI est pilotée par les
+    ///         méthodes <c>UpdateProgress</c> qui mettent à jour les éléments
+    ///         nommés directement (compatibilité avec les call sites historiques).</item>
+    ///   <item>MVVM : construit avec un <see cref="ProgressWindowViewModel"/> ;
+    ///         le DataContext est branché et les bindings du XAML pilotent l'UI
+    ///         depuis le VM. Le caller utilise <c>vm.Report(...)</c> et
+    ///         <c>vm.Complete(...)</c>.</item>
+    /// </list>
     /// </summary>
     public partial class ProgressWindow : Window
     {
+        private readonly ProgressWindowViewModel _vm;
+
         public ProgressWindow(string title)
         {
             InitializeComponent();
@@ -28,6 +40,34 @@ namespace RecoTool.Windows
             MainProgressBar.Value = 0;
             StatusMessage.Text = "Preparing...";
             PercentageText.Text = "0%";
+        }
+
+        /// <summary>
+        /// MVVM constructor. The VM drives the UI through the XAML bindings.
+        /// Subscribes to <see cref="ProgressWindowViewModel.CloseRequested"/>
+        /// so the View closes itself when the VM signals completion.
+        /// </summary>
+        public ProgressWindow(ProgressWindowViewModel vm)
+        {
+            _vm = vm ?? throw new ArgumentNullException(nameof(vm));
+            InitializeComponent();
+            DataContext = _vm;
+            Title = _vm.Title;
+            _vm.PropertyChanged += (_, e) =>
+            {
+                // Title is not bound (Window-level property would conflict with the
+                // initial XAML "Title" attribute). Keep it in sync manually.
+                if (e.PropertyName == nameof(ProgressWindowViewModel.Title))
+                    Dispatcher.Invoke(() => Title = _vm.Title);
+            };
+            _vm.CloseRequested += (_, success) =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    try { DialogResult = success; } catch { /* not modal */ }
+                    Close();
+                });
+            };
         }
 
         /// <summary>

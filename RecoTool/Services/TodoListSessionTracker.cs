@@ -5,6 +5,9 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using RecoTool.Configuration;
+using RecoTool.Infrastructure.Time;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace RecoTool.Services
 {
@@ -22,6 +25,8 @@ namespace RecoTool.Services
         private readonly string _currentUserId;
         private readonly string _currentUserName;
         private readonly OfflineFirstService _offlineFirstService;
+        private readonly IClock _clock;
+        private readonly ILogger<TodoListSessionTracker> _logger;
         private readonly Timer _heartbeatTimer;
         private readonly HashSet<int> _trackedTodoIds = new HashSet<int>();
         private readonly object _lock = new object();
@@ -38,8 +43,9 @@ namespace RecoTool.Services
         /// <param name="currentUserId">Windows username</param>
         /// <param name="offlineFirstService">Optional — used to skip heartbeat during imports</param>
         /// <param name="currentUserName">Display name (defaults to userId)</param>
+        /// <param name="clock">Optional clock for testability (defaults to <see cref="SystemClock.Instance"/>)</param>
         public TodoListSessionTracker(string sessionFolderPath, string currentUserId,
-            OfflineFirstService offlineFirstService = null, string currentUserName = null)
+            OfflineFirstService offlineFirstService = null, string currentUserName = null, IClock clock = null, ILogger<TodoListSessionTracker> logger = null)
         {
             if (string.IsNullOrWhiteSpace(sessionFolderPath))
                 throw new ArgumentException("Session folder path is required", nameof(sessionFolderPath));
@@ -50,6 +56,8 @@ namespace RecoTool.Services
             _currentUserId = currentUserId;
             _currentUserName = currentUserName ?? currentUserId;
             _offlineFirstService = offlineFirstService;
+            _clock = clock ?? SystemClock.Instance;
+            _logger = logger ?? NullLogger<TodoListSessionTracker>.Instance;
 
             if (FeatureFlags.ENABLE_MULTI_USER)
             {
@@ -102,12 +110,12 @@ namespace RecoTool.Services
                         // SessionStart is only written on first creation; heartbeat just touches the file
                         if (!File.Exists(filePath))
                         {
-                            File.WriteAllText(filePath, $"{displayName}|{DateTime.UtcNow.Ticks}");
+                            File.WriteAllText(filePath, $"{displayName}|{_clock.UtcNow.Ticks}");
                         }
                         else
                         {
                             // Already registered — just touch it
-                            File.SetLastWriteTimeUtc(filePath, DateTime.UtcNow);
+                            File.SetLastWriteTimeUtc(filePath, _clock.UtcNow);
                         }
                     }
                     catch (Exception ex)
@@ -140,10 +148,14 @@ namespace RecoTool.Services
                 var filePath = GetSessionFilePath(todoId, _currentUserId);
                 await Task.Run(() =>
                 {
-                    try { if (File.Exists(filePath)) File.Delete(filePath); } catch { }
+                    try { if (File.Exists(filePath)) File.Delete(filePath); }
+                    catch (Exception ex) { _logger.LogWarning(ex, "SessionTracker.Unregister: file delete failed for todoId={TodoId}", todoId); }
                 }).ConfigureAwait(false);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "SessionTracker.UnregisterViewingAsync: outer failure for todoId={TodoId}", todoId);
+            }
         }
 
         /// <summary>
@@ -161,9 +173,12 @@ namespace RecoTool.Services
                 {
                     var filePath = GetSessionFilePath(todoId, _currentUserId);
                     if (File.Exists(filePath))
-                        File.SetLastWriteTimeUtc(filePath, DateTime.UtcNow);
+                        File.SetLastWriteTimeUtc(filePath, _clock.UtcNow);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "SessionTracker.TouchSession: failed to touch todoId={TodoId}", todoId);
+                }
             }
         }
 
@@ -185,7 +200,7 @@ namespace RecoTool.Services
                         return sessions;
 
                     var prefix = $"{todoId}_";
-                    var cutoff = DateTime.UtcNow.AddSeconds(-SESSION_TIMEOUT_SECONDS);
+                    var cutoff = _clock.UtcNow.AddSeconds(-SESSION_TIMEOUT_SECONDS);
 
                     foreach (var filePath in Directory.GetFiles(_sessionFolder, $"{prefix}*.session"))
                     {
@@ -259,7 +274,7 @@ namespace RecoTool.Services
                 lock (_lock) { todoIds = _trackedTodoIds.ToArray(); }
                 if (todoIds.Length == 0) return;
 
-                var now = DateTime.UtcNow;
+                var now = _clock.UtcNow;
                 foreach (var todoId in todoIds)
                 {
                     try
@@ -268,10 +283,16 @@ namespace RecoTool.Services
                         if (File.Exists(filePath))
                             File.SetLastWriteTimeUtc(filePath, now);
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "SessionTracker.Heartbeat: failed to touch todoId={TodoId}", todoId);
+                    }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "SessionTracker.HeartbeatCallback: outer failure ({TrackedCount} todos)", _trackedTodoIds?.Count ?? 0);
+            }
             finally
             {
                 Interlocked.Exchange(ref _heartbeatRunning, 0);
@@ -288,6 +309,7 @@ namespace RecoTool.Services
             // NEVER do synchronous file I/O here: Dispose is often called from UI thread
             var folder = _sessionFolder;
             var userId = _currentUserId;
+            var logger = _logger;
             Task.Run(() =>
             {
                 try
@@ -296,11 +318,15 @@ namespace RecoTool.Services
                     {
                         foreach (var file in Directory.GetFiles(folder, $"*_{userId}.session"))
                         {
-                            try { File.Delete(file); } catch { }
+                            try { File.Delete(file); }
+                            catch (Exception ex) { logger.LogDebug(ex, "SessionTracker.Dispose: failed to delete session file {File}", file); }
                         }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "SessionTracker.Dispose: cleanup loop failed in folder {Folder} for user {UserId}", folder, userId);
+                }
             });
         }
 
@@ -329,7 +355,7 @@ namespace RecoTool.Services
                     if (!Directory.Exists(_sessionFolder))
                         return result;
 
-                    var cutoff = DateTime.UtcNow.AddSeconds(-SESSION_TIMEOUT_SECONDS);
+                    var cutoff = _clock.UtcNow.AddSeconds(-SESSION_TIMEOUT_SECONDS);
 
                     // Single directory scan — read ALL .session files once
                     foreach (var filePath in Directory.GetFiles(_sessionFolder, "*.session"))
@@ -483,14 +509,17 @@ namespace RecoTool.Services
     /// </summary>
     public class TodoSessionInfo
     {
+        /// <summary>Clock used for live duration/active computations. Defaults to <see cref="SystemClock.Instance"/>; swappable for tests.</summary>
+        public static IClock Clock { get; set; } = SystemClock.Instance;
+
         public string UserId { get; set; }
         public string UserName { get; set; }
         public DateTime SessionStart { get; set; }
         public DateTime LastHeartbeat { get; set; }
 
-        public TimeSpan Duration => DateTime.Now - LastHeartbeat;
-        public TimeSpan SessionDuration => DateTime.Now - SessionStart;
-        public bool IsActive => (DateTime.Now - LastHeartbeat).TotalSeconds < SESSION_TIMEOUT_SECONDS;
+        public TimeSpan Duration => Clock.Now - LastHeartbeat;
+        public TimeSpan SessionDuration => Clock.Now - SessionStart;
+        public bool IsActive => (Clock.Now - LastHeartbeat).TotalSeconds < SESSION_TIMEOUT_SECONDS;
         private const int SESSION_TIMEOUT_SECONDS = 180;
     }
 }

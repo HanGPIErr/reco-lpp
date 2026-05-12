@@ -3,6 +3,8 @@ using System.Data;
 using System.Data.OleDb;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace RecoTool.Infrastructure.DataAccess
 {
@@ -16,6 +18,9 @@ namespace RecoTool.Infrastructure.DataAccess
     {
         private static ReferentialConnectionPool _instance;
         private static readonly object _instanceLock = new object();
+
+        /// <summary>Logger for diagnostics. Defaults to <see cref="NullLogger.Instance"/>; replace via DI bootstrap.</summary>
+        public static ILogger Logger { get; set; } = NullLogger.Instance;
 
         private readonly string _connectionString;
         private OleDbConnection _connection;
@@ -152,8 +157,10 @@ namespace RecoTool.Infrastructure.DataAccess
 
         private void CloseConnectionInternal()
         {
-            try { _connection?.Close(); } catch { }
-            try { _connection?.Dispose(); } catch { }
+            try { _connection?.Close(); }
+            catch (Exception ex) { Logger.LogWarning(ex, "ReferentialConnectionPool: failed to close OleDbConnection"); }
+            try { _connection?.Dispose(); }
+            catch (Exception ex) { Logger.LogWarning(ex, "ReferentialConnectionPool: failed to dispose OleDbConnection"); }
             _connection = null;
         }
 

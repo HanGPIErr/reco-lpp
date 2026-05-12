@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using RecoTool.Infrastructure.Time;
 using RecoTool.Models;
 using RecoTool.Services.DTOs;
 
@@ -13,14 +14,17 @@ namespace RecoTool.Services.Cache
     /// </summary>
     public class CountryDataCache
     {
+        /// <summary>Clock used for cache freshness checks. Defaults to <see cref="SystemClock.Instance"/>; swappable for tests.</summary>
+        public static IClock Clock { get; set; } = SystemClock.Instance;
+
         private readonly ConcurrentDictionary<string, CountryData> _cache = new ConcurrentDictionary<string, CountryData>();
         private readonly TimeSpan _cacheLifetime;
-        
+
         public CountryDataCache(TimeSpan? cacheLifetime = null)
         {
             _cacheLifetime = cacheLifetime ?? TimeSpan.FromMinutes(30);
         }
-        
+
         /// <summary>
         /// Données cachées par country
         /// </summary>
@@ -29,8 +33,8 @@ namespace RecoTool.Services.Cache
             public string CountryId { get; set; }
             public List<UserField> UserFields { get; set; }
             public DateTime LoadedAt { get; set; }
-            
-            public bool IsStale(TimeSpan lifetime) => DateTime.UtcNow - LoadedAt > lifetime;
+
+            public bool IsStale(TimeSpan lifetime) => CountryDataCache.Clock.UtcNow - LoadedAt > lifetime;
         }
         
         /// <summary>
@@ -61,7 +65,7 @@ namespace RecoTool.Services.Cache
             if (data != null)
             {
                 data.CountryId = countryId;
-                data.LoadedAt = DateTime.UtcNow;
+                data.LoadedAt = Clock.UtcNow;
                 _cache[countryId] = data;
             }
             

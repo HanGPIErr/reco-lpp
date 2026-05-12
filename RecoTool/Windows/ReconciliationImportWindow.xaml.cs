@@ -777,7 +777,7 @@ namespace RecoTool.Windows
             var dropped = beforeCount - toApply.Count;
 
             // Timestamp pour update
-            var now = DateTime.Now;
+            var now = BaseEntity.Clock.Now;
             foreach (var rec in toApply)
                 rec["LastModified"] = now;
 
@@ -839,7 +839,7 @@ namespace RecoTool.Windows
                 if (!Directory.Exists(dir))
                     Directory.CreateDirectory(dir);
 
-                var csvPath = Path.Combine(dir, $"import_unresolved_{DateTime.Now:yyyyMMdd_HHmmss}.csv");
+                var csvPath = Path.Combine(dir, $"import_unresolved_{BaseEntity.Clock.Now:yyyyMMdd_HHmmss}.csv");
                 var sb = new StringBuilder();
                 sb.AppendLine("ExcelID;Comments;FirstClaimDate;LastClaimDate");
 
@@ -1253,7 +1253,7 @@ namespace RecoTool.Windows
         {
             Dispatcher.Invoke(() =>
             {
-                var timestamp = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+                var timestamp = BaseEntity.Clock.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
                 var prefix = isError ? "[ERROR]" : "[INFO]";
                 ImportLogText.Text += $"{timestamp} {prefix} {message}\n";
                 LogScrollViewer.ScrollToEnd();

@@ -1,4 +1,5 @@
-﻿using RecoTool.Utils;
+﻿using RecoTool.Infrastructure.Time;
+using RecoTool.Utils;
 using RecoTool.Services.External;
 using System;
 using System.Collections.Generic;
@@ -103,12 +104,16 @@ namespace RecoTool.API
         private DateTime _authenticatedTime = DateTime.MinValue;   // “never”
         private Task<bool>? _authTask;                           // currently‑running login
         private readonly SemaphoreSlim _authLock = new SemaphoreSlim(1, 1); // SECURE: serialize auth attempts
+        private readonly IClock _clock;
 
         public bool IsAuthenticated => _authenticatedTime != DateTime.MinValue;
 
 
-        public Free()
+        public Free() : this(null) { }
+
+        public Free(IClock clock)
         {
+            _clock = clock ?? SystemClock.Instance;
             _cookieContainer = new CookieContainer();
             _handler = new HttpClientHandler
             {
@@ -205,7 +210,7 @@ namespace RecoTool.API
             try
             {
                 await freeAuth.AuthenticateAsync();   // this method now blocks until the modal dialog finishes
-                _authenticatedTime = DateTime.UtcNow; // success → remember the moment
+                _authenticatedTime = _clock.UtcNow; // success → remember the moment
                 return true;
             }
             catch (Exception ex)
@@ -227,7 +232,7 @@ namespace RecoTool.API
         private bool IsAuthenticationStale()
         {
             if (_authenticatedTime == DateTime.MinValue) return true;
-            return (DateTime.UtcNow - _authenticatedTime).TotalMinutes >= AUTH_VALIDITY_MINUTES;
+            return (_clock.UtcNow - _authenticatedTime).TotalMinutes >= AUTH_VALIDITY_MINUTES;
         }
 
 
@@ -310,7 +315,7 @@ namespace RecoTool.API
             var free = new FreeAuth(_cookieContainer);
             var result = await free.AuthenticateAsync();           // may throw on failure
             if (result)
-                _authenticatedTime = DateTime.UtcNow;    // success → remember time
+                _authenticatedTime = _clock.UtcNow;    // success → remember time
             return result;
         }
 

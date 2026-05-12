@@ -130,6 +130,9 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.Json">
       <Version>9.0.6</Version>
     </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory">
+      <Version>9.0.6</Version>
+    </PackageReference>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection">
       <Version>9.0.6</Version>
     </PackageReference>
@@ -146,6 +149,14 @@
     <PackageReference Include="LiveCharts.Wpf" Version="0.9.7" />
     <PackageReference Include="Syncfusion.SfGrid.WPF" Version="33.1.45" />
     <PackageReference Include="ClosedXML" Version="0.102.3" />
+    <!-- Structured logging (Serilog → ILogger<T>) — see Infrastructure/Logging/LoggingSetup.cs -->
+    <PackageReference Include="Serilog" Version="4.0.1" />
+    <PackageReference Include="Serilog.Extensions.Logging" Version="8.0.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
+    <PackageReference Include="Serilog.Sinks.Async" Version="2.0.0" />
+    <PackageReference Include="Serilog.Settings.Configuration" Version="8.0.4" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.6" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.6" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="API\DWINGS.cs" />
@@ -162,27 +173,40 @@
     <Compile Include="Domain\Filters\FilterPreset.cs" />
     <Compile Include="Domain\Filters\FilterSqlHelper.cs" />
     <Compile Include="Domain\Filters\FilterState.cs" />
-    <Compile Include="Domain\Repositories\IReconciliationRepository.cs" />
+    <Compile Include="Domain\Repositories\IDataAmbreRepository.cs" />
+    <Compile Include="Domain\Repositories\IUserFieldsRepository.cs" />
     <Compile Include="Helpers\DataConversionHelper.cs" />
     <Compile Include="Helpers\DwingsLinkingHelper.cs" />
     <Compile Include="Helpers\MultiUserHelper.cs" />
     <Compile Include="Helpers\ReconciliationViewFocusTracker.cs" />
     <Compile Include="Infrastructure\DataAccess\DbConn.cs" />
+    <Compile Include="Infrastructure\DataAccess\OleDbAsyncExecutor.cs" />
     <Compile Include="Infrastructure\DataAccess\OleDbQueryExecutor.cs" />
     <Compile Include="Infrastructure\DataAccess\OleDbSchemaHelper.cs" />
     <Compile Include="Infrastructure\DataAccess\OleDbUtils.cs" />
     <Compile Include="Infrastructure\DataAccess\ReferentialConnectionPool.cs" />
     <Compile Include="Infrastructure\DI\ServiceLocator.cs" />
+    <Compile Include="Infrastructure\Health\Checks\FreeApiHealthCheck.cs" />
+    <Compile Include="Infrastructure\Health\Checks\LocalDatabaseHealthCheck.cs" />
+    <Compile Include="Infrastructure\Health\Checks\NetworkShareHealthCheck.cs" />
+    <Compile Include="Infrastructure\Health\HealthCheckRunner.cs" />
+    <Compile Include="Infrastructure\Health\IStartupHealthCheck.cs" />
     <Compile Include="Infrastructure\IO\ExcelHelper.cs" />
+    <Compile Include="Infrastructure\IO\IFileSystem.cs" />
+    <Compile Include="Infrastructure\Time\IClock.cs" />
     <Compile Include="Infrastructure\Logging\DiagLog.cs" />
     <Compile Include="Infrastructure\Logging\LogHelper.cs" />
+    <Compile Include="Infrastructure\Logging\LoggingSetup.cs" />
     <Compile Include="Infrastructure\Migrations\ReconciliationSchemaMigrator.cs" />
-    <Compile Include="Infrastructure\Repositories\ReconciliationRepository.cs" />
+    <Compile Include="Infrastructure\Repositories\DataAmbreRepository.cs" />
+    <Compile Include="Infrastructure\Repositories\UserFieldsRepository.cs" />
+    <Compile Include="Infrastructure\Schema.cs" />
     <Compile Include="Models\TodoListItem.cs" />
     <Compile Include="Services\Ambre\AmbreConfigurationLoader.cs" />
     <Compile Include="Services\Ambre\AmbreDatabaseSynchronizer.cs" />
     <Compile Include="Services\Ambre\AmbreDataProcessor.cs" />
     <Compile Include="Services\Ambre\AmbreImportService.cs" />
+    <Compile Include="Services\Ambre\IAmbreImportService.cs" />
     <Compile Include="Services\Ambre\AmbreImportValidator.cs" />
     <Compile Include="Services\Ambre\AmbreReconciliationUpdater.cs" />
     <Compile Include="Services\Ambre\AmbreReconciliationUpdater.Preparation.cs" />
@@ -197,8 +221,14 @@
     <Compile Include="Services\DTOs\DwingsGuaranteeDto.cs" />
     <Compile Include="Services\DTOs\DwingsInvoiceDto.cs" />
     <Compile Include="Services\DTOs\KpiDailySnapshotDto.cs" />
+    <Compile Include="Services\IDwingsService.cs" />
+    <Compile Include="Services\IOfflineFirstService.cs" />
+    <Compile Include="Services\IReconciliationService.cs" />
+    <Compile Include="Services\IUserFilterService.cs" />
+    <Compile Include="Services\IUserTodoListService.cs" />
     <Compile Include="Services\UserTodoListService.cs" />
     <Compile Include="Services\UserViewPreferenceService.cs" />
+    <Compile Include="Services\IUserViewPreferenceService.cs" />
     <Compile Include="Services\ViewDataEnricher.cs" />
     <Compile Include="Services\DwingsService.cs" />
     <Compile Include="Services\Enums\IncidentType.cs" />
@@ -221,23 +251,29 @@
     <Compile Include="Services\Helpers\ValidationHelper.cs" />
     <Compile Include="Services\KpiSnapshotService.cs" />
     <Compile Include="Services\LookupService.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.BatchOps.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.ChangeLog.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.Configuration.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.ConnectionStrings.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.CountryContext.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.Crc.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.Diagnostics.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.Events.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.GlobalLock.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.Referentials.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.IO.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.Locks.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.Maintenance.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.Paths.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.Push.cs" />
+    <Compile Include="Services\OfflineFirst\OfflineFirstService.Replication.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.Schema.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.Snapshots.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.SyncGates.cs" />
     <Compile Include="Services\OfflineFirst\OfflineFirstService.SyncOperations.cs" />
     <Compile Include="Services\OptionsService.cs" />
+    <Compile Include="Services\ParameterService.cs" />
     <Compile Include="Services\Policies\ISyncPolicy.cs" />
     <Compile Include="Services\Policies\SyncPolicy.cs" />
     <Compile Include="Services\Queries\ReconciliationViewQueryBuilder.cs" />
@@ -282,6 +318,9 @@
     <Compile Include="Windows\CommentsDialog.xaml.cs">
       <DependentUpon>CommentsDialog.xaml</DependentUpon>
     </Compile>
+    <Compile Include="Windows\HealthCheckDialog.xaml.cs">
+      <DependentUpon>HealthCheckDialog.xaml</DependentUpon>
+    </Compile>
     <Compile Include="Windows\DwingsButtonsWindow.xaml.cs">
       <DependentUpon>DwingsButtonsWindow.xaml</DependentUpon>
     </Compile>
@@ -307,7 +346,21 @@
     <Compile Include="Services\Enums\KPIType.cs" />
     <Compile Include="Services\LinkingBasket.cs" />
     <Compile Include="Services\Sync\BackgroundSyncEngine.cs" />
+    <Compile Include="Services\Sync\INetworkPathProvider.cs" />
+    <Compile Include="Services\Sync\OfflineFirstNetworkPathProvider.cs" />
     <Compile Include="Services\Sync\PresenceFile.cs" />
+    <Compile Include="Services\UI\IDialogService.cs" />
+    <Compile Include="Services\UI\WpfDialogService.cs" />
+    <Compile Include="ViewModels\HomePageViewModel.cs" />
+    <Compile Include="ViewModels\ImportAmbreViewModel.cs" />
+    <Compile Include="ViewModels\MainWindowViewModel.cs" />
+    <Compile Include="ViewModels\ProgressWindowViewModel.cs" />
+    <Compile Include="ViewModels\ReconciliationDetailViewModel.cs" />
+    <Compile Include="ViewModels\ReconciliationPageViewModel.cs" />
+    <Compile Include="ViewModels\RelayCommand.cs" />
+    <Compile Include="ViewModels\RuleEditorViewModel.cs" />
+    <Compile Include="ViewModels\RulesAdminViewModel.cs" />
+    <Compile Include="ViewModels\ViewModelBase.cs" />
     <Compile Include="Services\ReconciliationMatchingService.cs" />
     <Compile Include="Services\ReconciliationService.cs" />
     <Compile Include="Services\ReconciliationService.AmbreSim.cs" />
@@ -391,6 +444,10 @@
       <Generator>MSBuild:Compile</Generator>
     </Page>
     <Page Include="Windows\CommentsDialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Windows\HealthCheckDialog.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
@@ -480,6 +537,7 @@
     </Page>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Properties\Settings.Designer.cs">
       <AutoGen>True</AutoGen>
       <DependentUpon>Settings.settings</DependentUpon>

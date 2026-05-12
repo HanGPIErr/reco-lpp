@@ -17,6 +17,7 @@ using System.Windows.Controls.Primitives;
 using System.Threading;
 using RecoTool.Helpers;
 using RecoTool.Services.External;
+using RecoTool.Infrastructure.Logging;
 
 namespace RecoTool.Windows
 {
@@ -374,34 +375,56 @@ namespace RecoTool.Windows
                 }
             }
             catch { }
-            try
-            {
-                if (_recoRepository == null)
-                {
-                    _recoRepository = RecoTool.App.ServiceProvider?.GetService(typeof(RecoTool.Domain.Repositories.IReconciliationRepository)) as RecoTool.Domain.Repositories.IReconciliationRepository;
-                }
-            }
-            catch { }
             InitializeData();
             Loaded += ReconciliationPage_Loaded;
             Unloaded += ReconciliationPage_Unloaded;
         }
 
-        public ReconciliationPage(ReconciliationService reconciliationService, OfflineFirstService offlineFirstService, IReconciliationRepository recoRepository, FreeApiService freeApi) : this()
+        public ReconciliationPage(ReconciliationService reconciliationService, OfflineFirstService offlineFirstService, FreeApiService freeApi) : this()
         {
             _reconciliationService = reconciliationService;
             _offlineFirstService = offlineFirstService;
-            _recoRepository = recoRepository;
             _freeApi = freeApi;
 
             // Synchroniser avec la country courante du service
             _currentCountryId = _offlineFirstService?.CurrentCountry?.CNT_Id;
             LoadAvailableCountries();
-            
+
             // Initialize TodoList session tracker
             InitializeTodoSessionTracker();
-            
+
             // Le chargement initial est confirmé dans l'événement Loaded pour garantir que le pays a été initialisé
+        }
+
+        private RecoTool.ViewModels.ReconciliationPageViewModel _vm;
+
+        /// <summary>
+        /// MVVM constructor. The VM exposes the SavedFilters/SavedViews/TodoItems
+        /// surface used by the XAML combos, and event-based navigation
+        /// (AddViewRequested, InvoiceFinderRequested). Legacy services
+        /// (_reconciliationService, _offlineFirstService) are populated through
+        /// the chained ctor so the existing code-behind continues to work.
+        /// </summary>
+        public ReconciliationPage(ReconciliationService reconciliationService,
+                                  OfflineFirstService offlineFirstService,
+                                  FreeApiService freeApi,
+                                  RecoTool.ViewModels.ReconciliationPageViewModel vm)
+            : this(reconciliationService, offlineFirstService, freeApi)
+        {
+            _vm = vm ?? throw new ArgumentNullException(nameof(vm));
+            DataContext = _vm;
+            _vm.AddViewRequested += (_, __) => Dispatcher.Invoke(() =>
+            {
+                // The page exposes a button-click handler for "Add View" which we
+                // simply replay so the legacy logic runs identically.
+                try { AddView_Click(this, new RoutedEventArgs()); } catch { }
+            });
+            _vm.InvoiceFinderRequested += (_, __) => Dispatcher.Invoke(() =>
+            {
+                try { OpenInvoiceFinder_Click(this, new RoutedEventArgs()); } catch { }
+            });
+            // Trigger the initial refresh through the VM so SavedFilters/TodoItems load.
+            _ = _vm.RefreshAsync();
         }
 
         // Lock first 4 columns (N, U, M, Account) from being moved (SfDataGrid version)
@@ -1729,7 +1752,7 @@ namespace RecoTool.Windows
                 if (!networkOk) return;
 
                 // Cooldown gate (avoid frequent sync)
-                if (DateTime.UtcNow - _lastAutoSyncUtc <= AutoSyncCooldown) return;
+                if (BaseEntity.Clock.UtcNow - _lastAutoSyncUtc <= AutoSyncCooldown) return;
 
                 // UI in-flight gate: prevent overlapping sync triggers
                 if (System.Threading.Interlocked.CompareExchange(ref _syncInFlightFlag, 1, 0) != 0)
@@ -1739,7 +1762,7 @@ namespace RecoTool.Windows
                 try { if (Dispatcher != null) await Dispatcher.InvokeAsync(() => IsLoading = true); else IsLoading = true; } catch { IsLoading = true; }
                 cancellationToken.ThrowIfCancellationRequested();
                 await _offlineFirstService.SynchronizeAsync(_currentCountryId, cancellationToken);
-                _lastAutoSyncUtc = DateTime.UtcNow;
+                _lastAutoSyncUtc = BaseEntity.Clock.UtcNow;
             }
             catch (Exception ex)
             {
@@ -1916,11 +1939,11 @@ namespace RecoTool.Windows
 
         private async Task AddReconciliationView(bool asPopup = false)
         {
-            // Try late resolution if the field was not injected (e.g., instantiated via default ctor)
-            var recoSvc = _reconciliationService ?? (RecoTool.App.ServiceProvider?.GetService(typeof(RecoTool.Services.ReconciliationService)) as RecoTool.Services.ReconciliationService);
-            var repo = _recoRepository; // may be null
+            // Service locator removal: _reconciliationService is hydrated ONCE in the
+            // parameterless ctor (legacy/designer fallback path). No need to re-resolve here.
+            var recoSvc = _reconciliationService;
 
-            if (recoSvc == null && repo == null)
+            if (recoSvc == null)
             {
                 ShowWarning("Reconciliation service is not available.");
                 return;
@@ -2068,7 +2091,6 @@ namespace RecoTool.Windows
         /// Configure la vue (pays, filtres, layout) et précharge les données à partir du cache ou du service.
         /// Utilisée pour les ouvertures Popup et intégrées afin d'éviter la duplication et garantir le même comportement.
         /// </summary>
-        private readonly IReconciliationRepository _recoRepository;
 
         private async Task ConfigureAndPreloadView(ReconciliationView view)
         {
@@ -2142,9 +2164,10 @@ namespace RecoTool.Windows
             // No synchronization when opening a view: preload from service, then initialize and refresh
             var countryId = _offlineFirstService?.CurrentCountryId ?? _offlineFirstService?.CurrentCountry?.CNT_Id;
             var backendSql = _currentFilter;
-            // Freeze local references for lambda capture (resolve from DI as fallback)
-            var localRepo = _recoRepository ?? (RecoTool.App.ServiceProvider?.GetService(typeof(RecoTool.Domain.Repositories.IReconciliationRepository)) as RecoTool.Domain.Repositories.IReconciliationRepository);
-            var localSvc = _reconciliationService ?? (RecoTool.App.ServiceProvider?.GetService(typeof(RecoTool.Services.ReconciliationService)) as RecoTool.Services.ReconciliationService);
+            // Freeze local references for lambda capture.
+            // Service locator removal: fields are hydrated ONCE in the parameterless ctor,
+            // so we no longer reach into App.ServiceProvider on each handler invocation.
+            var localSvc = _reconciliationService;
             
             // CRITICAL: Ensure DWINGS caches are initialized BEFORE preloading data
             // This prevents race condition where Refresh() is called before caches are ready
@@ -2165,17 +2188,9 @@ namespace RecoTool.Windows
                         // Use service overload to include deleted when needed
                         list = await localSvc.GetReconciliationViewAsync(countryId, backendSql, includeDeleted: true).ConfigureAwait(false);
                     }
-                    else if (localSvc != null)
-                    {
-                        // PERF: prefer the service path so we benefit from _recoViewCache (Lazy<Task>)
-                        // and _recoViewDataCache (materialized list). Going through the repository
-                        // bypasses both caches and forces an OLE DB round-trip on every view open.
-                        list = await localSvc.GetReconciliationViewAsync(countryId, backendSql).ConfigureAwait(false);
-                    }
                     else
                     {
-                        // Fallback only when service is unavailable
-                        list = await localRepo.GetReconciliationViewAsync(countryId, backendSql).ConfigureAwait(false);
+                        list = await localSvc.GetReconciliationViewAsync(countryId, backendSql).ConfigureAwait(false);
                     }
                     await view.Dispatcher.InvokeAsync(() =>
                     {
@@ -2473,7 +2488,7 @@ namespace RecoTool.Windows
                 if (allIds.Count < 2) return;
 
                 // Ask user for a reference name; generate one if left empty
-                var autoRef = $"LINK-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString("N").Substring(0, 6).ToUpper()}";
+                var autoRef = $"LINK-{BaseEntity.Clock.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString("N").Substring(0, 6).ToUpper()}";
                 var groupRef = PromptLinkingReference(autoRef);
                 if (groupRef == null) return; // user cancelled
 
@@ -2482,7 +2497,7 @@ namespace RecoTool.Windows
 
                 int linked = 0;
                 var triggerActionId = (int)ActionType.Trigger;
-                var nowUtc = DateTime.UtcNow;
+                var nowUtc = BaseEntity.Clock.UtcNow;
                 foreach (var id in allIds)
                 {
                     try
@@ -2506,7 +2521,7 @@ namespace RecoTool.Windows
                             reco, "InternalInvoiceReference", "Action", "ActionStatus", "ActionDate");
 
                         reco.ModifiedBy = Environment.UserName;
-                        reco.LastModified = DateTime.Now;
+                        reco.LastModified = BaseEntity.Clock.Now;
                         await recoSvc.SaveReconciliationAsync(reco, applyRulesOnEdit: false);
                         linked++;
                     }
@@ -2697,6 +2712,153 @@ namespace RecoTool.Windows
                 if (found != null) return found;
             }
             return null;
+        }
+
+        /// <summary>
+        /// Closes every open <see cref="ReconciliationView"/> hosted on this page.
+        /// Intended to be called by <c>MainWindow</c> just BEFORE switching to a new country, so the
+        /// views are torn down while the old country's connection string is still active (avoids
+        /// the closing views trying to read data from the new country).
+        ///
+        /// Behavior:
+        ///   - Cancels any in-flight page-level operation (<see cref="_pageCts"/>).
+        ///   - Removes every container hosted under ViewsPanel and disposes child <see cref="ReconciliationView"/>
+        ///     instances (best-effort: a single failure does not prevent closing the others).
+        ///   - Unhooks <see cref="ReconciliationView.DataChanged"/> handlers by simply dropping the
+        ///     view reference (handlers were created as anonymous lambdas captured by the view itself,
+        ///     so once the view is GC-eligible the closure dies with it). We also clear our own
+        ///     <see cref="_viewTodoIds"/> map and unregister any active TodoList sessions.
+        ///   - Resets the empty-state visuals so the page looks freshly opened.
+        ///   - Safe no-op if no views are open or the page is in designer mode.
+        ///   - Does NOT raise <see cref="DataChanged"/>: this is a teardown, not a data mutation.
+        /// </summary>
+        public void CloseAllReconciliationViews()
+        {
+            int closed = 0;
+            try
+            {
+                // 1) Cancel any in-flight page-level operation (LoadDataAsync, etc.).
+                //    This stops background queries that still target the old country's DB.
+                try { _pageCts?.Cancel(); } catch { }
+
+                // 2) Snapshot the currently open views, then remove them one-by-one.
+                var views = GetAllOpenViews();
+                var panel = FindName("ViewsPanel") as StackPanel;
+
+                // Unregister TodoList sessions for tracked views (best-effort, fire-and-forget).
+                // Snapshot the map to avoid mutation while iterating, and clear it eagerly so that
+                // any CloseRequested handlers that race against us see a coherent state.
+                Dictionary<ReconciliationView, int> trackedTodos = null;
+                try
+                {
+                    trackedTodos = new Dictionary<ReconciliationView, int>(_viewTodoIds);
+                    _viewTodoIds.Clear();
+                }
+                catch { }
+                if (trackedTodos != null && _todoSessionTracker != null)
+                {
+                    foreach (var kvp in trackedTodos)
+                    {
+                        try
+                        {
+                            int todoId = kvp.Value;
+                            if (todoId > 0)
+                            {
+                                // Fire-and-forget unregister; failure here is non-fatal.
+                                _ = _todoSessionTracker.UnregisterViewingAsync(todoId);
+                            }
+                        }
+                        catch { }
+                    }
+                }
+
+                // 3) Remove each view's container from the panel. Each container was created by
+                //    CreateResizableContainer(view), so the view's parent chain is: view -> Grid -> StackPanel.
+                //    We walk up to the direct child of the panel (the container Grid) and remove it.
+                if (panel != null)
+                {
+                    foreach (var view in views)
+                    {
+                        try
+                        {
+                            // Find the direct child of ViewsPanel that contains this view.
+                            DependencyObject node = view;
+                            FrameworkElement container = null;
+                            while (node != null)
+                            {
+                                var parent = System.Windows.Media.VisualTreeHelper.GetParent(node) as FrameworkElement;
+                                if (parent == panel) { container = node as FrameworkElement; break; }
+                                node = parent;
+                            }
+                            if (container != null && panel.Children.Contains(container))
+                            {
+                                panel.Children.Remove(container);
+                                closed++;
+                            }
+                            else
+                            {
+                                // Fallback: the view was added directly (popup case won't hit here because
+                                // popups live in their own Window and aren't on ViewsPanel).
+                                if (panel.Children.Contains(view))
+                                {
+                                    panel.Children.Remove(view);
+                                    closed++;
+                                }
+                            }
+                        }
+                        catch { /* best-effort: keep closing the others */ }
+                    }
+
+                    // 4) Reset empty-state visuals so the page looks freshly opened for the new country.
+                    try
+                    {
+                        if (panel.Children.Count == 0)
+                        {
+                            panel.Visibility = Visibility.Collapsed;
+                            var emptyState = FindName("EmptyStatePanel") as UIElement;
+                            var floatBtn = FindName("FloatingAddButton") as UIElement;
+                            if (emptyState != null) emptyState.Visibility = Visibility.Visible;
+                            if (floatBtn != null) floatBtn.Visibility = Visibility.Collapsed;
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { /* outermost guard: never let teardown break the country switch */ }
+            finally
+            {
+                try { LogHelper.WriteAction("CountrySwitch", $"Closed {closed} reconciliation views for previous country."); }
+                catch { /* logging is best-effort */ }
+            }
+        }
+
+        /// <summary>
+        /// Country-switch hook called by <c>MainWindow.UpdateServicesForCountry</c> after the new
+        /// country's services are ready. The page's <c>_offlineFirstService</c> and <c>_reconciliationService</c>
+        /// fields are readonly, so we do NOT swap the references — instead the page always reads
+        /// the current country from <c>OfflineFirstService.CurrentCountryId</c> (single shared instance).
+        /// Subsequent <see cref="OpenViewForTodoAsync"/> calls therefore naturally pick up the new country.
+        ///
+        /// This method exists to mirror <c>HomePage.UpdateServices(...)</c> for callers that want
+        /// symmetric wiring, and to perform any post-switch refresh of saved filters/views that
+        /// the page may have cached for the previous country.
+        /// </summary>
+        public void UpdateServices(OfflineFirstService offlineFirstService, ReconciliationService reconciliationService)
+        {
+            // _offlineFirstService and _reconciliationService are readonly fields hydrated by the ctor.
+            // The OfflineFirstService instance is shared and already points to the new country at this
+            // point (MainWindow.SetCurrentCountryAsync has already run), so the page automatically
+            // sees the new country on its next data access — no field swap required.
+            //
+            // We do, however, clear the cached filter/view selection so the user re-selects a context
+            // for the new country (Saved Filters / Saved Views are per-user, not per-country, but the
+            // CURRENTLY APPLIED filter name might no longer make sense for the new dataset).
+            try
+            {
+                _currentFilter = null;
+                _currentFilterName = null;
+            }
+            catch { }
         }
 
         #endregion

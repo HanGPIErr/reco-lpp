@@ -9,8 +9,10 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
+using RecoTool.Models;
 using RecoTool.Services;
 using RecoTool.Services.Rules;
+using RecoTool.ViewModels;
 
 namespace RecoTool.Windows
 {
@@ -69,7 +71,7 @@ namespace RecoTool.Windows
             var dlg = new SaveFileDialog
             {
                 Filter = "CSV files (*.csv)|*.csv",
-                FileName = $"rules-coverage-{DateTime.Now:yyyyMMdd-HHmmss}.csv"
+                FileName = $"rules-coverage-{BaseEntity.Clock.Now:yyyyMMdd-HHmmss}.csv"
             };
             if (dlg.ShowDialog(this) != true) return;
             try
@@ -135,7 +137,19 @@ namespace RecoTool.Windows
                     ? _impactDraft
                     : selected;
 
-                var editor = new RuleEditorWindow(seed, _offlineFirstService) { Owner = this };
+                // MVVM call site (Option B): prefer VM ctor when the dialog
+                // service is resolvable. Falls back to legacy ctor otherwise.
+                RuleEditorWindow editor;
+                var dialogSvc = App.ServiceProvider?.GetService(typeof(RecoTool.Services.UI.IDialogService)) as RecoTool.Services.UI.IDialogService;
+                if (_offlineFirstService != null && dialogSvc != null)
+                {
+                    var editorVm = new RuleEditorViewModel(seed, _offlineFirstService, dialogSvc);
+                    editor = new RuleEditorWindow(editorVm) { Owner = this };
+                }
+                else
+                {
+                    editor = new RuleEditorWindow(seed, _offlineFirstService) { Owner = this };
+                }
                 if (editor.ShowDialog() == true && editor.ResultRule != null)
                 {
                     // Keep the draft identity (RuleId) aligned with the selected rule — PreviewImpactAsync
@@ -330,7 +344,7 @@ namespace RecoTool.Windows
                 var dlg = new SaveFileDialog
                 {
                     Filter = "CSV files (*.csv)|*.csv",
-                    FileName = $"rule-proposals-{DateTime.Now:yyyyMMdd-HHmmss}.csv"
+                    FileName = $"rule-proposals-{BaseEntity.Clock.Now:yyyyMMdd-HHmmss}.csv"
                 };
                 if (dlg.ShowDialog(this) != true) return;
 
@@ -494,7 +508,7 @@ namespace RecoTool.Windows
                     if (TryParseInt(p.NewValue, out var ai) && reco.Action != ai) { reco.Action = ai; return true; }
                     break;
                 case "ActionStatus":
-                    if (TryParseBool(p.NewValue, out var asv) && reco.ActionStatus != asv) { reco.ActionStatus = asv; reco.ActionDate = DateTime.Now; return true; }
+                    if (TryParseBool(p.NewValue, out var asv) && reco.ActionStatus != asv) { reco.ActionStatus = asv; reco.ActionDate = BaseEntity.Clock.Now; return true; }
                     break;
                 case "KPI":
                     if (TryParseInt(p.NewValue, out var ki) && reco.KPI != ki) { reco.KPI = ki; return true; }
@@ -711,7 +725,7 @@ namespace RecoTool.Windows
                 {
                     Title = "Export simulation results",
                     Filter = "CSV (*.csv)|*.csv",
-                    FileName = $"ambre_sim_{DateTime.Now:yyyyMMdd_HHmm}.csv",
+                    FileName = $"ambre_sim_{BaseEntity.Clock.Now:yyyyMMdd_HHmm}.csv",
                     RestoreDirectory = true
                 };
                 if (dlg.ShowDialog(this) != true) return;

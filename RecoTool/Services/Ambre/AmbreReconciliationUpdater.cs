@@ -14,6 +14,7 @@ using RecoTool.Services.External;
 using Microsoft.Extensions.DependencyInjection;
 using RecoTool.Services.Helpers;
 using RecoTool.Infrastructure.Logging;
+using RecoTool.Infrastructure.Time;
 using System.Globalization;
 using System.Text;
 using System.Collections.Concurrent;
@@ -39,6 +40,7 @@ namespace RecoTool.Services.Ambre
         private readonly DwingsReferenceResolver _dwingsResolver;
         private readonly RulesEngine _rulesEngine;
         private readonly IFreeApiClient _freeApi;
+        private readonly IClock _clock;
         private TransformationService _transformationService; // Cached per import
 
         // ── PERF: Pre-built O(1) lookup dictionaries (built once per import, avoid O(n) FirstOrDefault per row) ──
@@ -50,7 +52,8 @@ namespace RecoTool.Services.Ambre
             OfflineFirstService offlineFirstService,
             string currentUser,
             ReconciliationService reconciliationService,
-            IFreeApiClient freeApi = null)
+            IFreeApiClient freeApi = null,
+            IClock clock = null)
         {
             _offlineFirstService = offlineFirstService ?? throw new ArgumentNullException(nameof(offlineFirstService));
             _currentUser = currentUser;
@@ -60,6 +63,7 @@ namespace RecoTool.Services.Ambre
             _freeApi = freeApi
                 ?? App.ServiceProvider?.GetService<IFreeApiClient>()
                 ?? new FreeApiService();
+            _clock = clock ?? SystemClock.Instance;
         }
 
         /// <summary>

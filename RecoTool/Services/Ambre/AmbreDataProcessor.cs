@@ -18,11 +18,11 @@ namespace RecoTool.Services.Ambre
     /// </summary>
     public class AmbreDataProcessor
     {
-        private readonly OfflineFirstService _offlineFirstService;
+        private readonly IOfflineFirstService _offlineFirstService;
         private readonly string _currentUser;
         private AmbreConfigurationLoader _configurationLoader;
 
-        public AmbreDataProcessor(OfflineFirstService offlineFirstService, string currentUser)
+        public AmbreDataProcessor(IOfflineFirstService offlineFirstService, string currentUser)
         {
             _offlineFirstService = offlineFirstService ?? throw new ArgumentNullException(nameof(offlineFirstService));
             _currentUser = currentUser;
@@ -42,7 +42,8 @@ namespace RecoTool.Services.Ambre
             bool isMultiFile, 
             Action<string, int> progressCallback)
         {
-            try { await _offlineFirstService.SetSyncStatusAsync("Importing"); } catch { }
+            try { await _offlineFirstService.SetSyncStatusAsync("Importing"); }
+            catch (Exception exStat) { try { LogManager.Debug($"[Import] SetSyncStatusAsync(Importing) best-effort failed: {exStat.Message}"); } catch { } }
             
             var allRaw = new List<Dictionary<string, object>>();
             
@@ -111,11 +112,15 @@ namespace RecoTool.Services.Ambre
         }
 
         /// <summary>
-        /// Filtre les lignes par comptes du pays
+        /// Filtre les lignes par comptes du pays. Quand <paramref name="result"/>
+        /// est fourni, alimente <see cref="ImportResult.SkippedRows"/> +
+        /// <see cref="ImportResult.SkippedRowSamples"/> au lieu de jeter
+        /// silencieusement les rows non-matching.
         /// </summary>
         public List<Dictionary<string, object>> FilterRowsByCountryAccounts(
-            List<Dictionary<string, object>> rawData, 
-            Country country)
+            List<Dictionary<string, object>> rawData,
+            Country country,
+            ImportResult result = null)
         {
             if (country == null)
                 throw new InvalidOperationException("Configuration pays manquante.");
@@ -129,19 +134,47 @@ namespace RecoTool.Services.Ambre
                     $"Aucun compte Pivot/Receivable défini pour le pays {country.CNT_Id}.");
             }
 
-            return rawData.Where(row =>
+            const int MaxSamples = 20;
+            var kept = new List<Dictionary<string, object>>(rawData.Count);
+            int skipped = 0;
+
+            foreach (var row in rawData)
             {
-                if (!row.TryGetValue("Account_ID", out var val) || val == null)
-                    return false;
-                    
-                var accountId = val.ToString()?.Trim();
-                if (string.IsNullOrWhiteSpace(accountId)) 
-                    return false;
+                string accountId = null;
+                if (row.TryGetValue("Account_ID", out var val) && val != null)
+                    accountId = val.ToString()?.Trim();
 
                 row.TryGetValue("Entity_ID", out var entityId);
+                var entityStr = entityId?.ToString();
+                var pivotEntity = country.CNT_AmbrePivotCountryId.ToString();
+                var receivableEntity = country.CNT_AmbreReceivableCountryId.ToString();
 
-                return IsMatchingAccount(accountId, pivot, recv) && (entityId.ToString() == country.CNT_AmbreReceivableCountryId.ToString() || entityId.ToString() == country.CNT_AmbrePivotCountryId.ToString());
-            }).ToList();
+                bool accountMatches = !string.IsNullOrWhiteSpace(accountId)
+                                      && IsMatchingAccount(accountId, pivot, recv);
+                bool entityMatches = entityStr == receivableEntity || entityStr == pivotEntity;
+
+                if (accountMatches && entityMatches)
+                {
+                    kept.Add(row);
+                    continue;
+                }
+
+                skipped++;
+                if (result != null && result.SkippedRowSamples.Count < MaxSamples)
+                {
+                    string reason;
+                    if (string.IsNullOrWhiteSpace(accountId))
+                        reason = "missing Account_ID";
+                    else if (!accountMatches)
+                        reason = $"account '{accountId}' doesn't match {country.CNT_Id} Pivot/Receivable";
+                    else
+                        reason = $"entity '{entityStr}' doesn't match {country.CNT_Id} (expected {pivotEntity}/{receivableEntity})";
+                    result.SkippedRowSamples.Add(reason);
+                }
+            }
+
+            if (result != null) result.SkippedRows += skipped;
+            return kept;
         }
 
         private async Task<List<Dictionary<string, object>>> ReadExcelFileAsync(

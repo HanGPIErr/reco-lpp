@@ -8,6 +8,7 @@ using RecoTool.Models;
 using RecoTool.Services.Ambre;
 using RecoTool.Services.DTOs;
 using RecoTool.Services.Rules;
+using Microsoft.Extensions.Logging;
 
 namespace RecoTool.Services
 {
@@ -49,7 +50,7 @@ namespace RecoTool.Services
             progress?.Report(("Loading configuration…", 2));
             var configLoader = new AmbreConfigurationLoader(_offlineFirstService);
             await configLoader.EnsureInitializedAsync().ConfigureAwait(false);
-            var importResultSink = new ImportResult { CountryId = countryId, StartTime = DateTime.UtcNow };
+            var importResultSink = new ImportResult { CountryId = countryId, StartTime = _clock.UtcNow };
             var config = await configLoader.LoadConfigurationsAsync(countryId, importResultSink).ConfigureAwait(false);
             if (config == null || importResultSink.Errors.Any())
                 throw new InvalidOperationException("Cannot load AMBRE configuration: " + string.Join("; ", importResultSink.Errors));
@@ -83,7 +84,7 @@ namespace RecoTool.Services
             if (!string.IsNullOrWhiteSpace(dwingsFilePath))
             {
                 progress?.Report(("Loading DWINGS snapshot…", 52));
-                var (dwInvoices, dwGuarantees) = await DwingsService.LoadFromPathAsync(dwingsFilePath).ConfigureAwait(false);
+                var (dwInvoices, dwGuarantees) = await DwingsService.LoadFromPathAsync(dwingsFilePath, ct).ConfigureAwait(false);
                 dwSnapshot = new DwingsOverride
                 {
                     Invoices = dwInvoices ?? new List<DwingsInvoiceDto>(),
@@ -93,7 +94,7 @@ namespace RecoTool.Services
             else
             {
                 progress?.Report(("Initializing DWINGS caches…", 55));
-                await EnsureDwingsCachesInitializedAsync().ConfigureAwait(false);
+                await EnsureDwingsCachesInitializedAsync(ct).ConfigureAwait(false);
             }
 
             // --- 4) Evaluate rules for every transformed row. ---
@@ -117,7 +118,8 @@ namespace RecoTool.Services
 
                         // Try to read the existing reconciliation (without creating one).
                         Reconciliation reco = null;
-                        try { reco = await GetReconciliationByIdAsync(countryId, amb.ID).ConfigureAwait(false); } catch { }
+                        try { reco = await GetReconciliationByIdAsync(countryId, amb.ID).ConfigureAwait(false); }
+                        catch (Exception ex) { _logger.LogDebug(ex, "AmbreSim: GetReconciliationByIdAsync failed for {RecoId} (country={CountryId})", amb.ID, countryId); }
                         bool existsInDb = reco != null;
                         if (reco == null)
                         {
@@ -188,7 +190,7 @@ namespace RecoTool.Services
         /// on <paramref name="reco"/> if <paramref name="res"/> were applied. Empty string when the
         /// rule would be a no-op (all proposed values equal the current ones).
         /// </summary>
-        private static string BuildSimulationChangeSummary(RuleEvaluationResult res, Reconciliation reco)
+        private string BuildSimulationChangeSummary(RuleEvaluationResult res, Reconciliation reco)
         {
             if (res?.Rule == null || reco == null) return null;
             var parts = new List<string>();
@@ -241,7 +243,10 @@ namespace RecoTool.Services
                     if (reco.ToRemindDate != target)
                         parts.Add($"ToRemindDate: {reco.ToRemindDate?.ToString("yyyy-MM-dd") ?? "—"} → {target:yyyy-MM-dd}");
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "AmbreSim: failed to format ToRemindDate diff for reco {RecoId} (days={Days})", reco?.ID, res.NewToRemindDaysSelf);
+                }
             }
 
             return parts.Count == 0 ? null : string.Join("; ", parts);

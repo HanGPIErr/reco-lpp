@@ -7,6 +7,8 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using RecoTool.Infrastructure.DataAccess;
+using RecoTool.Infrastructure.Time;
 using RecoTool.Services.DTOs;
 
 namespace RecoTool.Services
@@ -19,11 +21,13 @@ namespace RecoTool.Services
     {
         private readonly OfflineFirstService _offlineFirstService;
         private readonly ReconciliationService _reconciliationService;
+        private readonly IClock _clock;
 
-        public KpiSnapshotService(OfflineFirstService offlineFirstService, ReconciliationService reconciliationService)
+        public KpiSnapshotService(OfflineFirstService offlineFirstService, ReconciliationService reconciliationService, IClock clock = null)
         {
             _offlineFirstService = offlineFirstService ?? throw new ArgumentNullException(nameof(offlineFirstService));
             _reconciliationService = reconciliationService ?? throw new ArgumentNullException(nameof(reconciliationService));
+            _clock = clock ?? SystemClock.Instance;
         }
 
         public async Task<List<DateTime>> GetKpiSnapshotDatesAsync(string countryId, CancellationToken cancellationToken = default)
@@ -31,26 +35,26 @@ namespace RecoTool.Services
             var dates = new List<DateTime>();
             if (string.IsNullOrWhiteSpace(countryId)) return dates;
 
-            using (var connection = new OleDbConnection(GetControlConnectionString()))
+            return await OleDbAsyncExecutor.RunWithConnectionAsync(GetControlConnectionString(), connection =>
             {
-                await connection.OpenAsync(cancellationToken);
-                await EnsureKpiDailySnapshotTableAsync(connection, cancellationToken);
-                var cmd = new OleDbCommand("SELECT DISTINCT SnapshotDate FROM KpiDailySnapshot WHERE CountryId = ? ORDER BY SnapshotDate", connection);
-                cmd.Parameters.Add(new OleDbParameter("@p1", OleDbType.VarWChar) { Value = countryId ?? string.Empty });
-                using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
+                EnsureKpiDailySnapshotTable(connection);
+                using (var cmd = new OleDbCommand("SELECT DISTINCT SnapshotDate FROM KpiDailySnapshot WHERE CountryId = ? ORDER BY SnapshotDate", connection))
                 {
-                    while (await reader.ReadAsync(cancellationToken))
+                    cmd.Parameters.Add(new OleDbParameter("@p1", OleDbType.VarWChar) { Value = countryId ?? string.Empty });
+                    using (var reader = cmd.ExecuteReader())
                     {
-                        if (!reader.IsDBNull(0))
+                        while (reader.Read())
                         {
-                            var dt = Convert.ToDateTime(reader.GetValue(0));
-                            dates.Add(dt.Date);
+                            if (!reader.IsDBNull(0))
+                            {
+                                var dt = Convert.ToDateTime(reader.GetValue(0));
+                                dates.Add(dt.Date);
+                            }
                         }
                     }
                 }
-            }
-
-            return dates.Distinct().OrderBy(d => d).ToList();
+                return dates.Distinct().OrderBy(d => d).ToList();
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<bool> SaveDailyKpiSnapshotAsync(DateTime date, string countryId, string sourceVersion = null, CancellationToken cancellationToken = default)
@@ -59,65 +63,71 @@ namespace RecoTool.Services
             return await InsertDailyKpiSnapshotAsync(dto, cancellationToken);
         }
 
-        public async Task<DataTable> GetKpiSnapshotsAsync(DateTime from, DateTime to, string countryId, CancellationToken cancellationToken = default)
+        public Task<DataTable> GetKpiSnapshotsAsync(DateTime from, DateTime to, string countryId, CancellationToken cancellationToken = default)
         {
-            using (var connection = new OleDbConnection(GetControlConnectionString()))
+            return OleDbAsyncExecutor.RunWithConnectionAsync(GetControlConnectionString(), connection =>
             {
-                await connection.OpenAsync(cancellationToken);
-                await EnsureKpiDailySnapshotTableAsync(connection, cancellationToken);
-                var cmd = new OleDbCommand("SELECT * FROM KpiDailySnapshot WHERE CountryId = ? AND SnapshotDate BETWEEN ? AND ? ORDER BY SnapshotDate", connection);
-                cmd.Parameters.Add(new OleDbParameter("@p1", OleDbType.VarWChar) { Value = countryId ?? string.Empty });
-                cmd.Parameters.Add(new OleDbParameter("@p2", OleDbType.Date) { Value = from.Date });
-                cmd.Parameters.Add(new OleDbParameter("@p3", OleDbType.Date) { Value = to.Date });
-                using (var adapter = new OleDbDataAdapter(cmd))
+                EnsureKpiDailySnapshotTable(connection);
+                using (var cmd = new OleDbCommand("SELECT * FROM KpiDailySnapshot WHERE CountryId = ? AND SnapshotDate BETWEEN ? AND ? ORDER BY SnapshotDate", connection))
                 {
-                    var table = new DataTable();
-                    adapter.Fill(table);
-                    return table;
+                    cmd.Parameters.Add(new OleDbParameter("@p1", OleDbType.VarWChar) { Value = countryId ?? string.Empty });
+                    cmd.Parameters.Add(new OleDbParameter("@p2", OleDbType.Date) { Value = from.Date });
+                    cmd.Parameters.Add(new OleDbParameter("@p3", OleDbType.Date) { Value = to.Date });
+                    using (var adapter = new OleDbDataAdapter(cmd))
+                    {
+                        var table = new DataTable();
+                        adapter.Fill(table);
+                        return table;
+                    }
                 }
-            }
+            }, cancellationToken);
         }
 
-        public async Task<DataTable> GetKpiSnapshotAsync(DateTime date, string countryId, CancellationToken cancellationToken = default)
+        public Task<DataTable> GetKpiSnapshotAsync(DateTime date, string countryId, CancellationToken cancellationToken = default)
         {
-            using (var connection = new OleDbConnection(GetControlConnectionString()))
+            return OleDbAsyncExecutor.RunWithConnectionAsync(GetControlConnectionString(), connection =>
             {
-                await connection.OpenAsync(cancellationToken);
-                await EnsureKpiDailySnapshotTableAsync(connection, cancellationToken);
-                var cmd = new OleDbCommand("SELECT TOP 1 * FROM KpiDailySnapshot WHERE SnapshotDate = ? AND CountryId = ? ORDER BY CreatedAtUtc DESC", connection);
-                cmd.Parameters.Add(new OleDbParameter("@p1", OleDbType.Date) { Value = date.Date });
-                cmd.Parameters.Add(new OleDbParameter("@p2", OleDbType.VarWChar) { Value = countryId ?? string.Empty });
-                using (var adapter = new OleDbDataAdapter(cmd))
+                EnsureKpiDailySnapshotTable(connection);
+                using (var cmd = new OleDbCommand("SELECT TOP 1 * FROM KpiDailySnapshot WHERE SnapshotDate = ? AND CountryId = ? ORDER BY CreatedAtUtc DESC", connection))
                 {
-                    var table = new DataTable();
-                    adapter.Fill(table);
-                    return table;
+                    cmd.Parameters.Add(new OleDbParameter("@p1", OleDbType.Date) { Value = date.Date });
+                    cmd.Parameters.Add(new OleDbParameter("@p2", OleDbType.VarWChar) { Value = countryId ?? string.Empty });
+                    using (var adapter = new OleDbDataAdapter(cmd))
+                    {
+                        var table = new DataTable();
+                        adapter.Fill(table);
+                        return table;
+                    }
                 }
-            }
+            }, cancellationToken);
         }
 
         public async Task<bool> FreezeLatestSnapshotAsync(string countryId, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(countryId)) return false;
-            using (var connection = new OleDbConnection(GetControlConnectionString()))
+            return await OleDbAsyncExecutor.RunWithConnectionAsync(GetControlConnectionString(), connection =>
             {
-                await connection.OpenAsync(cancellationToken);
-                await EnsureKpiDailySnapshotTableAsync(connection, cancellationToken);
+                EnsureKpiDailySnapshotTable(connection);
                 // Find latest non-frozen snapshot (CreatedAtUtc DESC)
-                var findCmd = new OleDbCommand(
-                    "SELECT TOP 1 Id FROM KpiDailySnapshot WHERE CountryId = ? AND FrozenAt IS NULL ORDER BY CreatedAtUtc DESC", connection);
-                findCmd.Parameters.AddWithValue("@p1", countryId);
-                var obj = await findCmd.ExecuteScalarAsync(cancellationToken);
-                if (obj == null || obj == DBNull.Value) return false;
-                if (!int.TryParse(Convert.ToString(obj), out var id)) return false;
+                int id;
+                using (var findCmd = new OleDbCommand(
+                    "SELECT TOP 1 Id FROM KpiDailySnapshot WHERE CountryId = ? AND FrozenAt IS NULL ORDER BY CreatedAtUtc DESC", connection))
+                {
+                    findCmd.Parameters.AddWithValue("@p1", countryId);
+                    var obj = findCmd.ExecuteScalar();
+                    if (obj == null || obj == DBNull.Value) return false;
+                    if (!int.TryParse(Convert.ToString(obj), out id)) return false;
+                }
 
-                var upd = new OleDbCommand("UPDATE KpiDailySnapshot SET FrozenAt = ? WHERE Id = ?", connection);
-                var pFrozen = new OleDbParameter("@p1", OleDbType.Date) { Value = DateTime.UtcNow };
-                upd.Parameters.Add(pFrozen);
-                upd.Parameters.AddWithValue("@p2", id);
-                var n = await upd.ExecuteNonQueryAsync(cancellationToken);
-                return n > 0;
-            }
+                using (var upd = new OleDbCommand("UPDATE KpiDailySnapshot SET FrozenAt = ? WHERE Id = ?", connection))
+                {
+                    var pFrozen = new OleDbParameter("@p1", OleDbType.Date) { Value = _clock.UtcNow };
+                    upd.Parameters.Add(pFrozen);
+                    upd.Parameters.AddWithValue("@p2", id);
+                    var n = upd.ExecuteNonQuery();
+                    return n > 0;
+                }
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         private async Task<KpiDailySnapshotDto> BuildKpiDailySnapshotAsync(DateTime date, string countryId, string sourceVersion, CancellationToken ct)
@@ -132,7 +142,7 @@ namespace RecoTool.Services
             {
                 SnapshotDate = date.Date,
                 CountryId = countryId,
-                CreatedAtUtc = DateTime.UtcNow,
+                CreatedAtUtc = _clock.UtcNow,
                 SourceVersion = sourceVersion
             };
 
@@ -215,13 +225,11 @@ namespace RecoTool.Services
             return dto;
         }
 
-        private async Task<bool> InsertDailyKpiSnapshotAsync(KpiDailySnapshotDto dto, CancellationToken cancellationToken)
+        private Task<bool> InsertDailyKpiSnapshotAsync(KpiDailySnapshotDto dto, CancellationToken cancellationToken)
         {
-            using (var connection = new OleDbConnection(GetControlConnectionString()))
+            return OleDbAsyncExecutor.RunWithConnectionAsync(GetControlConnectionString(), connection =>
             {
-                await connection.OpenAsync(cancellationToken);
-
-                await EnsureKpiDailySnapshotTableAsync(connection, cancellationToken);
+                EnsureKpiDailySnapshotTable(connection);
 
                 // Discover existing columns and their data types in KpiDailySnapshot to avoid mismatches and type errors
                 var schema = connection.GetOleDbSchemaTable(OleDbSchemaGuid.Columns, new object[] { null, null, "KpiDailySnapshot", null });
@@ -314,13 +322,13 @@ namespace RecoTool.Services
                         var p = insert.Parameters.Add($"@{u.Name}", u.Type);
                         p.Value = u.Value ?? DBNull.Value;
                     }
-                    var n = await insert.ExecuteNonQueryAsync(cancellationToken);
+                    var n = insert.ExecuteNonQuery();
                     return n > 0;
                 }
-            }
+            }, cancellationToken);
         }
 
-        private async Task EnsureKpiDailySnapshotTableAsync(OleDbConnection connection, CancellationToken ct)
+        private static void EnsureKpiDailySnapshotTable(OleDbConnection connection)
         {
             var tables = connection.GetOleDbSchemaTable(OleDbSchemaGuid.Tables, new object[] { null, null, "KpiDailySnapshot", "TABLE" });
             if (tables != null && tables.Rows.Count > 0) return;
@@ -350,7 +358,7 @@ namespace RecoTool.Services
             )";
             using (var cmd = new OleDbCommand(createSql, connection))
             {
-                await cmd.ExecuteNonQueryAsync();
+                cmd.ExecuteNonQuery();
             }
         }
 

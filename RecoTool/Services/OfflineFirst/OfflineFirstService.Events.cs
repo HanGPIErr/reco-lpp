@@ -20,7 +20,8 @@ namespace RecoTool.Services
             public SyncStateKind State { get; set; }
             public int PendingCount { get; set; }
             public Exception LastError { get; set; }
-            public DateTime TimestampUtc { get; set; } = DateTime.UtcNow;
+            // Always set explicitly by the (only) producer RaiseSyncStateAsync via _clock.UtcNow.
+            public DateTime TimestampUtc { get; set; }
         }
 
         public event EventHandler<SyncStateChangedEventArgs> SyncStateChanged;
@@ -45,7 +46,7 @@ namespace RecoTool.Services
                     State = state,
                     PendingCount = pending,
                     LastError = error,
-                    TimestampUtc = DateTime.UtcNow
+                    TimestampUtc = _clock.UtcNow
                 };
                 SyncStateChanged?.Invoke(this, args);
             }

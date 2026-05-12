@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
+using RecoTool.Models;
 using RecoTool.Services;
 
 namespace RecoTool.Windows
@@ -172,7 +173,7 @@ namespace RecoTool.Windows
                             Visibility = Visibility.Visible;
                         }
 
-                        LastRefreshText = DateTime.Now.ToString("HH:mm");
+                        LastRefreshText = BaseEntity.Clock.Now.ToString("HH:mm");
                     }
                     catch { }
                 }));

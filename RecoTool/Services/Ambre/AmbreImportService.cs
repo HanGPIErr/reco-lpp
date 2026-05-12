@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using OfflineFirstAccess.Helpers;
 using OfflineFirstAccess.Models;
 using RecoTool.Helpers;
+using RecoTool.Infrastructure.Time;
 using RecoTool.Models;
 using RecoTool.Services.DTOs;
 using RecoTool.Services.Ambre;
@@ -16,7 +17,7 @@ namespace RecoTool.Services
     /// <summary>
     /// Service principal d'import des données Ambre avec gestion offline-first
     /// </summary>
-    public class AmbreImportService
+    public class AmbreImportService : IAmbreImportService
     {
         private readonly OfflineFirstService _offlineFirstService;
         private readonly AmbreDataProcessor _dataProcessor;
@@ -24,15 +25,17 @@ namespace RecoTool.Services
         private readonly AmbreDatabaseSynchronizer _databaseSynchronizer;
         private readonly AmbreImportValidator _validator;
         private readonly string _currentUser;
+        private readonly IClock _clock;
 
-        public AmbreImportService(OfflineFirstService offlineFirstService)
+        public AmbreImportService(OfflineFirstService offlineFirstService, IClock clock = null)
         {
             _offlineFirstService = offlineFirstService ?? throw new ArgumentNullException(nameof(offlineFirstService));
             _currentUser = Environment.UserName;
-            
+            _clock = clock ?? SystemClock.Instance;
+
             _dataProcessor = new AmbreDataProcessor(offlineFirstService, _currentUser);
             _configurationLoader = new AmbreConfigurationLoader(offlineFirstService);
-            _databaseSynchronizer = new AmbreDatabaseSynchronizer(offlineFirstService, _currentUser);
+            _databaseSynchronizer = new AmbreDatabaseSynchronizer(offlineFirstService, _currentUser, _clock);
             _validator = new AmbreImportValidator();
 
             // Wire configuration loader so that TransformationService/CodeToCategory are available to the processor
@@ -74,7 +77,7 @@ namespace RecoTool.Services
             bool isMultiFile, 
             Action<string, int> progressCallback)
         {
-            var result = new ImportResult { CountryId = countryId, StartTime = DateTime.UtcNow };
+            var result = new ImportResult { CountryId = countryId, StartTime = _clock.UtcNow };
             var totalTimer = System.Diagnostics.Stopwatch.StartNew();
             LogManager.Info($"[PERF] ===== AMBRE IMPORT STARTED for {countryId} =====");
             
@@ -89,7 +92,7 @@ namespace RecoTool.Services
                         await free.AuthenticateAsync().ConfigureAwait(false);
                     }
                 }
-                catch { }
+                catch (Exception exAuth) { try { LogManager.Debug($"[Import] Free API auth best-effort failed: {exAuth.Message}"); } catch { } }
 
                 // 1. Initialisation et validation
                 var initTimer = System.Diagnostics.Stopwatch.StartNew();
@@ -148,7 +151,8 @@ namespace RecoTool.Services
                         LogManager.Warning($"Schema migration skipped: {schemaEx.Message}");
                     }
 
-                    try { await _offlineFirstService.SetSyncStatusAsync("Processing"); } catch { }
+                    try { await _offlineFirstService.SetSyncStatusAsync("Processing"); }
+                    catch (Exception exStat) { try { LogManager.Debug($"[Import] SetSyncStatusAsync(Processing) best-effort failed: {exStat.Message}"); } catch { } }
 
                     // 5. Lecture et traitement des données
                     var processTimer = System.Diagnostics.Stopwatch.StartNew();
@@ -164,7 +168,8 @@ namespace RecoTool.Services
                     LogManager.Info($"[PERF] Data processing completed: {processedData.Count} records in {processTimer.ElapsedMilliseconds}ms");
 
                     // 6. Synchronisation avec la base de données (local + push to network)
-                    try { await _offlineFirstService.SetSyncStatusAsync("Synchronizing"); } catch { }
+                    try { await _offlineFirstService.SetSyncStatusAsync("Synchronizing"); }
+                    catch (Exception exStat) { try { LogManager.Debug($"[Import] SetSyncStatusAsync(Synchronizing) best-effort failed: {exStat.Message}"); } catch { } }
                     var syncTimer = System.Diagnostics.Stopwatch.StartNew();
                     await _databaseSynchronizer.SynchronizeAsync(
                         processedData, countryId, result, progressCallback);
@@ -181,7 +186,7 @@ namespace RecoTool.Services
                 // No persistent connections to reset — tracker uses fresh connections per operation
                 
                 result.IsSuccess = true;
-                result.EndTime = DateTime.UtcNow;
+                result.EndTime = _clock.UtcNow;
                 totalTimer.Stop();
                 LogManager.Info($"[PERF] ===== AMBRE IMPORT COMPLETED for {countryId} in {totalTimer.ElapsedMilliseconds}ms (total) =====");
                 return result;
@@ -190,7 +195,7 @@ namespace RecoTool.Services
             {
                 totalTimer.Stop();
                 result.Errors.Add($"Error during import: {ex.Message}");
-                result.EndTime = DateTime.UtcNow;
+                result.EndTime = _clock.UtcNow;
                 LogManager.Error($"[PERF] ===== AMBRE IMPORT FAILED for {countryId} after {totalTimer.ElapsedMilliseconds}ms =====", ex);
                 
                 return result;
@@ -235,8 +240,10 @@ namespace RecoTool.Services
             // Derive wait and lease from T_Param if present; defaults: wait=120s, lease=300s
             int waitSec = 120;
             int leaseSec = 300;
-            try { var s = _offlineFirstService.GetParameter("ImportGlobalLockAcquireWaitSeconds"); if (!string.IsNullOrWhiteSpace(s)) int.TryParse(s, out waitSec); } catch { }
-            try { var s = _offlineFirstService.GetParameter("ImportGlobalLockLeaseSeconds"); if (!string.IsNullOrWhiteSpace(s)) int.TryParse(s, out leaseSec); } catch { }
+            try { var s = _offlineFirstService.GetParameter("ImportGlobalLockAcquireWaitSeconds"); if (!string.IsNullOrWhiteSpace(s)) int.TryParse(s, out waitSec); }
+            catch (Exception exP) { try { LogManager.Debug($"[Import] GetParameter(ImportGlobalLockAcquireWaitSeconds) failed, using default {waitSec}s: {exP.Message}"); } catch { } }
+            try { var s = _offlineFirstService.GetParameter("ImportGlobalLockLeaseSeconds"); if (!string.IsNullOrWhiteSpace(s)) int.TryParse(s, out leaseSec); }
+            catch (Exception exP) { try { LogManager.Debug($"[Import] GetParameter(ImportGlobalLockLeaseSeconds) failed, using default {leaseSec}s: {exP.Message}"); } catch { } }
 
             if (waitSec < 30) waitSec = 30; if (waitSec > 600) waitSec = 600;
             if (leaseSec < 120) leaseSec = 120; if (leaseSec > 1800) leaseSec = 1800;
@@ -318,12 +325,21 @@ namespace RecoTool.Services
                 return new List<DataAmbre>();
             }
 
-            // Filtrage par comptes du pays
-            var filtered = _dataProcessor.FilterRowsByCountryAccounts(rawData, config.Country);
+            // Filtrage par comptes du pays — result is enriched with SkippedRows
+            // count + up to ~20 skip reasons so the UI can surface them.
+            var filtered = _dataProcessor.FilterRowsByCountryAccounts(rawData, config.Country, result);
             if (!filtered.Any())
             {
                 result.Errors.Add($"No rows match the country's AMBRE accounts.");
                 return new List<DataAmbre>();
+            }
+            if (result.SkippedRows > 0)
+            {
+                try
+                {
+                    LogManager.Info($"[Import] {result.SkippedRows} row(s) skipped during country-account filtering (country={config.Country?.CNT_Id}).");
+                }
+                catch { }
             }
 
             // Validation des comptes requis
@@ -355,7 +371,7 @@ namespace RecoTool.Services
                 // which is completely redundant since we just published local → network during import.
                 // That call alone can take several minutes for large databases over network.
                 // Instead, just update the sync anchor and invalidate caches.
-                await _offlineFirstService.SetLastSyncAnchorAsync(countryId, DateTime.UtcNow);
+                await _offlineFirstService.SetLastSyncAnchorAsync(countryId, _clock.UtcNow);
                 
                 // Invalidate all caches for this country after AMBRE import
                 // This ensures fresh data is loaded for counts, status, and reconciliation views

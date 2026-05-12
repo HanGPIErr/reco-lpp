@@ -4,6 +4,8 @@ using System.Data;
 using System.Data.OleDb;
 using System.Linq;
 using System.Threading.Tasks;
+using RecoTool.Infrastructure;
+using RecoTool.Infrastructure.DataAccess;
 using RecoTool.Models;
 
 namespace RecoTool.Services
@@ -13,7 +15,7 @@ namespace RecoTool.Services
     /// Uses <see cref="Infrastructure.DataAccess.ReferentialConnectionPool"/> when available
     /// to avoid repeated open/close of DB_Referentiels.
     /// </summary>
-    public sealed class UserTodoListService
+    public sealed class UserTodoListService : IUserTodoListService
     {
         private readonly string _connString;
 
@@ -47,50 +49,53 @@ namespace RecoTool.Services
 
         public async Task<bool> EnsureTableAsync()
         {
-            const string table = "T_Ref_TodoList";
+            const string table = Schema.Tables.T_Ref_TodoList;
             var (conn, ownsConnection) = await GetConnectionAsync().ConfigureAwait(false);
             try
             {
-                try
+                return await OleDbAsyncExecutor.RunAsync(c =>
                 {
-                    var schema = conn.GetOleDbSchemaTable(OleDbSchemaGuid.Tables, new object[] { null, null, table, "TABLE" });
-                    if (schema == null || schema.Rows.Count == 0)
+                    try
                     {
-                        // Create table
-                        var ddl = $@"CREATE TABLE [{table}] (
-TDL_id AUTOINCREMENT PRIMARY KEY,
-TDL_Name TEXT(100),
-TDL_FilterName TEXT(100),
-TDL_ViewName TEXT(100),
-TDL_Account TEXT(50),
-TDL_Order INTEGER,
-TDL_Active YESNO,
-TDL_CountryId TEXT(20)
+                        var schema = c.GetOleDbSchemaTable(OleDbSchemaGuid.Tables, new object[] { null, null, table, "TABLE" });
+                        if (schema == null || schema.Rows.Count == 0)
+                        {
+                            // Create table
+                            var ddl = $@"CREATE TABLE [{table}] (
+{Schema.Columns.TodoList.TDL_id} AUTOINCREMENT PRIMARY KEY,
+{Schema.Columns.TodoList.TDL_Name} TEXT(100),
+{Schema.Columns.TodoList.TDL_FilterName} TEXT(100),
+{Schema.Columns.TodoList.TDL_ViewName} TEXT(100),
+{Schema.Columns.TodoList.TDL_Account} TEXT(50),
+{Schema.Columns.TodoList.TDL_Order} INTEGER,
+{Schema.Columns.TodoList.TDL_Active} YESNO,
+{Schema.Columns.TodoList.TDL_CountryId} TEXT(20)
 )";
-                        using (var cmd = new OleDbCommand(ddl, conn))
-                        {
-                            await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-                        }
-                        try
-                        {
-                            using (var idx = new OleDbCommand($"CREATE UNIQUE INDEX UX_{table}_NameCountry ON [{table}] (TDL_Name, TDL_CountryId)", conn))
+                            using (var cmd = new OleDbCommand(ddl, c))
                             {
-                                await idx.ExecuteNonQueryAsync().ConfigureAwait(false);
+                                cmd.ExecuteNonQuery();
                             }
+                            try
+                            {
+                                using (var idx = new OleDbCommand($"CREATE UNIQUE INDEX UX_{table}_NameCountry ON [{table}] ({Schema.Columns.TodoList.TDL_Name}, {Schema.Columns.TodoList.TDL_CountryId})", c))
+                                {
+                                    idx.ExecuteNonQuery();
+                                }
+                            }
+                            catch { /* best-effort index */ }
+                            return true;
                         }
-                        catch { /* best-effort index */ }
-                        return true;
+                        else
+                        {
+                            EnsureMissingColumns(c, table);
+                            return true;
+                        }
                     }
-                    else
+                    catch
                     {
-                        await EnsureMissingColumnsAsync(conn, table).ConfigureAwait(false);
-                        return true;
+                        return false;
                     }
-                }
-                catch
-                {
-                    return false;
-                }
+                }, conn).ConfigureAwait(false);
             }
             finally
             {
@@ -98,10 +103,10 @@ TDL_CountryId TEXT(20)
             }
         }
 
-        private static async Task EnsureMissingColumnsAsync(OleDbConnection conn, string table)
+        private static void EnsureMissingColumns(OleDbConnection conn, string table)
         {
             var cols = conn.GetOleDbSchemaTable(OleDbSchemaGuid.Columns, new object[] { null, null, table, null });
-            async Task Ensure(string name, string ddl)
+            void Ensure(string name, string ddl)
             {
                 bool exists = cols != null && cols.Rows.Cast<DataRow>().Any(r => string.Equals(Convert.ToString(r["COLUMN_NAME"]), name, StringComparison.OrdinalIgnoreCase));
                 if (!exists)
@@ -110,51 +115,54 @@ TDL_CountryId TEXT(20)
                     {
                         using (var cmd = new OleDbCommand($"ALTER TABLE [{table}] ADD COLUMN [{name}] {ddl}", conn))
                         {
-                            await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                            cmd.ExecuteNonQuery();
                         }
                     }
                     catch { }
                 }
             }
-            await Ensure("TDL_Name", "TEXT(100)");
-            await Ensure("TDL_FilterName", "TEXT(100)");
-            await Ensure("TDL_ViewName", "TEXT(100)");
-            await Ensure("TDL_Account", "TEXT(50)");
-            await Ensure("TDL_Order", "INTEGER");
-            await Ensure("TDL_CountryId", "TEXT(20)"); // Kept for backward compatibility but not used in filters
+            Ensure(Schema.Columns.TodoList.TDL_Name, "TEXT(100)");
+            Ensure(Schema.Columns.TodoList.TDL_FilterName, "TEXT(100)");
+            Ensure(Schema.Columns.TodoList.TDL_ViewName, "TEXT(100)");
+            Ensure(Schema.Columns.TodoList.TDL_Account, "TEXT(50)");
+            Ensure(Schema.Columns.TodoList.TDL_Order, "INTEGER");
+            Ensure(Schema.Columns.TodoList.TDL_CountryId, "TEXT(20)"); // Kept for backward compatibility but not used in filters
         }
 
         public async Task<List<TodoListItem>> ListAsync(string countryId)
         {
-            var list = new List<TodoListItem>();
             var (conn, ownsConnection) = await GetConnectionAsync().ConfigureAwait(false);
             try
             {
-                // No filter on TDL_CountryId: all todos are shared across countries
-                var cmd = new OleDbCommand($"SELECT TDL_id, TDL_Name, TDL_FilterName, TDL_ViewName, TDL_Account, TDL_Order, TDL_Active, TDL_CountryId FROM T_Ref_TodoList WHERE (TDL_Active <> 0 OR TDL_Active IS NULL) ORDER BY TDL_Order, TDL_Name", conn);
-                using (var rdr = await cmd.ExecuteReaderAsync().ConfigureAwait(false))
+                return await OleDbAsyncExecutor.RunAsync(c =>
                 {
-                    while (await rdr.ReadAsync().ConfigureAwait(false))
+                    var list = new List<TodoListItem>();
+                    // No filter on TDL_CountryId: all todos are shared across countries
+                    var cmd = new OleDbCommand($"SELECT {Schema.Columns.TodoList.TDL_id}, {Schema.Columns.TodoList.TDL_Name}, {Schema.Columns.TodoList.TDL_FilterName}, {Schema.Columns.TodoList.TDL_ViewName}, {Schema.Columns.TodoList.TDL_Account}, {Schema.Columns.TodoList.TDL_Order}, {Schema.Columns.TodoList.TDL_Active}, {Schema.Columns.TodoList.TDL_CountryId} FROM {Schema.Tables.T_Ref_TodoList} WHERE ({Schema.Columns.TodoList.TDL_Active} <> 0 OR {Schema.Columns.TodoList.TDL_Active} IS NULL) ORDER BY {Schema.Columns.TodoList.TDL_Order}, {Schema.Columns.TodoList.TDL_Name}", c);
+                    using (var rdr = cmd.ExecuteReader())
                     {
-                        list.Add(new TodoListItem
+                        while (rdr.Read())
                         {
-                            TDL_id = rdr.IsDBNull(0) ? 0 : Convert.ToInt32(rdr.GetValue(0)),
-                            TDL_Name = rdr.IsDBNull(1) ? null : rdr.GetString(1),
-                            TDL_FilterName = rdr.IsDBNull(2) ? null : rdr.GetString(2),
-                            TDL_ViewName = rdr.IsDBNull(3) ? null : rdr.GetString(3),
-                            TDL_Account = rdr.IsDBNull(4) ? null : rdr.GetString(4),
-                            TDL_Order = rdr.IsDBNull(5) ? (int?)null : Convert.ToInt32(rdr.GetValue(5)),
-                            TDL_Active = rdr.IsDBNull(6) ? true : Convert.ToBoolean(rdr.GetValue(6)),
-                            TDL_CountryId = rdr.IsDBNull(7) ? null : rdr.GetString(7)
-                        });
+                            list.Add(new TodoListItem
+                            {
+                                TDL_id = rdr.IsDBNull(0) ? 0 : Convert.ToInt32(rdr.GetValue(0)),
+                                TDL_Name = rdr.IsDBNull(1) ? null : rdr.GetString(1),
+                                TDL_FilterName = rdr.IsDBNull(2) ? null : rdr.GetString(2),
+                                TDL_ViewName = rdr.IsDBNull(3) ? null : rdr.GetString(3),
+                                TDL_Account = rdr.IsDBNull(4) ? null : rdr.GetString(4),
+                                TDL_Order = rdr.IsDBNull(5) ? (int?)null : Convert.ToInt32(rdr.GetValue(5)),
+                                TDL_Active = rdr.IsDBNull(6) ? true : Convert.ToBoolean(rdr.GetValue(6)),
+                                TDL_CountryId = rdr.IsDBNull(7) ? null : rdr.GetString(7)
+                            });
+                        }
                     }
-                }
+                    return list;
+                }, conn).ConfigureAwait(false);
             }
             finally
             {
                 if (ownsConnection) conn?.Dispose();
             }
-            return list;
         }
 
         public async Task<int> UpsertAsync(TodoListItem item)
@@ -163,55 +171,58 @@ TDL_CountryId TEXT(20)
             var (conn, ownsConnection) = await GetConnectionAsync().ConfigureAwait(false);
             try
             {
-                // Check by name only (no country filter)
-                int? existingId = null;
-                using (var check = new OleDbCommand("SELECT TOP 1 TDL_id FROM T_Ref_TodoList WHERE TDL_Name = ?", conn))
+                return await OleDbAsyncExecutor.RunAsync(c =>
                 {
-                    check.Parameters.AddWithValue("@p1", item.TDL_Name);
-                    var obj = await check.ExecuteScalarAsync().ConfigureAwait(false);
-                    if (obj != null && obj != DBNull.Value) existingId = Convert.ToInt32(obj);
-                }
+                    // Check by name only (no country filter)
+                    int? existingId = null;
+                    using (var check = new OleDbCommand($"SELECT TOP 1 {Schema.Columns.TodoList.TDL_id} FROM {Schema.Tables.T_Ref_TodoList} WHERE {Schema.Columns.TodoList.TDL_Name} = ?", c))
+                    {
+                        check.Parameters.AddWithValue("@p1", item.TDL_Name);
+                        var obj = check.ExecuteScalar();
+                        if (obj != null && obj != DBNull.Value) existingId = Convert.ToInt32(obj);
+                    }
 
-                if (existingId.HasValue)
-                {
-                    using (var cmd = new OleDbCommand(@"UPDATE T_Ref_TodoList SET 
-TDL_FilterName = ?, TDL_ViewName = ?, TDL_Account = ?, TDL_Order = ?, TDL_Active = ?, TDL_CountryId = ? 
-WHERE TDL_id = ?", conn))
+                    if (existingId.HasValue)
                     {
-                        cmd.Parameters.AddWithValue("@p1", (object)item.TDL_FilterName ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("@p2", (object)item.TDL_ViewName ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("@p3", (object)item.TDL_Account ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("@p4", (object)(item.TDL_Order.HasValue ? item.TDL_Order.Value : (int?)null) ?? DBNull.Value);
-                        cmd.Parameters.Add("@p5", OleDbType.Boolean).Value = item.TDL_Active;
-                        cmd.Parameters.AddWithValue("@p6", (object)item.TDL_CountryId ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("@p7", existingId.Value);
-                        await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-                        return existingId.Value;
-                    }
-                }
-                else
-                {
-                    using (var cmd = new OleDbCommand(@"INSERT INTO T_Ref_TodoList (TDL_Name, TDL_FilterName, TDL_ViewName, TDL_Account, TDL_Order, TDL_Active, TDL_CountryId) VALUES (?, ?, ?, ?, ?, ?, ?)", conn))
-                    {
-                        cmd.Parameters.AddWithValue("@p1", (object)item.TDL_Name ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("@p2", (object)item.TDL_FilterName ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("@p3", (object)item.TDL_ViewName ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("@p4", (object)item.TDL_Account ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("@p5", (object)(item.TDL_Order.HasValue ? item.TDL_Order.Value : (int?)null) ?? DBNull.Value);
-                        cmd.Parameters.Add("@p6", OleDbType.Boolean).Value = item.TDL_Active;
-                        cmd.Parameters.AddWithValue("@p7", (object)item.TDL_CountryId ?? DBNull.Value);
-                        var n = await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-                        if (n > 0)
+                        using (var cmd = new OleDbCommand($@"UPDATE {Schema.Tables.T_Ref_TodoList} SET
+{Schema.Columns.TodoList.TDL_FilterName} = ?, {Schema.Columns.TodoList.TDL_ViewName} = ?, {Schema.Columns.TodoList.TDL_Account} = ?, {Schema.Columns.TodoList.TDL_Order} = ?, {Schema.Columns.TodoList.TDL_Active} = ?, {Schema.Columns.TodoList.TDL_CountryId} = ?
+WHERE {Schema.Columns.TodoList.TDL_id} = ?", c))
                         {
-                            using (var idCmd = new OleDbCommand("SELECT @@IDENTITY", conn))
-                            {
-                                var obj = await idCmd.ExecuteScalarAsync().ConfigureAwait(false);
-                                return obj == null || obj == DBNull.Value ? 0 : Convert.ToInt32(obj);
-                            }
+                            cmd.Parameters.AddWithValue("@p1", (object)item.TDL_FilterName ?? DBNull.Value);
+                            cmd.Parameters.AddWithValue("@p2", (object)item.TDL_ViewName ?? DBNull.Value);
+                            cmd.Parameters.AddWithValue("@p3", (object)item.TDL_Account ?? DBNull.Value);
+                            cmd.Parameters.AddWithValue("@p4", (object)(item.TDL_Order.HasValue ? item.TDL_Order.Value : (int?)null) ?? DBNull.Value);
+                            cmd.Parameters.Add("@p5", OleDbType.Boolean).Value = item.TDL_Active;
+                            cmd.Parameters.AddWithValue("@p6", (object)item.TDL_CountryId ?? DBNull.Value);
+                            cmd.Parameters.AddWithValue("@p7", existingId.Value);
+                            cmd.ExecuteNonQuery();
+                            return existingId.Value;
                         }
-                        return 0;
                     }
-                }
+                    else
+                    {
+                        using (var cmd = new OleDbCommand($@"INSERT INTO {Schema.Tables.T_Ref_TodoList} ({Schema.Columns.TodoList.TDL_Name}, {Schema.Columns.TodoList.TDL_FilterName}, {Schema.Columns.TodoList.TDL_ViewName}, {Schema.Columns.TodoList.TDL_Account}, {Schema.Columns.TodoList.TDL_Order}, {Schema.Columns.TodoList.TDL_Active}, {Schema.Columns.TodoList.TDL_CountryId}) VALUES (?, ?, ?, ?, ?, ?, ?)", c))
+                        {
+                            cmd.Parameters.AddWithValue("@p1", (object)item.TDL_Name ?? DBNull.Value);
+                            cmd.Parameters.AddWithValue("@p2", (object)item.TDL_FilterName ?? DBNull.Value);
+                            cmd.Parameters.AddWithValue("@p3", (object)item.TDL_ViewName ?? DBNull.Value);
+                            cmd.Parameters.AddWithValue("@p4", (object)item.TDL_Account ?? DBNull.Value);
+                            cmd.Parameters.AddWithValue("@p5", (object)(item.TDL_Order.HasValue ? item.TDL_Order.Value : (int?)null) ?? DBNull.Value);
+                            cmd.Parameters.Add("@p6", OleDbType.Boolean).Value = item.TDL_Active;
+                            cmd.Parameters.AddWithValue("@p7", (object)item.TDL_CountryId ?? DBNull.Value);
+                            var n = cmd.ExecuteNonQuery();
+                            if (n > 0)
+                            {
+                                using (var idCmd = new OleDbCommand("SELECT @@IDENTITY", c))
+                                {
+                                    var obj = idCmd.ExecuteScalar();
+                                    return obj == null || obj == DBNull.Value ? 0 : Convert.ToInt32(obj);
+                                }
+                            }
+                            return 0;
+                        }
+                    }
+                }, conn).ConfigureAwait(false);
             }
             finally
             {
@@ -224,12 +235,15 @@ WHERE TDL_id = ?", conn))
             var (conn, ownsConnection) = await GetConnectionAsync().ConfigureAwait(false);
             try
             {
-                using (var cmd = new OleDbCommand("DELETE FROM T_Ref_TodoList WHERE TDL_id = ?", conn))
+                return await OleDbAsyncExecutor.RunAsync(c =>
                 {
-                    cmd.Parameters.AddWithValue("@p1", id);
-                    var n = await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-                    return n > 0;
-                }
+                    using (var cmd = new OleDbCommand($"DELETE FROM {Schema.Tables.T_Ref_TodoList} WHERE {Schema.Columns.TodoList.TDL_id} = ?", c))
+                    {
+                        cmd.Parameters.AddWithValue("@p1", id);
+                        var n = cmd.ExecuteNonQuery();
+                        return n > 0;
+                    }
+                }, conn).ConfigureAwait(false);
             }
             finally
             {

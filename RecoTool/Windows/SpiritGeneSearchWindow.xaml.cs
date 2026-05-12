@@ -30,8 +30,9 @@ namespace RecoTool.Windows
 
             if (operationDate.HasValue)
             {
-                DateFromPicker.SelectedDate = operationDate.Value.AddDays(-3);
-                DateToPicker.SelectedDate = operationDate.Value.AddDays(3);
+                // Exact date match: both pickers set to the row's operation date.
+                DateFromPicker.SelectedDate = operationDate.Value.Date;
+                DateToPicker.SelectedDate = operationDate.Value.Date;
             }
             else
             {
@@ -257,7 +258,37 @@ namespace RecoTool.Windows
             var sb = new StringBuilder();
             foreach (var f in items)
                 sb.AppendLine($"{f.Label}: {f.Value}");
-            Clipboard.SetText(sb.ToString());
+            TrySetClipboard(sb.ToString());
+            StatusText.Text = "All detail fields copied to clipboard.";
+        }
+
+        /// <summary>
+        /// Copies the value of an individual detail field (Tag = the bound
+        /// <see cref="DetailField"/>) and confirms via the status bar.
+        /// </summary>
+        private void DetailFieldCopy_Click(object sender, RoutedEventArgs e)
+        {
+            if (!(sender is FrameworkElement fe) || !(fe.Tag is DetailField field))
+                return;
+            var value = field.Value ?? string.Empty;
+            TrySetClipboard(value);
+            var preview = value.Length > 60 ? value.Substring(0, 57) + "..." : value;
+            StatusText.Text = $"Copied {field.Label}: {preview}";
+        }
+
+        /// <summary>
+        /// Clipboard.SetText can throw OpenClipboardFailed when another process
+        /// holds the clipboard (e.g. RDP, screen-recorders). One retry covers
+        /// the most common transient case.
+        /// </summary>
+        private static void TrySetClipboard(string text)
+        {
+            try { Clipboard.SetText(text ?? string.Empty); }
+            catch
+            {
+                try { Clipboard.SetDataObject(text ?? string.Empty, copy: true); }
+                catch { /* best-effort */ }
+            }
         }
 
         private static List<DetailField> BuildFields(SpiritGeneTransactionDetailOutput.GDetOpe detail)

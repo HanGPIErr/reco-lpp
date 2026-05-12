@@ -12,6 +12,7 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Threading;
 using System.Windows.Documents;
+using Microsoft.Extensions.DependencyInjection;
 using RecoTool.Models;
 using RecoTool.Services;
 using RecoTool.UI.ViewModels;
@@ -38,8 +39,19 @@ namespace RecoTool.Windows
         private readonly OfflineFirstService _offlineFirstService;
         private TodoListSessionTracker _todoSessionTracker; // Multi-user session tracking
         private int _currentTodoId = 0; // Currently active TodoList ID
-        // MVVM bridge: lightweight ViewModel holder to gradually migrate bindings
-        public ReconciliationViewViewModel VM { get; } = new ReconciliationViewViewModel();
+        // MVVM bridge: lightweight ViewModel holder to gradually migrate bindings.
+        // The setter allows callers to inject a pre-configured VM (e.g. from DI in tests).
+        // Defaults to a fresh instance when not assigned so legacy callers keep working.
+        private ReconciliationViewViewModel _vm = new ReconciliationViewViewModel();
+        public ReconciliationViewViewModel VM
+        {
+            get => _vm;
+            set
+            {
+                _vm = value ?? new ReconciliationViewViewModel();
+                OnPropertyChanged(nameof(VM));
+            }
+        }
         private string _currentCountryId;
         private string _currentView = "Default View";
         private bool _isLoading;
@@ -63,7 +75,12 @@ namespace RecoTool.Windows
         private ObservableCollection<ReconciliationViewData> _viewData;
         private List<ReconciliationViewData> _allViewData; // Toutes les données pour le filtrage
         // Paging / incremental loading
-        private const int InitialPageSize = 500;
+        // PERF: Bumped 500 → 1000. With SfDataGrid's built-in row recycling, the cost of
+        // materializing 1000 rows is dominated by binding setup which is roughly linear in
+        // *visible* rows (typically 25-30), so the page-size choice mostly affects how often
+        // the user has to scroll to trigger the next page. 1000 covers most ToDo views in a
+        // single page → fewer Load More clicks, better perceived completeness.
+        private const int InitialPageSize = 1000;
         private List<ReconciliationViewData> _filteredData; // Données filtrées complètes (pour totaux/scroll)
         private int _loadedCount; // Nombre actuellement affiché dans ViewData
         private bool _isLoadingMore; // Garde-fou
@@ -89,6 +106,9 @@ namespace RecoTool.Windows
 
         private readonly FreeApiService _freeApi;
         private System.Threading.CancellationTokenSource _freeApiCts;
+        // Service locator removal: resolved ONCE in the DI ctor; the SpiritGene context-menu
+        // handler reuses this field rather than reaching into App.ServiceProvider per click.
+        private RecoTool.API.SpiritGene _spiritGene;
 
         // (see further below for filter properties; using ScheduleApplyFiltersDebounced)
 
@@ -325,10 +345,19 @@ namespace RecoTool.Windows
                     AutoApply = true
                 };
 
-                var win = new RuleEditorWindow(seed, _offlineFirstService)
+                // MVVM call site (Option B): prefer the VM ctor when the dialog
+                // service is resolvable. Falls back to legacy ctor otherwise.
+                RuleEditorWindow win;
+                var dialogSvc = App.ServiceProvider?.GetService(typeof(RecoTool.Services.UI.IDialogService)) as RecoTool.Services.UI.IDialogService;
+                if (_offlineFirstService != null && dialogSvc != null)
                 {
-                    Owner = Window.GetWindow(this)
-                };
+                    var editorVm = new RecoTool.ViewModels.RuleEditorViewModel(seed, _offlineFirstService, dialogSvc);
+                    win = new RuleEditorWindow(editorVm) { Owner = Window.GetWindow(this) };
+                }
+                else
+                {
+                    win = new RuleEditorWindow(seed, _offlineFirstService) { Owner = Window.GetWindow(this) };
+                }
                 var ok = win.ShowDialog();
                 if (ok == true && win.ResultRule != null)
                 {
@@ -1059,6 +1088,23 @@ namespace RecoTool.Windows
             OnPropertyChanged(nameof(AllUserFields));
             OnPropertyChanged(nameof(CurrentCountryObject));
 
+            // Service locator removal: hydrate cached services ONCE here. The async
+            // loaders in Options.cs and the SpiritGene menu handler in RowActions.cs
+            // no longer need to call App.ServiceProvider on every invocation.
+            try
+            {
+                var sp = App.ServiceProvider;
+                _optionsService = sp != null
+                    ? Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetService<OptionsService>(sp)
+                    : null;
+            }
+            catch { _optionsService = null; }
+            try
+            {
+                _spiritGene = App.ServiceProvider?.GetService(typeof(RecoTool.API.SpiritGene)) as RecoTool.API.SpiritGene;
+            }
+            catch { _spiritGene = null; }
+
             InitializeFromServices();
         }
 
@@ -1195,7 +1241,9 @@ namespace RecoTool.Windows
         {
             try
             {
-                var win = new RulesAdminWindow();
+                // MVVM call site (Option B): resolve through DI so the VM ctor is picked.
+                var sp = App.ServiceProvider;
+                var win = sp != null ? sp.GetRequiredService<RulesAdminWindow>() : new RulesAdminWindow();
                 var owner = Window.GetWindow(this);
                 if (owner != null) win.Owner = owner;
                 win.Show();
@@ -1416,7 +1464,7 @@ namespace RecoTool.Windows
                         if (!isNA)
                         {
                             if (row.ActionStatus != false) row.ActionStatus = false; // PENDING
-                            row.ActionDate = DateTime.Now;
+                            row.ActionDate = BaseEntity.Clock.Now;
                         }
                         else
                         {
@@ -1778,8 +1826,9 @@ namespace RecoTool.Windows
                     debugItems.Add(item);
                 }
 
-                // Create and show the debug window
-                var debugWindow = new RuleDebugWindow();
+                // Create and show the debug window (MVVM call site, Option B).
+                var spDbg = App.ServiceProvider;
+                var debugWindow = spDbg != null ? spDbg.GetRequiredService<RuleDebugWindow>() : new RuleDebugWindow();
                 debugWindow.SetDebugInfo(lineInfo, contextInfo, debugItems);
                 try { debugWindow.Owner = Window.GetWindow(this); } catch { }
                 debugWindow.Show();

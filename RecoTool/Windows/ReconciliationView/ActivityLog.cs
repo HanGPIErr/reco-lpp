@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using RecoTool.Models;
 using RecoTool.Services.DTOs;
 using Syncfusion.UI.Xaml.Grid;
 
@@ -35,7 +36,7 @@ namespace RecoTool.Windows
         {
             if (!utcTime.HasValue) return "";
             var local = utcTime.Value.Kind == DateTimeKind.Utc ? utcTime.Value.ToLocalTime() : utcTime.Value;
-            var diff = DateTime.Now - local;
+            var diff = BaseEntity.Clock.Now - local;
             if (diff.TotalMinutes < 1) return "just now";
             if (diff.TotalMinutes < 60) return $"{(int)diff.TotalMinutes} min ago";
             if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago";
@@ -82,7 +83,7 @@ namespace RecoTool.Windows
         private void StampRowsModified(IEnumerable<ReconciliationViewData> rows)
         {
             if (rows == null) return;
-            var now = DateTime.Now;
+            var now = BaseEntity.Clock.Now;
             var user = _reconciliationService?.CurrentUser ?? Environment.UserName;
             foreach (var r in rows)
             {

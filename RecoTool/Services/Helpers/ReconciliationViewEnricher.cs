@@ -37,15 +37,31 @@ namespace RecoTool.Services.Helpers
             foreach (var row in rows)
             {
                 DwingsInvoiceDto inv = null;
-                // Receivable rule: if Receivable_InvoiceFromAmbre (BGI) is present, use ONLY this to link to DWINGS invoice.
-                // Do not fall back to other heuristics in this case.
+                // Receivable rule: if Receivable_InvoiceFromAmbre (BGI) is present AND the user
+                // has NOT manually linked this row to a different invoice yet, derive the link
+                // from the Ambre-imported BGI. Once a manual link exists (DWINGS_InvoiceID set),
+                // we resolve metadata against THAT id and leave the user's choice intact —
+                // otherwise every view refresh would clobber the manual re-link back to the
+                // Ambre-derived value, producing the "flash NEW then revert to OLD" UX bug.
                 if (!string.IsNullOrWhiteSpace(row.Receivable_InvoiceFromAmbre))
                 {
-                    if (byInvoiceId.TryGetValue(row.Receivable_InvoiceFromAmbre, out var foundByReceivable))
+                    if (string.IsNullOrWhiteSpace(row.DWINGS_InvoiceID))
                     {
-                        inv = foundByReceivable;
-                        // Strict rule: on receivable, always bind using Receivable_InvoiceFromAmbre
-                        row.DWINGS_InvoiceID = inv.INVOICE_ID;
+                        // Cold path: no manual link yet → bind via the import-side BGI.
+                        if (byInvoiceId.TryGetValue(row.Receivable_InvoiceFromAmbre, out var foundByReceivable))
+                        {
+                            inv = foundByReceivable;
+                            row.DWINGS_InvoiceID = inv.INVOICE_ID;
+                        }
+                    }
+                    else
+                    {
+                        // Hot path: user has linked manually. Resolve metadata against the
+                        // user-saved DWINGS_InvoiceID; do NOT overwrite the link key.
+                        if (byInvoiceId.TryGetValue(row.DWINGS_InvoiceID, out var foundByManual))
+                        {
+                            inv = foundByManual;
+                        }
                     }
                 }
                 // Else apply existing resolution order

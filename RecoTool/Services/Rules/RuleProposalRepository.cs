@@ -5,6 +5,11 @@ using System.Data.OleDb;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using RecoTool.Infrastructure;
+using RecoTool.Infrastructure.DataAccess;
+using RecoTool.Infrastructure.Time;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace RecoTool.Services.Rules
 {
@@ -16,12 +21,16 @@ namespace RecoTool.Services.Rules
     public class RuleProposalRepository
     {
         private readonly string _connectionString;
-        public const string TableName = "T_RuleProposals";
+        private readonly IClock _clock;
+        private readonly ILogger<RuleProposalRepository> _logger;
+        public const string TableName = Schema.Tables.T_RuleProposals;
 
-        public RuleProposalRepository(string connectionString)
+        public RuleProposalRepository(string connectionString, IClock clock = null, ILogger<RuleProposalRepository> logger = null)
         {
             if (string.IsNullOrWhiteSpace(connectionString)) throw new ArgumentNullException(nameof(connectionString));
             _connectionString = connectionString;
+            _clock = clock ?? SystemClock.Instance;
+            _logger = logger ?? NullLogger<RuleProposalRepository>.Instance;
         }
 
         /// <summary>
@@ -30,42 +39,49 @@ namespace RecoTool.Services.Rules
         /// </summary>
         public async Task EnsureTableAsync(CancellationToken ct = default)
         {
-            using (var conn = new OleDbConnection(_connectionString))
+            await OleDbAsyncExecutor.RunWithConnectionAsync<object>(_connectionString, conn =>
             {
-                await conn.OpenAsync(ct).ConfigureAwait(false);
                 var schema = conn.GetOleDbSchemaTable(OleDbSchemaGuid.Tables, new object[] { null, null, TableName, "TABLE" });
-                if (schema != null && schema.Rows.Count > 0) return;
+                if (schema != null && schema.Rows.Count > 0) return null;
 
                 var sql = $@"CREATE TABLE [{TableName}] (
-                    ProposalId AUTOINCREMENT PRIMARY KEY,
-                    RecoId TEXT(255) NOT NULL,
-                    RuleId TEXT(100) NOT NULL,
-                    Field TEXT(50) NOT NULL,
-                    OldValue TEXT(255),
-                    NewValue TEXT(255),
-                    CreatedAt DATETIME NOT NULL,
-                    CreatedBy TEXT(100) NOT NULL,
-                    Status TEXT(20) NOT NULL,
-                    DecidedBy TEXT(100),
-                    DecidedAt DATETIME,
-                    DeleteDate DATETIME
+                    {Schema.Columns.RuleProposals.ProposalId} AUTOINCREMENT PRIMARY KEY,
+                    {Schema.Columns.RuleProposals.RecoId} TEXT(255) NOT NULL,
+                    {Schema.Columns.RuleProposals.RuleId} TEXT(100) NOT NULL,
+                    {Schema.Columns.RuleProposals.Field} TEXT(50) NOT NULL,
+                    {Schema.Columns.RuleProposals.OldValue} TEXT(255),
+                    {Schema.Columns.RuleProposals.NewValue} TEXT(255),
+                    {Schema.Columns.RuleProposals.CreatedAt} DATETIME NOT NULL,
+                    {Schema.Columns.RuleProposals.CreatedBy} TEXT(100) NOT NULL,
+                    {Schema.Columns.RuleProposals.Status} TEXT(20) NOT NULL,
+                    {Schema.Columns.RuleProposals.DecidedBy} TEXT(100),
+                    {Schema.Columns.RuleProposals.DecidedAt} DATETIME,
+                    {Schema.Columns.RuleProposals.DeleteDate} DATETIME
                 )";
-                using (var cmd = new OleDbCommand(sql, conn)) await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                using (var cmd = new OleDbCommand(sql, conn)) cmd.ExecuteNonQuery();
 
                 // Best-effort indexes
                 try
                 {
-                    using (var c = new OleDbCommand($"CREATE INDEX IX_{TableName}_RecoId ON [{TableName}] (RecoId)", conn))
-                        await c.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                    using (var c = new OleDbCommand($"CREATE INDEX IX_{TableName}_RecoId ON [{TableName}] ({Schema.Columns.RuleProposals.RecoId})", conn))
+                        c.ExecuteNonQuery();
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to create index IX_{TableName}_RecoId on T_RuleProposals", TableName);
+                }
                 try
                 {
-                    using (var c = new OleDbCommand($"CREATE INDEX IX_{TableName}_Status ON [{TableName}] (Status)", conn))
-                        await c.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                    using (var c = new OleDbCommand($"CREATE INDEX IX_{TableName}_Status ON [{TableName}] ({Schema.Columns.RuleProposals.Status})", conn))
+                        c.ExecuteNonQuery();
                 }
-                catch { }
-            }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to create index IX_{TableName}_Status on T_RuleProposals", TableName);
+                }
+
+                return null;
+            }, ct).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -80,66 +96,54 @@ namespace RecoTool.Services.Rules
             if (list.Count == 0) return 0;
 
             await EnsureTableAsync(ct).ConfigureAwait(false);
-            int inserted = 0;
 
-            using (var conn = new OleDbConnection(_connectionString))
+            return await OleDbAsyncExecutor.RunInTransactionAsync(_connectionString, (conn, tx) =>
             {
-                await conn.OpenAsync(ct).ConfigureAwait(false);
-                using (var tx = conn.BeginTransaction())
+                int inserted = 0;
+
+                // Pre-query existing pending duplicates
+                var dupCheck = new OleDbCommand(
+                    $"SELECT COUNT(*) FROM [{TableName}] WHERE {Schema.Columns.RuleProposals.RecoId}=? AND {Schema.Columns.RuleProposals.RuleId}=? AND {Schema.Columns.RuleProposals.Field}=? AND {Schema.Columns.RuleProposals.Status}='Pending' AND {Schema.Columns.RuleProposals.DeleteDate} IS NULL",
+                    conn, tx);
+                dupCheck.Parameters.Add("@RecoId", OleDbType.VarWChar, 255);
+                dupCheck.Parameters.Add("@RuleId", OleDbType.VarWChar, 100);
+                dupCheck.Parameters.Add("@Field", OleDbType.VarWChar, 50);
+
+                var insertCmd = new OleDbCommand(
+                    $@"INSERT INTO [{TableName}] ({Schema.Columns.RuleProposals.RecoId}, {Schema.Columns.RuleProposals.RuleId}, {Schema.Columns.RuleProposals.Field}, {Schema.Columns.RuleProposals.OldValue}, {Schema.Columns.RuleProposals.NewValue}, {Schema.Columns.RuleProposals.CreatedAt}, {Schema.Columns.RuleProposals.CreatedBy}, {Schema.Columns.RuleProposals.Status})
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)", conn, tx);
+                insertCmd.Parameters.Add("@RecoId", OleDbType.VarWChar, 255);
+                insertCmd.Parameters.Add("@RuleId", OleDbType.VarWChar, 100);
+                insertCmd.Parameters.Add("@Field", OleDbType.VarWChar, 50);
+                insertCmd.Parameters.Add("@OldValue", OleDbType.VarWChar, 255);
+                insertCmd.Parameters.Add("@NewValue", OleDbType.VarWChar, 255);
+                insertCmd.Parameters.Add("@CreatedAt", OleDbType.Date);
+                insertCmd.Parameters.Add("@CreatedBy", OleDbType.VarWChar, 100);
+                insertCmd.Parameters.Add("@Status", OleDbType.VarWChar, 20);
+
+                foreach (var p in list)
                 {
-                    try
-                    {
-                        // Pre-query existing pending duplicates
-                        var dupCheck = new OleDbCommand(
-                            $"SELECT COUNT(*) FROM [{TableName}] WHERE RecoId=? AND RuleId=? AND Field=? AND Status='Pending' AND DeleteDate IS NULL",
-                            conn, tx);
-                        dupCheck.Parameters.Add("@RecoId", OleDbType.VarWChar, 255);
-                        dupCheck.Parameters.Add("@RuleId", OleDbType.VarWChar, 100);
-                        dupCheck.Parameters.Add("@Field", OleDbType.VarWChar, 50);
+                    dupCheck.Parameters["@RecoId"].Value = p.RecoId;
+                    dupCheck.Parameters["@RuleId"].Value = p.RuleId;
+                    dupCheck.Parameters["@Field"].Value = p.Field;
+                    var existing = Convert.ToInt32(dupCheck.ExecuteScalar());
+                    if (existing > 0) continue;
 
-                        var insertCmd = new OleDbCommand(
-                            $@"INSERT INTO [{TableName}] (RecoId, RuleId, Field, OldValue, NewValue, CreatedAt, CreatedBy, Status)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?)", conn, tx);
-                        insertCmd.Parameters.Add("@RecoId", OleDbType.VarWChar, 255);
-                        insertCmd.Parameters.Add("@RuleId", OleDbType.VarWChar, 100);
-                        insertCmd.Parameters.Add("@Field", OleDbType.VarWChar, 50);
-                        insertCmd.Parameters.Add("@OldValue", OleDbType.VarWChar, 255);
-                        insertCmd.Parameters.Add("@NewValue", OleDbType.VarWChar, 255);
-                        insertCmd.Parameters.Add("@CreatedAt", OleDbType.Date);
-                        insertCmd.Parameters.Add("@CreatedBy", OleDbType.VarWChar, 100);
-                        insertCmd.Parameters.Add("@Status", OleDbType.VarWChar, 20);
+                    insertCmd.Parameters["@RecoId"].Value = p.RecoId;
+                    insertCmd.Parameters["@RuleId"].Value = p.RuleId;
+                    insertCmd.Parameters["@Field"].Value = p.Field;
+                    insertCmd.Parameters["@OldValue"].Value = (object)p.OldValue ?? DBNull.Value;
+                    insertCmd.Parameters["@NewValue"].Value = (object)p.NewValue ?? DBNull.Value;
+                    insertCmd.Parameters["@CreatedAt"].Value = p.CreatedAt == default ? _clock.UtcNow : p.CreatedAt;
+                    insertCmd.Parameters["@CreatedBy"].Value = (object)p.CreatedBy ?? DBNull.Value;
+                    insertCmd.Parameters["@Status"].Value = (p.Status == default ? ProposalStatus.Pending : p.Status).ToString();
 
-                        foreach (var p in list)
-                        {
-                            dupCheck.Parameters["@RecoId"].Value = p.RecoId;
-                            dupCheck.Parameters["@RuleId"].Value = p.RuleId;
-                            dupCheck.Parameters["@Field"].Value = p.Field;
-                            var existing = Convert.ToInt32(await dupCheck.ExecuteScalarAsync(ct).ConfigureAwait(false));
-                            if (existing > 0) continue;
-
-                            insertCmd.Parameters["@RecoId"].Value = p.RecoId;
-                            insertCmd.Parameters["@RuleId"].Value = p.RuleId;
-                            insertCmd.Parameters["@Field"].Value = p.Field;
-                            insertCmd.Parameters["@OldValue"].Value = (object)p.OldValue ?? DBNull.Value;
-                            insertCmd.Parameters["@NewValue"].Value = (object)p.NewValue ?? DBNull.Value;
-                            insertCmd.Parameters["@CreatedAt"].Value = p.CreatedAt == default ? DateTime.UtcNow : p.CreatedAt;
-                            insertCmd.Parameters["@CreatedBy"].Value = (object)p.CreatedBy ?? DBNull.Value;
-                            insertCmd.Parameters["@Status"].Value = (p.Status == default ? ProposalStatus.Pending : p.Status).ToString();
-
-                            await insertCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-                            inserted++;
-                        }
-                        tx.Commit();
-                    }
-                    catch
-                    {
-                        try { tx.Rollback(); } catch { }
-                        throw;
-                    }
+                    insertCmd.ExecuteNonQuery();
+                    inserted++;
                 }
-            }
 
-            return inserted;
+                return inserted;
+            }, ct).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -152,21 +156,25 @@ namespace RecoTool.Services.Rules
             {
                 await EnsureTableAsync(ct).ConfigureAwait(false);
             }
-            catch { return list; }
-
-            using (var conn = new OleDbConnection(_connectionString))
+            catch (Exception ex)
             {
-                await conn.OpenAsync(ct).ConfigureAwait(false);
-                string sql = $"SELECT ProposalId, RecoId, RuleId, Field, OldValue, NewValue, CreatedAt, CreatedBy, Status, DecidedBy, DecidedAt, DeleteDate FROM [{TableName}] WHERE DeleteDate IS NULL";
-                if (status.HasValue) sql += " AND Status = ?";
-                sql += " ORDER BY CreatedAt DESC";
+                _logger.LogWarning(ex, "RuleProposalRepository.LoadAsync: EnsureTable failed, returning empty list (status={Status})", status);
+                return list;
+            }
+
+            return await OleDbAsyncExecutor.RunWithConnectionAsync(_connectionString, conn =>
+            {
+                var rows = new List<RuleProposal>();
+                string sql = $"SELECT {Schema.Columns.RuleProposals.ProposalId}, {Schema.Columns.RuleProposals.RecoId}, {Schema.Columns.RuleProposals.RuleId}, {Schema.Columns.RuleProposals.Field}, {Schema.Columns.RuleProposals.OldValue}, {Schema.Columns.RuleProposals.NewValue}, {Schema.Columns.RuleProposals.CreatedAt}, {Schema.Columns.RuleProposals.CreatedBy}, {Schema.Columns.RuleProposals.Status}, {Schema.Columns.RuleProposals.DecidedBy}, {Schema.Columns.RuleProposals.DecidedAt}, {Schema.Columns.RuleProposals.DeleteDate} FROM [{TableName}] WHERE {Schema.Columns.RuleProposals.DeleteDate} IS NULL";
+                if (status.HasValue) sql += $" AND {Schema.Columns.RuleProposals.Status} = ?";
+                sql += $" ORDER BY {Schema.Columns.RuleProposals.CreatedAt} DESC";
 
                 using (var cmd = new OleDbCommand(sql, conn))
                 {
                     if (status.HasValue) cmd.Parameters.AddWithValue("@Status", status.Value.ToString());
-                    using (var rdr = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false))
+                    using (var rdr = cmd.ExecuteReader())
                     {
-                        while (await rdr.ReadAsync(ct).ConfigureAwait(false))
+                        while (rdr.Read())
                         {
                             try
                             {
@@ -185,14 +193,17 @@ namespace RecoTool.Services.Rules
                                     DecidedAt = rdr.IsDBNull(10) ? (DateTime?)null : rdr.GetDateTime(10),
                                     DeleteDate = rdr.IsDBNull(11) ? (DateTime?)null : rdr.GetDateTime(11)
                                 };
-                                list.Add(p);
+                                rows.Add(p);
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "RuleProposalRepository.LoadAsync: failed to materialize one RuleProposal row (skipped)");
+                            }
                         }
                     }
                 }
-            }
-            return list;
+                return rows;
+            }, ct).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -200,20 +211,19 @@ namespace RecoTool.Services.Rules
         /// </summary>
         public async Task<bool> UpdateStatusAsync(int proposalId, ProposalStatus newStatus, string decidedBy, CancellationToken ct = default)
         {
-            using (var conn = new OleDbConnection(_connectionString))
+            return await OleDbAsyncExecutor.RunWithConnectionAsync(_connectionString, conn =>
             {
-                await conn.OpenAsync(ct).ConfigureAwait(false);
                 using (var cmd = new OleDbCommand(
-                    $"UPDATE [{TableName}] SET Status=?, DecidedBy=?, DecidedAt=? WHERE ProposalId=?", conn))
+                    $"UPDATE [{TableName}] SET {Schema.Columns.RuleProposals.Status}=?, {Schema.Columns.RuleProposals.DecidedBy}=?, {Schema.Columns.RuleProposals.DecidedAt}=? WHERE {Schema.Columns.RuleProposals.ProposalId}=?", conn))
                 {
                     cmd.Parameters.AddWithValue("@Status", newStatus.ToString());
                     cmd.Parameters.AddWithValue("@DecidedBy", (object)decidedBy ?? DBNull.Value);
-                    cmd.Parameters.Add("@DecidedAt", OleDbType.Date).Value = DateTime.UtcNow;
+                    cmd.Parameters.Add("@DecidedAt", OleDbType.Date).Value = _clock.UtcNow;
                     cmd.Parameters.AddWithValue("@ProposalId", proposalId);
-                    var n = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                    var n = cmd.ExecuteNonQuery();
                     return n > 0;
                 }
-            }
+            }, ct).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -222,16 +232,15 @@ namespace RecoTool.Services.Rules
         public async Task<int> MarkRecoProposalsStaleAsync(string recoId, CancellationToken ct = default)
         {
             if (string.IsNullOrWhiteSpace(recoId)) return 0;
-            using (var conn = new OleDbConnection(_connectionString))
+            return await OleDbAsyncExecutor.RunWithConnectionAsync(_connectionString, conn =>
             {
-                await conn.OpenAsync(ct).ConfigureAwait(false);
                 using (var cmd = new OleDbCommand(
-                    $"UPDATE [{TableName}] SET Status='Stale' WHERE RecoId=? AND Status='Pending' AND DeleteDate IS NULL", conn))
+                    $"UPDATE [{TableName}] SET {Schema.Columns.RuleProposals.Status}='Stale' WHERE {Schema.Columns.RuleProposals.RecoId}=? AND {Schema.Columns.RuleProposals.Status}='Pending' AND {Schema.Columns.RuleProposals.DeleteDate} IS NULL", conn))
                 {
                     cmd.Parameters.AddWithValue("@RecoId", recoId);
-                    return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                    return cmd.ExecuteNonQuery();
                 }
-            }
+            }, ct).ConfigureAwait(false);
         }
 
         private static ProposalStatus ParseStatus(string s)

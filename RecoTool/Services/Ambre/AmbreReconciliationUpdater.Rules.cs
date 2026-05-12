@@ -1,4 +1,6 @@
 using OfflineFirstAccess.Helpers;
+using RecoTool.Infrastructure;
+using RecoTool.Infrastructure.DataAccess;
 using RecoTool.Infrastructure.Logging;
 using RecoTool.Models;
 using RecoTool.Services.DTOs;
@@ -373,7 +375,7 @@ namespace RecoTool.Services.Ambre
                             if (intent.ActionDone.HasValue && reco.ActionStatus != intent.ActionDone.Value)
                             {
                                 reco.ActionStatus = intent.ActionDone.Value;
-                                try { reco.ActionDate = DateTime.Now; } catch { }
+                                try { reco.ActionDate = _clock.Now; } catch { }
                                 changed = true;
                             }
 
@@ -439,10 +441,10 @@ namespace RecoTool.Services.Ambre
                         {
                             s.Reconciliation.Action = ACTION_INVESTIGATE;
                             s.Reconciliation.ActionStatus = true;          // DONE
-                            s.Reconciliation.ActionDate = DateTime.Now;
+                            s.Reconciliation.ActionDate = _clock.Now;
 
                             // commentaire d’audit
-                            var prefix = $"[{DateTime.Now:yyyy-MM-dd HH:mm}] {_currentUser}: ";
+                            var prefix = $"[{_clock.Now:yyyy-MM-dd HH:mm}] {_currentUser}: ";
                             var msg = $"{prefix}New line set to INVESTIGATE – no matching rule found";
                             if (string.IsNullOrWhiteSpace(s.Reconciliation.Comments))
                                 s.Reconciliation.Comments = msg;
@@ -494,7 +496,7 @@ namespace RecoTool.Services.Ambre
                         bool changed = false;
                         if (rec.Action != ACTION_INVEST) { rec.Action = ACTION_INVEST; changed = true; }
                         if (rec.ActionStatus != true) { rec.ActionStatus = true; changed = true; }
-                        if (changed) rec.ActionDate = DateTime.Now;
+                        if (changed) rec.ActionDate = _clock.Now;
                     }
                 }
 
@@ -504,7 +506,7 @@ namespace RecoTool.Services.Ambre
                 try
                 {
                     var allUserFields = _offlineFirstService?.UserFields;
-                    var nowLocal = DateTime.Now;
+                    var nowLocal = _clock.Now;
 
                     foreach (var s in staged)
                     {
@@ -621,29 +623,27 @@ namespace RecoTool.Services.Ambre
                 // Load existing reconciliations from database
                 var connectionString = _offlineFirstService.GetCountryConnectionString(countryId);
                 var reconciliations = new Dictionary<string, Reconciliation>(StringComparer.OrdinalIgnoreCase);
-                
-                using (var conn = new OleDbConnection(connectionString))
+
+                // Batch load reconciliations (Access IN clause limit ~1000)
+                var idsForLoad = updatedRecords.Select(r => r.ID).Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                const int batchSize = 500;
+
+                await OleDbAsyncExecutor.RunWithConnectionAsync(connectionString, conn =>
                 {
-                    await conn.OpenAsync();
-                    
-                    // Batch load reconciliations (Access IN clause limit ~1000)
-                    var ids = updatedRecords.Select(r => r.ID).Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                    const int batchSize = 500;
-                    
-                    for (int i = 0; i < ids.Count; i += batchSize)
+                    for (int i = 0; i < idsForLoad.Count; i += batchSize)
                     {
-                        var batch = ids.Skip(i).Take(batchSize).ToList();
+                        var batch = idsForLoad.Skip(i).Take(batchSize).ToList();
                         var inClause = string.Join(",", batch.Select((_, idx) => "?"));
-                        
+
                         using (var cmd = new OleDbCommand(
-                            $"SELECT * FROM [T_Reconciliation] WHERE [ID] IN ({inClause})", conn))
+                            $"SELECT * FROM [{Schema.Tables.T_Reconciliation}] WHERE [{Schema.Columns.Reconciliation.ID}] IN ({inClause})", conn))
                         {
                             foreach (var id in batch)
                                 cmd.Parameters.AddWithValue("@ID", id);
-                            
-                            using (var reader = await cmd.ExecuteReaderAsync())
+
+                            using (var reader = cmd.ExecuteReader())
                             {
-                                while (await reader.ReadAsync())
+                                while (reader.Read())
                                 {
                                     var rec = MapReconciliationFromReader(reader);
                                     if (rec != null && !string.IsNullOrWhiteSpace(rec.ID))
@@ -652,7 +652,8 @@ namespace RecoTool.Services.Ambre
                             }
                         }
                     }
-                }
+                    return 0;
+                }).ConfigureAwait(false);
 
                 // Create staging items
                 var staged = new List<ReconciliationStaging>();
@@ -707,26 +708,25 @@ namespace RecoTool.Services.Ambre
                         
                         // Reload reconciliations that were updated by MANUAL_OUTGOING rule
                         // to ensure staged items have the latest Action/KPI values
-                        using (var conn = new OleDbConnection(connectionString))
+                        var reloadIds = staged.Select(s => s.Reconciliation.ID).Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                        const int reloadBatchSize = 500;
+
+                        await OleDbAsyncExecutor.RunWithConnectionAsync(connectionString, conn =>
                         {
-                            await conn.OpenAsync();
-                            var ids = staged.Select(s => s.Reconciliation.ID).Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                            const int reloadBatchSize = 500;
-                            
-                            for (int i = 0; i < ids.Count; i += reloadBatchSize)
+                            for (int i = 0; i < reloadIds.Count; i += reloadBatchSize)
                             {
-                                var batch = ids.Skip(i).Take(reloadBatchSize).ToList();
+                                var batch = reloadIds.Skip(i).Take(reloadBatchSize).ToList();
                                 var inClause = string.Join(",", batch.Select((_, idx) => "?"));
-                                
+
                                 using (var cmd = new OleDbCommand(
-                                    $"SELECT * FROM [T_Reconciliation] WHERE [ID] IN ({inClause})", conn))
+                                    $"SELECT * FROM [{Schema.Tables.T_Reconciliation}] WHERE [{Schema.Columns.Reconciliation.ID}] IN ({inClause})", conn))
                                 {
                                     foreach (var id in batch)
                                         cmd.Parameters.AddWithValue("@ID", id);
-                                    
-                                    using (var reader = await cmd.ExecuteReaderAsync())
+
+                                    using (var reader = cmd.ExecuteReader())
                                     {
-                                        while (await reader.ReadAsync())
+                                        while (reader.Read())
                                         {
                                             var rec = MapReconciliationFromReader(reader);
                                             if (rec != null && !string.IsNullOrWhiteSpace(rec.ID))
@@ -742,7 +742,8 @@ namespace RecoTool.Services.Ambre
                                     }
                                 }
                             }
-                        }
+                            return 0;
+                        }).ConfigureAwait(false);
                     }
                 }
                 catch (Exception ex)
@@ -763,73 +764,60 @@ namespace RecoTool.Services.Ambre
 
                 // Update database with rule results - OPTIMIZED with batching
                 var dbUpdateTimer = System.Diagnostics.Stopwatch.StartNew();
-                using (var conn = new OleDbConnection(connectionString))
+                await OleDbAsyncExecutor.RunInTransactionAsync(connectionString, (conn, tx) =>
                 {
-                    await conn.OpenAsync();
-                    using (var tx = conn.BeginTransaction())
+                    var nowUtc = _clock.UtcNow;
+                    int updateCount = 0;
+
+                    using (var cmd = new OleDbCommand(
+                        $@"UPDATE [{Schema.Tables.T_Reconciliation}] SET
+                            [{Schema.Columns.Reconciliation.Action}]=?, [{Schema.Columns.Reconciliation.KPI}]=?, [{Schema.Columns.Reconciliation.IncidentType}]=?, [{Schema.Columns.Reconciliation.RiskyItem}]=?, [{Schema.Columns.Reconciliation.ReasonNonRisky}]=?,
+                            [{Schema.Columns.Reconciliation.ToRemind}]=?, [{Schema.Columns.Reconciliation.ToRemindDate}]=?, [{Schema.Columns.Reconciliation.FirstClaimDate}]=?,
+                            [{Schema.Columns.Reconciliation.LastModified}]=?, [{Schema.Columns.Reconciliation.ModifiedBy}]=?
+                          WHERE [{Schema.Columns.Reconciliation.ID}]=?", conn, tx))
                     {
-                        try
+                        // Pre-create parameters once with explicit sizes for VarChar
+                        cmd.Parameters.Add("@Action", OleDbType.Integer);
+                        cmd.Parameters.Add("@KPI", OleDbType.Integer);
+                        cmd.Parameters.Add("@IncidentType", OleDbType.Integer);
+                        cmd.Parameters.Add("@RiskyItem", OleDbType.Boolean);
+                        cmd.Parameters.Add("@ReasonNonRisky", OleDbType.Integer);
+                        cmd.Parameters.Add("@ToRemind", OleDbType.Boolean);
+                        cmd.Parameters.Add("@ToRemindDate", OleDbType.Date);
+                        cmd.Parameters.Add("@FirstClaimDate", OleDbType.Date);
+                        cmd.Parameters.Add("@LastModified", OleDbType.Date);
+                        cmd.Parameters.Add("@ModifiedBy", OleDbType.VarWChar, 255);
+                        cmd.Parameters.Add("@ID", OleDbType.VarWChar, 255);
+
+                        foreach (var s in staged)
                         {
-                            var nowUtc = DateTime.UtcNow;
-                            const int dbBatchSize = 500; // Batch DB updates for better performance
-                            int updateCount = 0;
-                            
-                            using (var cmd = new OleDbCommand(
-                                @"UPDATE [T_Reconciliation] SET 
-                                    [Action]=?, [KPI]=?, [IncidentType]=?, [RiskyItem]=?, [ReasonNonRisky]=?,
-                                    [ToRemind]=?, [ToRemindDate]=?, [FirstClaimDate]=?,
-                                    [LastModified]=?, [ModifiedBy]=?
-                                  WHERE [ID]=?", conn, tx))
-                            {
-                                // Pre-create parameters once with explicit sizes for VarChar
-                                cmd.Parameters.Add("@Action", OleDbType.Integer);
-                                cmd.Parameters.Add("@KPI", OleDbType.Integer);
-                                cmd.Parameters.Add("@IncidentType", OleDbType.Integer);
-                                cmd.Parameters.Add("@RiskyItem", OleDbType.Boolean);
-                                cmd.Parameters.Add("@ReasonNonRisky", OleDbType.Integer);
-                                cmd.Parameters.Add("@ToRemind", OleDbType.Boolean);
-                                cmd.Parameters.Add("@ToRemindDate", OleDbType.Date);
-                                cmd.Parameters.Add("@FirstClaimDate", OleDbType.Date);
-                                cmd.Parameters.Add("@LastModified", OleDbType.Date);
-                                cmd.Parameters.Add("@ModifiedBy", OleDbType.VarWChar, 255);
-                                cmd.Parameters.Add("@ID", OleDbType.VarWChar, 255);
-                                
-                                foreach (var s in staged)
-                                {
-                                    var rec = s.Reconciliation;
-                                    
-                                    cmd.Parameters["@Action"].Value = rec.Action.HasValue ? (object)rec.Action.Value : DBNull.Value;
-                                    cmd.Parameters["@KPI"].Value = rec.KPI.HasValue ? (object)rec.KPI.Value : DBNull.Value;
-                                    cmd.Parameters["@IncidentType"].Value = rec.IncidentType.HasValue ? (object)rec.IncidentType.Value : DBNull.Value;
-                                    cmd.Parameters["@RiskyItem"].Value = rec.RiskyItem.HasValue ? (object)rec.RiskyItem.Value : DBNull.Value;
-                                    cmd.Parameters["@ReasonNonRisky"].Value = rec.ReasonNonRisky.HasValue ? (object)rec.ReasonNonRisky.Value : DBNull.Value;
-                                    cmd.Parameters["@ToRemind"].Value = rec.ToRemind;
-                                    cmd.Parameters["@ToRemindDate"].Value = rec.ToRemindDate.HasValue ? (object)rec.ToRemindDate.Value : DBNull.Value;
-                                    cmd.Parameters["@FirstClaimDate"].Value = rec.FirstClaimDate.HasValue ? (object)rec.FirstClaimDate.Value : DBNull.Value;
-                                    cmd.Parameters["@LastModified"].Value = nowUtc;
-                                    cmd.Parameters["@ModifiedBy"].Value = _currentUser;
-                                    cmd.Parameters["@ID"].Value = rec.ID;
-                                    
-                                    await cmd.ExecuteNonQueryAsync();
-                                    updateCount++;
-                                    
-                                    // Periodic progress log
-                                    if (updateCount % 10000 == 0)
-                                        LogManager.Info($"[PERF] DB update progress: {updateCount}/{staged.Count} records updated");
-                                }
-                            }
-                            
-                            tx.Commit();
-                            dbUpdateTimer.Stop();
-                            LogManager.Info($"[PERF] DB updates completed: {staged.Count} records in {dbUpdateTimer.ElapsedMilliseconds}ms");
-                        }
-                        catch
-                        {
-                            tx.Rollback();
-                            throw;
+                            var rec = s.Reconciliation;
+
+                            cmd.Parameters["@Action"].Value = rec.Action.HasValue ? (object)rec.Action.Value : DBNull.Value;
+                            cmd.Parameters["@KPI"].Value = rec.KPI.HasValue ? (object)rec.KPI.Value : DBNull.Value;
+                            cmd.Parameters["@IncidentType"].Value = rec.IncidentType.HasValue ? (object)rec.IncidentType.Value : DBNull.Value;
+                            cmd.Parameters["@RiskyItem"].Value = rec.RiskyItem.HasValue ? (object)rec.RiskyItem.Value : DBNull.Value;
+                            cmd.Parameters["@ReasonNonRisky"].Value = rec.ReasonNonRisky.HasValue ? (object)rec.ReasonNonRisky.Value : DBNull.Value;
+                            cmd.Parameters["@ToRemind"].Value = rec.ToRemind;
+                            cmd.Parameters["@ToRemindDate"].Value = rec.ToRemindDate.HasValue ? (object)rec.ToRemindDate.Value : DBNull.Value;
+                            cmd.Parameters["@FirstClaimDate"].Value = rec.FirstClaimDate.HasValue ? (object)rec.FirstClaimDate.Value : DBNull.Value;
+                            cmd.Parameters["@LastModified"].Value = nowUtc;
+                            cmd.Parameters["@ModifiedBy"].Value = _currentUser;
+                            cmd.Parameters["@ID"].Value = rec.ID;
+
+                            cmd.ExecuteNonQuery();
+                            updateCount++;
+
+                            // Periodic progress log
+                            if (updateCount % 10000 == 0)
+                                LogManager.Info($"[PERF] DB update progress: {updateCount}/{staged.Count} records updated");
                         }
                     }
-                }
+
+                    dbUpdateTimer.Stop();
+                    LogManager.Info($"[PERF] DB updates completed: {staged.Count} records in {dbUpdateTimer.ElapsedMilliseconds}ms");
+                    return 0;
+                }).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -847,28 +835,28 @@ namespace RecoTool.Services.Ambre
             {
                 return new Reconciliation
                 {
-                    ID = reader["ID"]?.ToString(),
-                    DWINGS_GuaranteeID = reader["DWINGS_GuaranteeID"]?.ToString(),
-                    DWINGS_InvoiceID = reader["DWINGS_InvoiceID"]?.ToString(),
-                    DWINGS_BGPMT = reader["DWINGS_BGPMT"]?.ToString(),
-                    Action = reader["Action"] as int?,
-                    ActionStatus = reader["ActionStatus"] as bool?,
-                    ActionDate = reader["ActionDate"] as DateTime?,
-                    Comments = reader["Comments"]?.ToString(),
-                    InternalInvoiceReference = reader["InternalInvoiceReference"]?.ToString(),
-                    FirstClaimDate = reader["FirstClaimDate"] as DateTime?,
-                    LastClaimDate = reader["LastClaimDate"] as DateTime?,
-                    ToRemind = (reader["ToRemind"] as bool?) ?? false,
-                    SwiftCode = reader["SwiftCode"]?.ToString(),
-                    PaymentReference = reader["PaymentReference"]?.ToString(),
-                    KPI = reader["KPI"] as int?,
-                    IncidentType = reader["IncidentType"] as int?,
-                    RiskyItem = reader["RiskyItem"] as bool?,
-                    ReasonNonRisky = reader["ReasonNonRisky"] as int?,
-                    TriggerDate = reader["TriggerDate"] as DateTime?,
-                    CreationDate = reader["CreationDate"] as DateTime?,
-                    ModifiedBy = reader["ModifiedBy"]?.ToString(),
-                    LastModified = reader["LastModified"] as DateTime?
+                    ID = reader[Schema.Columns.Reconciliation.ID]?.ToString(),
+                    DWINGS_GuaranteeID = reader[Schema.Columns.Reconciliation.DWINGS_GuaranteeID]?.ToString(),
+                    DWINGS_InvoiceID = reader[Schema.Columns.Reconciliation.DWINGS_InvoiceID]?.ToString(),
+                    DWINGS_BGPMT = reader[Schema.Columns.Reconciliation.DWINGS_BGPMT]?.ToString(),
+                    Action = reader[Schema.Columns.Reconciliation.Action] as int?,
+                    ActionStatus = reader[Schema.Columns.Reconciliation.ActionStatus] as bool?,
+                    ActionDate = reader[Schema.Columns.Reconciliation.ActionDate] as DateTime?,
+                    Comments = reader[Schema.Columns.Reconciliation.Comments]?.ToString(),
+                    InternalInvoiceReference = reader[Schema.Columns.Reconciliation.InternalInvoiceReference]?.ToString(),
+                    FirstClaimDate = reader[Schema.Columns.Reconciliation.FirstClaimDate] as DateTime?,
+                    LastClaimDate = reader[Schema.Columns.Reconciliation.LastClaimDate] as DateTime?,
+                    ToRemind = (reader[Schema.Columns.Reconciliation.ToRemind] as bool?) ?? false,
+                    SwiftCode = reader[Schema.Columns.Reconciliation.SwiftCode]?.ToString(),
+                    PaymentReference = reader[Schema.Columns.Reconciliation.PaymentReference]?.ToString(),
+                    KPI = reader[Schema.Columns.Reconciliation.KPI] as int?,
+                    IncidentType = reader[Schema.Columns.Reconciliation.IncidentType] as int?,
+                    RiskyItem = reader[Schema.Columns.Reconciliation.RiskyItem] as bool?,
+                    ReasonNonRisky = reader[Schema.Columns.Reconciliation.ReasonNonRisky] as int?,
+                    TriggerDate = reader[Schema.Columns.Reconciliation.TriggerDate] as DateTime?,
+                    CreationDate = reader[Schema.Columns.Reconciliation.CreationDate] as DateTime?,
+                    ModifiedBy = reader[Schema.Columns.Reconciliation.ModifiedBy]?.ToString(),
+                    LastModified = reader[Schema.Columns.Reconciliation.LastModified] as DateTime?
                 };
             }
             catch

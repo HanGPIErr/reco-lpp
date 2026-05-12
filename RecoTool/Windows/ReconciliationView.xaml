@@ -1139,6 +1139,7 @@
                               AllowResizingHiddenColumns="False"
                               AllowTriStateSorting="False"
                               LiveDataUpdateMode="Default"
+                              EnableDataVirtualization="False"
                               Loaded="ResultsDataGrid_Loaded"
                               SelectionChanged="ResultsDataGrid_SelectionChanged"
                               CurrentCellBeginEdit="ResultsDataGrid_CurrentCellBeginEdit"

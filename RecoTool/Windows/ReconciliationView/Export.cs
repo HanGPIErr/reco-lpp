@@ -6,6 +6,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using RecoTool.Models;
 
 namespace RecoTool.Windows
 {
@@ -25,7 +26,7 @@ namespace RecoTool.Windows
                     DefaultExt = ".xlsx",
                     AddExtension = true,
                     OverwritePrompt = true,
-                    FileName = $"reconciliation_export_{DateTime.Now:yyyyMMdd_HHmmss}"
+                    FileName = $"reconciliation_export_{BaseEntity.Clock.Now:yyyyMMdd_HHmmss}"
                 };
                 if (dlg.ShowDialog() != true) return;
 

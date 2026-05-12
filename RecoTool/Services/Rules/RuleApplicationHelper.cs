@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using RecoTool.Infrastructure.Logging;
+using RecoTool.Infrastructure.Time;
 using RecoTool.Models;
 
 namespace RecoTool.Services.Rules
@@ -16,6 +17,13 @@ namespace RecoTool.Services.Rules
         public const int DefaultUserEditLockDays = 7;
 
         /// <summary>
+        /// Clock used by all timestamp emissions in this helper. Defaults to
+        /// <see cref="SystemClock.Instance"/> (wall-clock); tests can swap it
+        /// to obtain deterministic timestamps. Thread-safe singleton swap.
+        /// </summary>
+        public static IClock Clock { get; set; } = SystemClock.Instance;
+
+        /// <summary>
         /// Records that a user has manually edited one or more fields on the reconciliation.
         /// Updates <see cref="Reconciliation.LastModifiedByUser"/> to now and merges <paramref name="editedFields"/>
         /// into <see cref="Reconciliation.UserEditedFields"/> (pipe-separated, deduplicated, case-insensitive).
@@ -26,7 +34,7 @@ namespace RecoTool.Services.Rules
         {
             if (reconciliation == null || editedFields == null || editedFields.Length == 0) return;
 
-            reconciliation.LastModifiedByUser = DateTime.Now;
+            reconciliation.LastModifiedByUser = Clock.Now;
 
             var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (!string.IsNullOrWhiteSpace(reconciliation.UserEditedFields))
@@ -75,7 +83,7 @@ namespace RecoTool.Services.Rules
 
             int days = rule.UserEditLockDays.HasValue && rule.UserEditLockDays.Value > 0
                 ? rule.UserEditLockDays.Value : DefaultUserEditLockDays;
-            return reconciliation.LastModifiedByUser.Value.AddDays(days) > DateTime.Now;
+            return reconciliation.LastModifiedByUser.Value.AddDays(days) > Clock.Now;
         }
 
         /// <summary>
@@ -118,7 +126,7 @@ namespace RecoTool.Services.Rules
                     TryChange("ActionStatus", () =>
                     {
                         reconciliation.ActionStatus = result.NewActionStatusSelf.Value;
-                        try { reconciliation.ActionDate = DateTime.Now; } catch { }
+                        try { reconciliation.ActionDate = Clock.Now; } catch { }
                         modified = true; return true;
                     });
                 }
@@ -131,7 +139,7 @@ namespace RecoTool.Services.Rules
                     TryChange("ActionStatus", () =>
                     {
                         reconciliation.ActionStatus = newStatus;
-                        try { reconciliation.ActionDate = DateTime.Now; } catch { }
+                        try { reconciliation.ActionDate = Clock.Now; } catch { }
                         modified = true; return true;
                     });
                 }
@@ -242,7 +250,7 @@ namespace RecoTool.Services.Rules
                     if (!alreadyPresent)
                     {
                         // Comments is a safe field to append to (never "locked" by user-edit since we only append)
-                        var prefix = $"[{DateTime.Now:yyyy-MM-dd HH:mm}] {currentUser}: ";
+                        var prefix = $"[{Clock.Now:yyyy-MM-dd HH:mm}] {currentUser}: ";
                         var msg = prefix + rulePattern;
                         if (string.IsNullOrWhiteSpace(reconciliation.Comments))
                             reconciliation.Comments = msg;
@@ -258,7 +266,7 @@ namespace RecoTool.Services.Rules
             if (modified)
             {
                 reconciliation.LastRuleAppliedId = rule.RuleId;
-                reconciliation.LastRuleAppliedAt = DateTime.UtcNow;
+                reconciliation.LastRuleAppliedAt = Clock.UtcNow;
             }
 
             // --- Diagnostic: annotate Comments when the rule was partially suppressed by user-edit lock ---
@@ -271,7 +279,7 @@ namespace RecoTool.Services.Rules
                                        && reconciliation.Comments.IndexOf(note, StringComparison.Ordinal) >= 0;
                     if (!noteAlready)
                     {
-                        var prefix = $"[{DateTime.Now:yyyy-MM-dd HH:mm}] {currentUser}: ";
+                        var prefix = $"[{Clock.Now:yyyy-MM-dd HH:mm}] {currentUser}: ";
                         var line = prefix + note;
                         reconciliation.Comments = string.IsNullOrWhiteSpace(reconciliation.Comments)
                             ? line
@@ -370,7 +378,7 @@ namespace RecoTool.Services.Rules
             if (result?.Rule == null || reco == null) return list;
 
             var ruleId = result.Rule.RuleId ?? "(unnamed)";
-            var now = DateTime.UtcNow;
+            var now = Clock.UtcNow;
 
             void Add(string field, string oldVal, string newVal)
             {

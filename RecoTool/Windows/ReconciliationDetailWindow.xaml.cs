@@ -21,12 +21,46 @@ namespace RecoTool.Windows
     /// </summary>
     public partial class ReconciliationDetailWindow : Window, INotifyPropertyChanged
     {
-        private readonly ReconciliationViewData _item;
-        private readonly List<ReconciliationViewData> _all;
-        private readonly ReconciliationService _reconciliationService;
-        private readonly OfflineFirstService _offlineFirstService;
+        // Note: not readonly because InitCore (private helper called from both
+        // ctors) needs to assign them. Conceptually still init-once.
+        private ReconciliationViewData _item;
+        private List<ReconciliationViewData> _all;
+        private ReconciliationService _reconciliationService;
+        private OfflineFirstService _offlineFirstService;
         private Reconciliation _reconciliation;
         private bool _autoSearched;
+
+        /// <summary>
+        /// Set of reconciliation IDs that this dialog has modified during its lifetime. Populated
+        /// by every successful save path (link, unlink, NOT IN DWINGS, full save). The parent
+        /// <c>ReconciliationView</c> reads this after <c>DialogResult == true</c> to drive
+        /// <c>RefreshRowsAsync</c> instead of a full grid reload, preserving scroll position and
+        /// avoiding the 2-3s round-trip of the full enrichment pipeline.
+        /// <para>
+        /// Null/empty means "I don't know which rows changed — do a full refresh" (defensive
+        /// fallback, not expected in normal flows).
+        /// </para>
+        /// </summary>
+        public IReadOnlyList<string> AffectedRowIds { get; private set; }
+
+        /// <summary>
+        /// Records the given reconciliation IDs into <see cref="AffectedRowIds"/>, merging with
+        /// any prior entries so multiple saves in the same dialog session accumulate. Whitespace
+        /// and duplicate IDs are filtered out (case-insensitive).
+        /// </summary>
+        private void RecordAffectedRows(params string[] ids)
+        {
+            if (ids == null || ids.Length == 0) return;
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (AffectedRowIds != null)
+            {
+                foreach (var prev in AffectedRowIds)
+                    if (!string.IsNullOrWhiteSpace(prev)) set.Add(prev);
+            }
+            foreach (var id in ids)
+                if (!string.IsNullOrWhiteSpace(id)) set.Add(id);
+            AffectedRowIds = set.ToList();
+        }
 
         /// <summary>
         /// Sentinel value written into <c>DWINGS_GuaranteeID</c>, <c>DWINGS_InvoiceID</c> and
@@ -249,6 +283,21 @@ namespace RecoTool.Windows
             ReconciliationService reconciliationService,
             OfflineFirstService offlineFirstService)
         {
+            InitCore(item, all, reconciliationService, offlineFirstService, runLegacyLoad: true);
+        }
+
+        /// <summary>
+        /// Shared init for both ctors. <paramref name="runLegacyLoad"/> = false
+        /// when a VM is supplied (the VM does its own LoadAsync) so we don't
+        /// run two parallel loaders against the same row.
+        /// </summary>
+        private void InitCore(
+            ReconciliationViewData item,
+            IEnumerable<ReconciliationViewData> all,
+            ReconciliationService reconciliationService,
+            OfflineFirstService offlineFirstService,
+            bool runLegacyLoad)
+        {
             InitializeComponent();
             DataContext = this;
             _item = item;
@@ -259,9 +308,60 @@ namespace RecoTool.Windows
             PopulateHeader();
             PopulateTopDetails();
             PopulateReferentialOptions();
-            _ = LoadReconciliationAsync();
+            if (runLegacyLoad)
+            {
+                _ = LoadReconciliationAsync();
+            }
             // Initial badge state (may be refined once reconciliation is loaded)
             UpdateLinkStatusBadge();
+        }
+
+        private RecoTool.ViewModels.ReconciliationDetailViewModel _vm;
+
+        /// <summary>
+        /// MVVM constructor. The VM owns the reconciliation edit state
+        /// (SelectedActionId / SelectedKPIId / etc.) and exposes Save/Cancel/Unlink
+        /// commands. SaveCompleted/CancelRequested bridge to DialogResult so
+        /// callers using ShowDialog() get the expected result.
+        /// <para>
+        /// Crucially this ctor does NOT chain to the legacy ctor — it calls
+        /// <see cref="InitCore"/> with <c>runLegacyLoad: false</c> so only the
+        /// VM's <c>LoadAsync</c> runs (no duplicate load against the same row).
+        /// </para>
+        /// </summary>
+        public ReconciliationDetailWindow(RecoTool.ViewModels.ReconciliationDetailViewModel vm,
+                                          ReconciliationViewData item,
+                                          IEnumerable<ReconciliationViewData> all,
+                                          ReconciliationService reconciliationService,
+                                          OfflineFirstService offlineFirstService)
+        {
+            if (vm == null) throw new ArgumentNullException(nameof(vm));
+            InitCore(item, all, reconciliationService, offlineFirstService, runLegacyLoad: false);
+            _vm = vm;
+            DataContext = _vm;
+            // Kick the VM-driven load (fire-and-forget; the VM owns its own busy state).
+            try
+            {
+                if (_vm.LoadCommand is RecoTool.ViewModels.AsyncRelayCommand asyncLoad
+                    && asyncLoad.CanExecute(null))
+                {
+                    _ = asyncLoad.ExecuteAsync(null);
+                }
+            }
+            catch { /* VM may be in a state where load isn't executable yet */ }
+            _vm.SaveCompleted += (_, ok) => Dispatcher.Invoke(() =>
+            {
+                // MVVM path: when the VM-driven save succeeds, record the current row's ID so
+                // the parent uses the fast RefreshRowsAsync path instead of a full reload.
+                if (ok) RecordAffectedRows(_item?.ID);
+                try { DialogResult = ok; } catch { }
+                if (ok) Close();
+            });
+            _vm.CancelRequested += (_, __) => Dispatcher.Invoke(() =>
+            {
+                try { DialogResult = false; } catch { }
+                Close();
+            });
         }
 
         private void PopulateHeader()
@@ -730,11 +830,11 @@ namespace RecoTool.Windows
                 reco.RiskyItem = false;
                 reco.ReasonNonRisky = (int)Risky.NotTFSC;
                 reco.ActionStatus = true;          // DONE
-                reco.ActionDate = DateTime.Now;
+                reco.ActionDate = BaseEntity.Clock.Now;
 
                 // Append the tracking marker once (idempotent if user clicks twice)
                 var who = string.IsNullOrWhiteSpace(Environment.UserName) ? "?" : Environment.UserName;
-                var stamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+                var stamp = BaseEntity.Clock.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
                 var marker = $"[NOT IN DWINGS] marked by {who} on {stamp}";
                 if (string.IsNullOrWhiteSpace(reco.Comments))
                 {
@@ -780,6 +880,10 @@ namespace RecoTool.Windows
                 // Refresh editor controls that may already be bound to the old values
                 try { if (CommentTextBox != null) CommentTextBox.Text = reco.Comments; } catch { }
                 UpdateLinkStatusBadge();
+
+                // Tell the parent which row(s) changed so it can run RefreshRowsAsync instead
+                // of a full reload. Only this row is affected by the "NOT IN DWINGS" flow.
+                RecordAffectedRows(_item?.ID);
 
                 // Signal the parent view that data was modified so it refreshes the row.
                 try { this.DialogResult = true; } catch { }
@@ -1241,12 +1345,32 @@ namespace RecoTool.Windows
                     _item.DWINGS_BGPMT = null;
                 }
 
-                await _reconciliationService.SaveReconciliationAsync(reco);
+                // Save WITHOUT auto-applying rules — we'll apply them explicitly below with
+                // the "Linking" edited-field hint so that rules gated by TriggerOnField="Linking"
+                // (e.g. "Linking - Grouped Balance Zero") actually fire. The default save path
+                // doesn't propagate any edited-field hint, so those rules never run from here,
+                // leaving the linked counterpart (e.g. the pivot) without its expected derived
+                // outputs.
+                await _reconciliationService.SaveReconciliationAsync(reco, applyRulesOnEdit: false);
+                try
+                {
+                    await _reconciliationService.ApplyRulesNowAsync(new[] { reco.ID }, editedField: "Linking");
+                }
+                catch (Exception ruleEx)
+                {
+                    // Rules running is best-effort: the save above already persisted the link.
+                    System.Diagnostics.Debug.WriteLine($"[LinkDwings] ApplyRulesNowAsync(Linking) failed: {ruleEx.Message}");
+                }
                 try { _item.RefreshDwingsData(); } catch { }
                 _reconciliation = reco;
                 StatusText.Text = "Linked and saved.";
                 UpdateLinkStatusBadge();
-                
+
+                // Only this row is touched by the linking flow itself. ApplyRulesNowAsync was
+                // invoked with a single-element list above (new[] { reco.ID }), so rules can't
+                // mutate any other row from here either — parent only needs to refresh this ID.
+                RecordAffectedRows(reco.ID);
+
                 // Signal that data was modified (will trigger refresh in ReconciliationView)
                 this.DialogResult = true;
                 
@@ -1452,6 +1576,10 @@ namespace RecoTool.Windows
                 await _reconciliationService.SaveReconciliationAsync(reco);
                 _reconciliation = reco;
 
+                // SaveReconciliationAsync (with default applyRulesOnEdit=true) may run rules but
+                // they only target this row's ID — no fan-out to other rows.
+                RecordAffectedRows(reco.ID);
+
                 // Signal success to the caller and close the dialog
                 this.DialogResult = true;
             }
@@ -1491,10 +1619,13 @@ namespace RecoTool.Windows
                 await _reconciliationService.SaveReconciliationAsync(reco);
                 try { _item.RefreshDwingsData(); } catch { }
                 _reconciliation = reco;
-                
+
+                // Only the current row is affected by unlink.
+                RecordAffectedRows(reco.ID);
+
                 // Signal that data was modified (will trigger refresh in ReconciliationView)
                 this.DialogResult = true;
-                
+
                 // Close the window to force refresh
                 this.Close();
             }

@@ -354,7 +354,7 @@ namespace RecoTool.Windows
                 Progress.Maximum = grouped.Count == 0 ? 1 : grouped.Count;
 
                 var rowsUpdated = 0;
-                var nowUtc = DateTime.UtcNow;
+                var nowUtc = BaseEntity.Clock.UtcNow;
                 var triggerActionId = (int)ActionType.Trigger;
                 var paidNotReconciledKpi = (int)KPIType.PaidButNotReconciled;
                 var commissionsCollectedReason = (int)Risky.CollectedCommissionsCredit67P;

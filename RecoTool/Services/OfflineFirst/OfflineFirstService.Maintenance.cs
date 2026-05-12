@@ -4,6 +4,7 @@ using System.Data.OleDb;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using RecoTool.Infrastructure.Time;
 
 namespace RecoTool.Services
 {
@@ -68,8 +69,9 @@ namespace RecoTool.Services
         /// </summary>
         /// <param name="directory">Directory to scan (network share or local data directory).</param>
         /// <param name="minAge">Minimum age before a temp file is considered orphaned.</param>
+        /// <param name="clock">Optional clock for "now" reference (defaults to <see cref="SystemClock.Instance"/>).</param>
         /// <returns>Number of files actually deleted.</returns>
-        public static async Task<int> PurgeOrphanedTempFilesAsync(string directory, TimeSpan minAge)
+        public static async Task<int> PurgeOrphanedTempFilesAsync(string directory, TimeSpan minAge, IClock clock = null)
         {
             if (string.IsNullOrWhiteSpace(directory)) return 0;
             if (!Directory.Exists(directory)) return 0;
@@ -83,7 +85,7 @@ namespace RecoTool.Services
                 "*.compact_*.accdb" // Compact & Repair scratch files
             };
 
-            var cutoffUtc = DateTime.UtcNow - minAge;
+            var cutoffUtc = (clock ?? SystemClock.Instance).UtcNow - minAge;
             int deleted = 0;
 
             await Task.Run(() =>

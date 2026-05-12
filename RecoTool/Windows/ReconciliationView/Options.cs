@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
+using RecoTool.Domain.Repositories;
 using RecoTool.UI.Models;
 using RecoTool.Models;
 using RecoTool.Services;
@@ -16,6 +18,12 @@ namespace RecoTool.Windows
     {
         // Thin wrapper for cached option lists
         private OptionsService _optionsService;
+        // Repository for T_Ref_User_Fields (Vague 6 first consumer migration).
+        // Lazily resolved from App.ServiceProvider in EnsureUserFieldsRepository(),
+        // because the DI ctor lives in another partial (ReconciliationView.xaml.cs)
+        // which the migration spec forbids us from touching.
+        private IUserFieldsRepository _userFieldsRepo;
+        private bool _userFieldsRepoResolved;
         // Options for referential ComboBoxes
         private ObservableCollection<OptionItem> _actionOptions = new ObservableCollection<OptionItem>();
         private ObservableCollection<OptionItem> _kpiOptions = new ObservableCollection<OptionItem>();
@@ -42,6 +50,71 @@ namespace RecoTool.Windows
 
         // TransactionType options are now owned by the ViewModel (VM.TransactionTypeOptions)
 
+        // Service locator removal: _optionsService is hydrated ONCE in the DI ctor
+        // (ReconciliationView(..)) via App.ServiceProvider. Loaders below call this
+        // helper, which only fabricates a local fallback if DI didn't provide one —
+        // we never reach into App.ServiceProvider here.
+        private void EnsureOptionsService()
+        {
+            if (_optionsService != null) return;
+            if (_reconciliationService == null) return;
+            _optionsService = new OptionsService(
+                _reconciliationService,
+                new ReferentialService(_offlineFirstService, _reconciliationService?.CurrentUser),
+                new LookupService(_offlineFirstService));
+        }
+
+        // Resolve IUserFieldsRepository ONCE from App.ServiceProvider and cache it.
+        // If DI is unavailable or the registration is missing, the field stays null
+        // and the legacy AllUserFields path (i.e. _offlineFirstService.UserFields) is used.
+        private void EnsureUserFieldsRepository()
+        {
+            if (_userFieldsRepoResolved) return;
+            _userFieldsRepoResolved = true;
+            try
+            {
+                var sp = App.ServiceProvider;
+                if (sp != null)
+                {
+                    _userFieldsRepo = sp.GetService<IUserFieldsRepository>();
+                }
+            }
+            catch { _userFieldsRepo = null; }
+        }
+
+        // Fetches the user-field list, preferring IUserFieldsRepository when available.
+        //
+        // PopulateReferentialOptions() is synchronous and is called from an async
+        // initializer in DataLoading.cs (InitializeFromServices). The migration spec
+        // forbids us from changing the caller, so we cannot await here. The repo call
+        // is bridged synchronously: in the current Infrastructure implementation the
+        // repo is backed by the same in-memory cache as _offlineFirstService.UserFields
+        // (no network/OleDb hit during normal init), so blocking is acceptable.
+        //
+        // On ANY failure we fall back to the legacy AllUserFields path so behavior is
+        // preserved bit-for-bit if DI/repo is misconfigured.
+        // TODO (post-migration): expose an async PopulateReferentialOptionsAsync and
+        //   update DataLoading.cs to await it; then drop this sync bridge.
+        private IReadOnlyList<UserField> GetUserFieldsForOptions()
+        {
+            EnsureUserFieldsRepository();
+            if (_userFieldsRepo != null)
+            {
+                try
+                {
+                    return _userFieldsRepo.GetAllAsync(CancellationToken.None)
+                                          .ConfigureAwait(false)
+                                          .GetAwaiter()
+                                          .GetResult();
+                }
+                catch
+                {
+                    // Fall through to the legacy cached path.
+                }
+            }
+            return AllUserFields;
+        }
+
         // Build Action/KPI/Incident user-field referential options
         private void PopulateReferentialOptions()
         {
@@ -51,7 +124,9 @@ namespace RecoTool.Windows
                 KpiOptions.Clear();
                 IncidentTypeOptions.Clear();
 
-                var all = AllUserFields ?? Array.Empty<UserField>();
+                // Vague 6 migration: prefer IUserFieldsRepository (T_Ref_User_Fields)
+                // with graceful fallback to _offlineFirstService.UserFields via AllUserFields.
+                var all = GetUserFieldsForOptions() ?? Array.Empty<UserField>();
 
                 foreach (var uf in all.Where(u => string.Equals(u.USR_Category, "Action", StringComparison.OrdinalIgnoreCase))
                                        .OrderBy(u => u.USR_FieldName))
@@ -80,14 +155,8 @@ namespace RecoTool.Windows
             try
             {
                 if (_reconciliationService == null) return;
-                if (_optionsService == null)
-                {
-                    _optionsService = App.ServiceProvider?.GetService<OptionsService>()
-                        ?? new OptionsService(
-                            _reconciliationService,
-                            new ReferentialService(_offlineFirstService, _reconciliationService?.CurrentUser),
-                            new LookupService(_offlineFirstService));
-                }
+                EnsureOptionsService();
+                if (_optionsService == null) return;
                 var users = await _optionsService.GetUsersAsync();
                 AssigneeOptions.Clear();
                 AssigneeOptions.Add(new UserOption { Id = null, Name = string.Empty });
@@ -105,14 +174,8 @@ namespace RecoTool.Windows
             try
             {
                 if (_reconciliationService == null) return;
-                if (_optionsService == null)
-                {
-                    _optionsService = App.ServiceProvider?.GetService<OptionsService>()
-                        ?? new OptionsService(
-                            _reconciliationService,
-                            new ReferentialService(_offlineFirstService, _reconciliationService?.CurrentUser),
-                            new LookupService(_offlineFirstService));
-                }
+                EnsureOptionsService();
+                if (_optionsService == null) return;
                 var countryId = _currentCountryId ?? _offlineFirstService?.CurrentCountry?.CNT_Id;
                 CurrencyOptions.Clear();
                 CurrencyOptions.Add(string.Empty);
@@ -132,14 +195,8 @@ namespace RecoTool.Windows
             try
             {
                 if (_reconciliationService == null) return;
-                if (_optionsService == null)
-                {
-                    _optionsService = App.ServiceProvider?.GetService<OptionsService>()
-                        ?? new OptionsService(
-                            _reconciliationService,
-                            new ReferentialService(_offlineFirstService, _reconciliationService?.CurrentUser),
-                            new LookupService(_offlineFirstService));
-                }
+                EnsureOptionsService();
+                if (_optionsService == null) return;
                 GuaranteeStatusOptions.Clear();
                 GuaranteeStatusOptions.Add(string.Empty);
                 var list = await _optionsService.GetGuaranteeStatusesAsync();
@@ -157,14 +214,8 @@ namespace RecoTool.Windows
             try
             {
                 if (_reconciliationService == null) return;
-                if (_optionsService == null)
-                {
-                    _optionsService = App.ServiceProvider?.GetService<OptionsService>()
-                        ?? new OptionsService(
-                            _reconciliationService,
-                            new ReferentialService(_offlineFirstService, _reconciliationService?.CurrentUser),
-                            new LookupService(_offlineFirstService));
-                }
+                EnsureOptionsService();
+                if (_optionsService == null) return;
                 GuaranteeTypeOptions.Clear();
                 GuaranteeTypeOptions.Add(string.Empty);
                 var raw = await _optionsService.GetGuaranteeTypesAsync();

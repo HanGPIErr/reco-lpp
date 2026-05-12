@@ -1,10 +1,12 @@
-﻿using RecoTool.Utils;
+﻿using RecoTool.Infrastructure.Time;
+using RecoTool.Utils;
 using System;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -18,11 +20,13 @@ namespace RecoTool.API
         private HttpClient _httpClient;
         private CookieContainer _cookieContainer;
         private DateTime _authenticatedTime;
+        private readonly IClock _clock;
 
         private readonly RequestCache _cache = new RequestCache();
 
-        public SpiritGene()
+        public SpiritGene(IClock clock = null)
         {
+            _clock = clock ?? SystemClock.Instance;
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
             _httpClient = CreateHttpClient();
         }
@@ -67,7 +71,7 @@ namespace RecoTool.API
         /// Authentification utilisant une Smartcard Windows et récupération automatique du cookie.
         /// Recrée systématiquement le HttpClient pour purger l'état SSL/Schannel obsolète.
         /// </summary>
-        public async Task AuthenticateAsync()
+        public async Task AuthenticateAsync(CancellationToken ct = default)
         {
             var old = _httpClient;
             _httpClient = CreateHttpClient();
@@ -84,10 +88,11 @@ namespace RecoTool.API
 
             try
             {
-                var response = await _httpClient.SendAsync(request);
+                var response = await _httpClient.SendAsync(request, ct);
                 response.EnsureSuccessStatusCode();
-                _authenticatedTime = DateTime.Now;
+                _authenticatedTime = _clock.Now;
             }
+            catch (OperationCanceledException) { _authenticatedTime = DateTime.MinValue; throw; }
             catch (Exception ex)
             {
                 _authenticatedTime = DateTime.MinValue;
@@ -96,28 +101,28 @@ namespace RecoTool.API
             }
         }
 
-        private async Task EnsureAuthenticated()
+        private async Task EnsureAuthenticated(CancellationToken ct = default)
         {
             if (_authenticatedTime == DateTime.MinValue ||
-                (DateTime.Now - _authenticatedTime).TotalMinutes >= SESSION_TIMEOUT_MINUTES)
-                await AuthenticateAsync();
+                (_clock.Now - _authenticatedTime).TotalMinutes >= SESSION_TIMEOUT_MINUTES)
+                await AuthenticateAsync(ct);
         }
 
         /// <summary>
         /// Exécute un appel API avec un retry automatique en cas d'erreur SSL/réseau/session :
         /// recrée le client HTTP, se ré-authentifie, puis renvoie une seule fois.
         /// </summary>
-        private async Task<string> ExecuteApiAsync(Func<HttpRequestMessage> requestFactory, string cacheKey = null)
+        private async Task<string> ExecuteApiAsync(Func<HttpRequestMessage> requestFactory, string cacheKey = null, CancellationToken ct = default)
         {
             if (cacheKey != null && _cache.TryGet(cacheKey, out var cached))
                 return cached;
 
-            await EnsureAuthenticated();
+            await EnsureAuthenticated(ct);
 
             async Task<string> SendOnce()
             {
                 var req = requestFactory();
-                var response = await _httpClient.SendAsync(req);
+                var response = await _httpClient.SendAsync(req, ct);
                 if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
                     throw new UnauthorizedAccessException($"Session expired (HTTP {(int)response.StatusCode})");
                 response.EnsureSuccessStatusCode();
@@ -129,6 +134,7 @@ namespace RecoTool.API
             {
                 json = await SendOnce();
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex) when (
                 ex is HttpRequestException ||
                 ex is UnauthorizedAccessException ||
@@ -137,11 +143,12 @@ namespace RecoTool.API
             {
                 System.Diagnostics.Debug.WriteLine($"[SpiritGene] Connection error, retrying after re-auth: {ex.Message}");
                 _authenticatedTime = DateTime.MinValue;
-                await AuthenticateAsync();
+                await AuthenticateAsync(ct);
                 try
                 {
                     json = await SendOnce();
                 }
+                catch (OperationCanceledException) { throw; }
                 catch (Exception retryEx)
                 {
                     System.Diagnostics.Debug.WriteLine($"[SpiritGene] Retry failed: {retryEx.Message}");
@@ -156,7 +163,7 @@ namespace RecoTool.API
             return json;
         }
 
-        public async Task<SpiritGeneUser.FoncOut101> GetUserInfo()
+        public async Task<SpiritGeneUser.FoncOut101> GetUserInfo(CancellationToken ct = default)
         {
             var body = "{\"no_version_1\":1}";
             var cacheKey = $"POST:/spirit-server/AVPW1/recup_user.1.0.o_recup_user:{body}";
@@ -169,14 +176,14 @@ namespace RecoTool.API
                 };
                 AddApiHeaders(req);
                 return req;
-            }, cacheKey);
+            }, cacheKey, ct);
 
             if (json == null) return null;
             try { return JsonSerializer.Deserialize<SpiritGeneUser.User>(json).Result.FoncOut1.FoncOut101; }
             catch { return null; }
         }
 
-        public async Task<SpiritGeneTransactionsOutput.FoncOut101> GetTransactions(DateTime DateDebut, DateTime DateFin, string BIC, decimal MontantMin, decimal MontantMax, string Sens = "R")
+        public async Task<SpiritGeneTransactionsOutput.FoncOut101> GetTransactions(DateTime DateDebut, DateTime DateFin, string BIC, decimal MontantMin, decimal MontantMax, string Sens = "R", CancellationToken ct = default)
         {
             var body = SpiritGeneTransactionsInput.CreateTransactionBody(DateDebut, DateFin, BIC, (int)(MontantMin * 10000), (int)(MontantMax * 10000), Sens);
             var cacheKey = $"POST:/spirit-server/AVPW1/list_operation.1.0.o_list_ope:{body}";
@@ -189,14 +196,14 @@ namespace RecoTool.API
                 };
                 AddApiHeaders(req);
                 return req;
-            }, cacheKey);
+            }, cacheKey, ct);
 
             if (json == null) return null;
             try { return JsonSerializer.Deserialize<SpiritGeneTransactionsOutput.Output>(json).Result.FoncOut1.FoncOut101; }
             catch { return null; }
         }
 
-        public async Task<SpiritGeneTransactionDetailOutput.GDetOpe> GetTransactionDetails(string TransactionId, string MsgId, string Sens = "R")
+        public async Task<SpiritGeneTransactionDetailOutput.GDetOpe> GetTransactionDetails(string TransactionId, string MsgId, string Sens = "R", CancellationToken ct = default)
         {
             var body = SpiritGeneTransactionDetailInput.CreateTransactionBody(TransactionId, MsgId, Sens);
             var cacheKey = $"POST:/spirit-server/AVPW1/detail_ope_2.1.0.o_detail_ope:{body}";
@@ -209,7 +216,7 @@ namespace RecoTool.API
                 };
                 AddApiHeaders(req);
                 return req;
-            }, cacheKey);
+            }, cacheKey, ct);
 
             if (json == null) return null;
             try { return JsonSerializer.Deserialize<SpiritGeneTransactionDetailOutput.Root>(json).Result.FoncOut1.FoncOut101.GDetOpe; }

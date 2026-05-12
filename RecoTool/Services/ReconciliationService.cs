@@ -20,11 +20,15 @@ using System.Threading;
 using System.Threading.Tasks;
 using RecoTool.Services.DTOs;
 using RecoTool.Domain.Filters;
+using RecoTool.Domain.Repositories;
 using RecoTool.Services.Queries;
 using RecoTool.Services.Rules;
 using RecoTool.Services.Helpers;
 using RecoTool.Infrastructure.Logging;
+using RecoTool.Infrastructure.Time;
 using RecoTool.Services.Cache;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace RecoTool.Services
 {
@@ -32,14 +36,17 @@ namespace RecoTool.Services
     /// Service principal de réconciliation
     /// Gère les opérations de réconciliation, règles automatiques, Actions/KPI
     /// </summary>
-    public partial class ReconciliationService
+    public partial class ReconciliationService : IReconciliationService
     {
         private readonly string _connectionString;
         private readonly string _currentUser;
         private readonly Dictionary<string, Country> _countries;
         private readonly OfflineFirstService _offlineFirstService;
         private readonly Infrastructure.DataAccess.OleDbQueryExecutor _queryExecutor;
-        private DwingsService _dwingsService;
+        private readonly IClock _clock;
+        private readonly ILogger<ReconciliationService> _logger;
+        private readonly IDataAmbreRepository _ambreRepo;
+        private IDwingsService _dwingsService;
         private RulesEngine _rulesEngine;
         private Rules.RuleProposalRepository _proposalRepository;
 
@@ -59,7 +66,11 @@ namespace RecoTool.Services
                         // Fire-and-forget table creation
                         _ = _proposalRepository.EnsureTableAsync();
                     }
-                    catch { _proposalRepository = null; }
+                    catch (Exception ex)
+                    {
+                        _proposalRepository = null;
+                        _logger.LogWarning(ex, "Failed to initialize RuleProposalRepository (table creation or ctor failed)");
+                    }
                 }
                 return _proposalRepository;
             }
@@ -83,13 +94,15 @@ namespace RecoTool.Services
         /// Uses the same base query as GetReconciliationCountAsync and groups by CCY.
         /// OPTIMIZED: Cached based on countryId + filterSql (AMBRE data rarely changes)
         /// </summary>
-        public async Task<Dictionary<string, double>> GetCurrencySumsAsync(string countryId, string filterSql = null)
+        public async Task<Dictionary<string, double>> GetCurrencySumsAsync(string countryId, string filterSql = null, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             var cacheKey = $"CurrencySums_{countryId}_{NormalizeFilterForCache(filterSql)}";
             return await CacheService.Instance.GetOrLoadAsync(cacheKey, async () =>
             {
                 try
                 {
+                    ct.ThrowIfCancellationRequested();
                     var (dwEsc, ambreEsc) = GetEscapedPaths(countryId);
                     string query = ReconciliationViewQueryBuilder.Build(dwEsc, ambreEsc, filterSql);
                     query += " AND a.DeleteDate IS NULL AND (r.DeleteDate IS NULL)";
@@ -109,8 +122,9 @@ namespace RecoTool.Services
                     }
                     return result;
                 }
-                catch
+                catch (Exception ex)
                 {
+                    _logger.LogWarning(ex, "Failed to compute currency sums for country {CountryId}", countryId);
                     return new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
                 }
             }, TimeSpan.FromHours(24)).ConfigureAwait(false);
@@ -118,11 +132,14 @@ namespace RecoTool.Services
 
         private class CurrencySumRow { public string CCY { get; set; } public double Amount { get; set; } }
 
-        public ReconciliationService(string connectionString, string currentUser, IEnumerable<Country> countries)
+        public ReconciliationService(string connectionString, string currentUser, IEnumerable<Country> countries, IClock clock = null, ILogger<ReconciliationService> logger = null, IDataAmbreRepository ambreRepo = null)
         {
             _connectionString = connectionString;
             _currentUser = currentUser;
             _countries = countries?.ToDictionary(c => c.CNT_Id, c => c) ?? new Dictionary<string, Country>();
+            _clock = clock ?? SystemClock.Instance;
+            _logger = logger ?? NullLogger<ReconciliationService>.Instance;
+            _ambreRepo = ambreRepo; // Optional — when injected, GetAmbreDataAsync delegates to it; otherwise legacy OleDb path is used.
             if (!string.IsNullOrWhiteSpace(connectionString))
                 _queryExecutor = new Infrastructure.DataAccess.OleDbQueryExecutor(connectionString);
         }
@@ -158,11 +175,16 @@ namespace RecoTool.Services
             return null;
         }
 
-        public ReconciliationService(string connectionString, string currentUser, IEnumerable<Country> countries, OfflineFirstService offlineFirstService)
-            : this(connectionString, currentUser, countries)
+        public ReconciliationService(string connectionString, string currentUser, IEnumerable<Country> countries, OfflineFirstService offlineFirstService, IClock clock = null, ILogger<ReconciliationService> logger = null, IDataAmbreRepository ambreRepo = null)
+            : this(connectionString, currentUser, countries, clock, logger, ambreRepo)
         {
             _offlineFirstService = offlineFirstService;
-            try { _rulesEngine = new RulesEngine(_offlineFirstService); } catch { _rulesEngine = null; }
+            try { _rulesEngine = new RulesEngine(_offlineFirstService); }
+            catch (Exception ex)
+            {
+                _rulesEngine = null;
+                _logger.LogWarning(ex, "Failed to initialize RulesEngine in ReconciliationService ctor");
+            }
         }
 
         public string CurrentUser => _currentUser;
@@ -192,7 +214,10 @@ namespace RecoTool.Services
             {
                 _recoViewDataCache.Clear();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                LogHelper.WriteAction("Warning", $"InvalidateReconciliationViewCache: clearing materialized cache failed: {ex.Message}");
+            }
             try
             {
                 foreach (var key in _recoViewCache.Keys)
@@ -200,8 +225,11 @@ namespace RecoTool.Services
                     _recoViewCache.TryRemove(key, out _);
                 }
             }
-            catch { }
-            
+            catch (Exception ex)
+            {
+                LogHelper.WriteAction("Warning", $"InvalidateReconciliationViewCache: clearing task cache failed: {ex.Message}");
+            }
+
             // OPTIMIZATION: Invalidate CacheService entries for counts and sums
             try
             {
@@ -209,7 +237,10 @@ namespace RecoTool.Services
                 CacheService.Instance.InvalidateByPrefix("RecoCount_");
                 CacheService.Instance.InvalidateByPrefix("CurrencySums_");
             }
-            catch { }
+            catch (Exception ex)
+            {
+                LogHelper.WriteAction("Warning", $"InvalidateReconciliationViewCache: clearing CacheService entries failed: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -229,7 +260,10 @@ namespace RecoTool.Services
                         _recoViewDataCache.TryRemove(kv.Key, out _);
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                LogHelper.WriteAction("Warning", $"InvalidateReconciliationViewCache({countryId}): clearing materialized cache failed: {ex.Message}");
+            }
             try
             {
                 var prefix = countryId + "|";
@@ -239,8 +273,11 @@ namespace RecoTool.Services
                         _recoViewCache.TryRemove(kv.Key, out _);
                 }
             }
-            catch { }
-            
+            catch (Exception ex)
+            {
+                LogHelper.WriteAction("Warning", $"InvalidateReconciliationViewCache({countryId}): clearing task cache failed: {ex.Message}");
+            }
+
             // OPTIMIZATION: Invalidate CacheService entries for this country
             try
             {
@@ -252,7 +289,10 @@ namespace RecoTool.Services
                 CacheService.Instance.Invalidate($"DWINGS_Invoices_{countryId}");
                 CacheService.Instance.Invalidate($"DWINGS_Guarantees_{countryId}");
             }
-            catch { }
+            catch (Exception ex)
+            {
+                LogHelper.WriteAction("Warning", $"InvalidateReconciliationViewCache({countryId}): clearing CacheService entries failed: {ex.Message}");
+            }
         }
 
         
@@ -297,6 +337,10 @@ namespace RecoTool.Services
             return new DwingsOverrideScope(overrideData);
         }
 
+        // NOTE: IReconciliationService.GetDwingsInvoicesAsync/GetDwingsGuaranteesAsync interface
+        // surface does not yet accept CancellationToken — keeping the existing signatures
+        // unchanged to avoid breaking the interface contract here.
+        // TODO: add CT in IReconciliationService.GetDwingsInvoicesAsync / GetDwingsGuaranteesAsync interface
         public async Task<IReadOnlyList<DwingsInvoiceDto>> GetDwingsInvoicesAsync()
         {
             // Simulation bypass: user-provided snapshot, NOT cached anywhere.
@@ -328,11 +372,28 @@ namespace RecoTool.Services
         }
 
         /// <summary>
-        /// Récupère toutes les données Ambre pour un pays
+        /// Récupère toutes les données Ambre pour un pays.
+        /// <para>
+        /// Lorsque <see cref="IDataAmbreRepository"/> est injecté (DI / tests), délègue à
+        /// <see cref="IDataAmbreRepository.GetAllAsync"/> et matérialise en <see cref="List{T}"/>
+        /// pour préserver la signature publique. Sinon, conserve le chemin OleDb historique.
+        /// </para>
         /// </summary>
+        // NOTE: IReconciliationService.GetAmbreDataAsync interface does not yet accept CancellationToken.
+        // TODO: add CT in IReconciliationService.GetAmbreDataAsync interface
         public async Task<List<DataAmbre>> GetAmbreDataAsync(string countryId, bool includeDeleted = false)
         {
-            // Ambre est désormais dans une base séparée par pays
+            // Repository path — preferred when injected. The repo abstracts OleDb access
+            // and is the only path exercised by unit tests (via InMemoryDataAmbreRepository).
+            if (_ambreRepo != null)
+            {
+                var rows = await _ambreRepo.GetAllAsync(countryId, includeDeleted).ConfigureAwait(false);
+                // Materialize to List<DataAmbre> to preserve the legacy return type. If the
+                // repo already returns a List<T> (common case), reuse it without copying.
+                return rows as List<DataAmbre> ?? (rows == null ? new List<DataAmbre>(0) : rows.ToList());
+            }
+
+            // Legacy OleDb path — Ambre est désormais dans une base séparée par pays
             var ambrePath = _offlineFirstService?.GetLocalAmbreDatabasePath(countryId);
             if (string.IsNullOrWhiteSpace(ambrePath))
                 throw new InvalidOperationException("Chemin de la base AMBRE introuvable pour le pays courant.");
@@ -349,8 +410,9 @@ namespace RecoTool.Services
         /// <summary>
         /// Récupère uniquement les réconciliations dont l'action est TRIGGER (non supprimées)
         /// </summary>
-        public async Task<List<Reconciliation>> GetTriggerReconciliationsAsync(string countryId)
+        public async Task<List<Reconciliation>> GetTriggerReconciliationsAsync(string countryId, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             // Jointure sur AMBRE identique pour respecter la portée pays, mais seules les colonnes r.* sont nécessaires
             string ambrePath = _offlineFirstService?.GetLocalAmbreDatabasePath(countryId);
             string ambreEsc = string.IsNullOrEmpty(ambrePath) ? null : ambrePath.Replace("'", "''");
@@ -401,9 +463,9 @@ namespace RecoTool.Services
         /// <summary>
         /// Récupère les données jointes Ambre + Réconciliation (Live only - DeleteDate IS NULL)
         /// </summary>
-        public async Task<List<ReconciliationViewData>> GetReconciliationViewAsync(string countryId, string filterSql = null)
+        public async Task<List<ReconciliationViewData>> GetReconciliationViewAsync(string countryId, string filterSql = null, CancellationToken ct = default)
         {
-            return await GetReconciliationViewAsync(countryId, filterSql, includeDeleted: false).ConfigureAwait(false);
+            return await GetReconciliationViewAsync(countryId, filterSql, includeDeleted: false, ct).ConfigureAwait(false);
         }
         
         public List<ReconciliationViewData> TryGetCachedReconciliationView(string countryId, string filterSql, bool includeDeleted = false)
@@ -417,23 +479,25 @@ namespace RecoTool.Services
         /// Récupère les données jointes Ambre + Réconciliation avec option d'inclure les lignes supprimées
         /// Used by HomePage for historical charts (Deletion Delay, New vs Deleted Daily)
         /// </summary>
-        public async Task<List<ReconciliationViewData>> GetReconciliationViewAsync(string countryId, string filterSql, bool includeDeleted)
+        public async Task<List<ReconciliationViewData>> GetReconciliationViewAsync(string countryId, string filterSql, bool includeDeleted, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             // CRITICAL: Always ensure DWINGS caches are initialized for lazy loading
-            await EnsureDwingsCachesInitializedAsync().ConfigureAwait(false);
-            
+            await EnsureDwingsCachesInitializedAsync(ct).ConfigureAwait(false);
+
             var key = $"{countryId ?? string.Empty}|{includeDeleted}|{NormalizeFilterForCache(filterSql)}";
             if (_recoViewCache.TryGetValue(key, out var existing))
             {
                 var cached = await existing.Value.ConfigureAwait(false);
-                
+                ct.ThrowIfCancellationRequested();
+
                 // CRITICAL: Re-apply enrichments for cached data (linking may have been lost)
                 // This ensures DWINGS_InvoiceID, MissingAmount, etc. are always calculated
-                await ReapplyEnrichmentsAsync(cached, countryId).ConfigureAwait(false);
-                
+                await ReapplyEnrichmentsAsync(cached, countryId, ct).ConfigureAwait(false);
+
                 return cached;
             }
-            var lazy = new Lazy<Task<List<ReconciliationViewData>>>(() => BuildReconciliationViewAsyncCore(countryId, filterSql, includeDeleted, key));
+            var lazy = new Lazy<Task<List<ReconciliationViewData>>>(() => BuildReconciliationViewAsyncCore(countryId, filterSql, includeDeleted, key, ct));
             var entry = _recoViewCache.GetOrAdd(key, lazy);
             var result = await entry.Value.ConfigureAwait(false);
             return result;
@@ -444,22 +508,23 @@ namespace RecoTool.Services
         /// Needed because DWINGS caches may have been cleared between cache creation and retrieval
         /// Also used for preloaded data to ensure enrichments are always applied
         /// </summary>
-        public async Task ReapplyEnrichmentsToListAsync(List<ReconciliationViewData> list, string countryId)
+        public async Task ReapplyEnrichmentsToListAsync(List<ReconciliationViewData> list, string countryId, CancellationToken ct = default)
         {
-            await ReapplyEnrichmentsAsync(list, countryId).ConfigureAwait(false);
+            await ReapplyEnrichmentsAsync(list, countryId, ct).ConfigureAwait(false);
         }
-        
+
         /// <summary>
         /// Re-applies critical enrichments to cached data (internal implementation)
         /// Full DWINGS property enrichment is skipped if already done (sampling first row).
         /// Unlinked Receivable BGI retry and MissingAmount recalculation ALWAYS run,
         /// because DWINGS data may have become available since last enrichment.
         /// </summary>
-        private async Task ReapplyEnrichmentsAsync(List<ReconciliationViewData> list, string countryId)
+        private async Task ReapplyEnrichmentsAsync(List<ReconciliationViewData> list, string countryId, CancellationToken ct = default)
         {
             if (list == null || list.Count == 0) return;
+            ct.ThrowIfCancellationRequested();
 
-            await EnsureDwingsCachesInitializedAsync().ConfigureAwait(false);
+            await EnsureDwingsCachesInitializedAsync(ct).ConfigureAwait(false);
 
             bool alreadyEnriched = list.Count > 0 && !string.IsNullOrWhiteSpace(list[0].I_RECEIVER_NAME);
 
@@ -487,7 +552,10 @@ namespace RecoTool.Services
                 // pass so the detail dialog and the Trigger filter see the latest state.
                 ReconciliationViewEnricher.ComputeAndApplyGroupBalances(list);
             }
-            catch { /* best-effort */ }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to re-apply enrichments for country {CountryId} (rows={RowCount})", countryId, list?.Count);
+            }
         }
         
         /// <summary>
@@ -592,9 +660,10 @@ namespace RecoTool.Services
         /// Called before returning cached data to guarantee lazy loading works
         /// Public to allow ReconciliationView to initialize caches for preloaded data
         /// </summary>
-        public async Task EnsureDwingsCachesInitializedAsync()
+        public async Task EnsureDwingsCachesInitializedAsync(CancellationToken ct = default)
         {
             if (_dwingsCachesInitialized) return;
+            ct.ThrowIfCancellationRequested();
 
             lock (_dwingsCacheLock)
             {
@@ -605,6 +674,7 @@ namespace RecoTool.Services
             try
             {
                 var invoices = await GetDwingsInvoicesAsync().ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
                 var guarantees = await GetDwingsGuaranteesAsync().ConfigureAwait(false);
                 ReconciliationViewData.InitializeDwingsCaches(invoices, guarantees);
 
@@ -612,7 +682,10 @@ namespace RecoTool.Services
                 // input lists are immutable and the result is published via volatile.
                 BuildDwingsLookups(invoices, guarantees);
             }
-            catch { /* best-effort */ }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to initialize DWINGS caches/lookups for country {CountryId}", _offlineFirstService?.CurrentCountryId);
+            }
         }
 
         /// <summary>
@@ -662,11 +735,15 @@ namespace RecoTool.Services
                     _dwingsGuaranteesById = new Dictionary<string, DwingsGuaranteeDto>(0, StringComparer.OrdinalIgnoreCase);
                 }
             }
-            catch { /* best-effort */ }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to build DWINGS lookup dictionaries (invoices={InvoiceCount}, guarantees={GuaranteeCount})", invoices?.Count, guarantees?.Count);
+            }
         }
 
-        private async Task<List<ReconciliationViewData>> BuildReconciliationViewAsyncCore(string countryId, string filterSql, bool includeDeleted, string cacheKey)
+        private async Task<List<ReconciliationViewData>> BuildReconciliationViewAsyncCore(string countryId, string filterSql, bool includeDeleted, string cacheKey, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             var swBuild = Stopwatch.StartNew();
             var (dwEsc, ambreEsc) = GetEscapedPaths(countryId);
 
@@ -697,13 +774,14 @@ namespace RecoTool.Services
             query += " ORDER BY a.Operation_Date ASC";
 
             swBuild.Stop();
+            ct.ThrowIfCancellationRequested();
             var swExec = Stopwatch.StartNew();
             var list = await _queryExecutor.QueryAsync<ReconciliationViewData>(query);
 
             // Pre-calculate all DWINGS properties once during load
             try
             {
-                await EnsureDwingsCachesInitializedAsync().ConfigureAwait(false);
+                await EnsureDwingsCachesInitializedAsync(ct).ConfigureAwait(false);
 
                 var invoices = await GetDwingsInvoicesAsync().ConfigureAwait(false);
                 var guarantees = await GetDwingsGuaranteesAsync().ConfigureAwait(false);
@@ -714,7 +792,10 @@ namespace RecoTool.Services
                 // Build lookup dicts ONCE and populate all DWINGS properties per row
                 EnrichRowsWithDwingsProperties(list, invoices, guarantees);
             }
-            catch { /* best-effort enrichment */ }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "DWINGS enrichment failed for country {CountryId} (rows={RowCount})", countryId, list?.Count);
+            }
             
             // Calculate missing amounts for grouped lines (Receivable vs Pivot)
             try
@@ -729,7 +810,10 @@ namespace RecoTool.Services
                 // grids already carry GroupBalance — no need to wait for a manual refresh.
                 ReconciliationViewEnricher.ComputeAndApplyGroupBalances(list);
             }
-            catch { /* best-effort calculation */ }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Missing-amounts / group-balance calculation failed for country {CountryId}", countryId);
+            }
 
             // Compute transient UI flag: IsNewlyAdded (Ambre import date is today)
             try
@@ -741,7 +825,10 @@ namespace RecoTool.Services
                         row.IsNewlyAdded = true;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to compute IsNewlyAdded flag for country {CountryId}", countryId);
+            }
             
             // Compute AccountSide and Matched-across-accounts flag
             try
@@ -763,7 +850,10 @@ namespace RecoTool.Services
                         r.Reconciliation_Num, r.Comments, r.RawLabel,
                         r.Receivable_DWRefFromAmbre, r.InternalInvoiceReference));
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to compute AccountSide / matched-across-accounts flags for country {CountryId}", countryId);
+            }
 
             swExec.Stop();
 
@@ -811,14 +901,16 @@ namespace RecoTool.Services
         /// Returns status indicator counts for a filter (optimized with minimal data loading)
         /// OPTIMIZATION: Loads only essential columns instead of full ReconciliationViewData
         /// </summary>
-        public async Task<StatusCountsDto> GetStatusCountsAsync(string countryId, string filterSql = null)
+        public async Task<StatusCountsDto> GetStatusCountsAsync(string countryId, string filterSql = null, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             // Cache status counts
             var cacheKey = $"StatusCounts_{countryId}_{NormalizeFilterForCache(filterSql)}";
             return await CacheService.Instance.GetOrLoadAsync(cacheKey, async () =>
             {
                 try
                 {
+                    ct.ThrowIfCancellationRequested();
                     var (dwEscStatus, ambreEscStatus) = GetEscapedPaths(countryId);
 
                     // Build minimal query with only columns needed for status calculation
@@ -931,13 +1023,15 @@ namespace RecoTool.Services
         /// The filterSql may optionally include a JSON preset header; only the predicate is applied.
         /// OPTIMIZED: Cached based on countryId + filterSql (AMBRE data rarely changes)
         /// </summary>
-        public async Task<int> GetReconciliationCountAsync(string countryId, string filterSql = null)
+        public async Task<int> GetReconciliationCountAsync(string countryId, string filterSql = null, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             var cacheKey = $"RecoCount_{countryId}_{NormalizeFilterForCache(filterSql)}";
             return await CacheService.Instance.GetOrLoadAsync(cacheKey, async () =>
             {
                 try
                 {
+                    ct.ThrowIfCancellationRequested();
                     var (dwEscCount, ambreEscCount) = GetEscapedPaths(countryId);
                     bool dupOnly = FilterSqlHelper.TryExtractPotentialDuplicatesFlag(filterSql);
                     string query = ReconciliationViewQueryBuilder.Build(dwEscCount, ambreEscCount, filterSql);
@@ -954,7 +1048,11 @@ namespace RecoTool.Services
                     if (obj == null || obj == DBNull.Value) return 0;
                     return int.TryParse(Convert.ToString(obj), out var n) ? n : 0;
                 }
-                catch { return 0; }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to compute reconciliation count for country {CountryId}", countryId);
+                    return 0;
+                }
             }, TimeSpan.FromHours(2)).ConfigureAwait(false);
         }
 
@@ -962,10 +1060,11 @@ namespace RecoTool.Services
         /// Preview rules for a single reconciliation ID (Edit scope) without applying them.
         /// Used by UI to show what rules would apply before saving.
         /// </summary>
-        public async Task<RuleEvaluationResult> PreviewRulesForEditAsync(string id, string editedField = null)
+        public async Task<RuleEvaluationResult> PreviewRulesForEditAsync(string id, string editedField = null, CancellationToken ct = default)
         {
             try
             {
+                ct.ThrowIfCancellationRequested();
                 if (string.IsNullOrWhiteSpace(id)) return null;
 
                 var currentCountryId = _offlineFirstService?.CurrentCountryId;
@@ -984,12 +1083,14 @@ namespace RecoTool.Services
                 bool isPivot = amb.IsPivotAccount(country.CNT_AmbrePivot);
                 var ctx = await BuildRuleContextAsync(amb, reconciliation, country, currentCountryId, isPivot).ConfigureAwait(false);
                 ctx.EditedField = editedField;
-                var res = await _rulesEngine.EvaluateAsync(ctx, RuleScope.Edit).ConfigureAwait(false);
+                var res = await _rulesEngine.EvaluateAsync(ctx, RuleScope.Edit, ct).ConfigureAwait(false);
 
                 return res;
             }
-            catch
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
             {
+                _logger.LogWarning(ex, "PreviewRulesForEditAsync failed for ID {RecoId} (editedField={EditedField})", id, editedField);
                 return null;
             }
         }
@@ -998,13 +1099,15 @@ namespace RecoTool.Services
         /// Exécute immédiatement les règles (scope Edit) pour les IDs donnés.
         /// N'applique que les règles en Auto-apply; les autres peuvent ajouter un message.
         /// </summary>
-        public async Task<int> ApplyRulesNowAsync(IEnumerable<string> ids, string editedField = null)
+        public async Task<int> ApplyRulesNowAsync(IEnumerable<string> ids, string editedField = null, CancellationToken ct = default)
         {
             try
             {
+                ct.ThrowIfCancellationRequested();
                 if (ids == null) return 0;
                 // Ensure latest rules are loaded now
-                try { _rulesEngine?.InvalidateCache(); } catch { }
+                try { _rulesEngine?.InvalidateCache(); }
+                catch (Exception ex) { _logger.LogWarning(ex, "Failed to invalidate rules engine cache before ApplyRulesNow"); }
                 var distinct = ids.Where(id => !string.IsNullOrWhiteSpace(id))
                                   .Distinct(StringComparer.OrdinalIgnoreCase)
                                   .ToList();
@@ -1018,6 +1121,7 @@ namespace RecoTool.Services
 
                 foreach (var id in distinct)
                 {
+                    ct.ThrowIfCancellationRequested();
                     // Skip archived rows (IsDeleted == true on Ambre row)
                     DataAmbre amb = null;
                     try
@@ -1028,7 +1132,11 @@ namespace RecoTool.Services
                             if (amb == null || amb.IsDeleted) continue;
                         }
                     }
-                    catch { }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "ApplyRulesNow: failed to load AMBRE row {RecoId} for country {CountryId}", id, currentCountryId);
+                    }
 
                     var r = await GetOrCreateReconciliationAsync(id).ConfigureAwait(false);
                     if (r == null) continue;
@@ -1041,21 +1149,30 @@ namespace RecoTool.Services
                             bool isPivot = amb.IsPivotAccount(country.CNT_AmbrePivot);
                             var ctx = await BuildRuleContextAsync(amb, r, country, currentCountryId, isPivot).ConfigureAwait(false);
                             ctx.EditedField = editedField;
-                            var res = await _rulesEngine.EvaluateAsync(ctx, RuleScope.Edit).ConfigureAwait(false);
+                            var res = await _rulesEngine.EvaluateAsync(ctx, RuleScope.Edit, ct).ConfigureAwait(false);
                             RuleApplicationHelper.ApplyAndLog(res, r, _currentUser, "run-now", currentCountryId, RaiseRuleApplied, ProposalRepository);
                             if (res?.NewActionIdSelf.HasValue == true) EnsureActionDefaults(r);
                         }
                     }
-                    catch { }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "ApplyRulesNow: rule evaluation/application failed for reco {RecoId} country {CountryId}", id, currentCountryId);
+                    }
 
                     recos.Add(r);
                 }
                 if (recos.Count == 0) return 0;
 
-                await SaveReconciliationsAsync(recos, applyRulesOnEdit: false).ConfigureAwait(false);
+                await SaveReconciliationsAsync(recos, applyRulesOnEdit: false, ct).ConfigureAwait(false);
                 return recos.Count;
             }
-            catch { return 0; }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "ApplyRulesNowAsync failed (editedField={EditedField})", editedField);
+                return 0;
+            }
         }
 
         private void EnsureActionDefaults(Reconciliation r)
@@ -1069,16 +1186,19 @@ namespace RecoTool.Services
                 {
                     // FIX: N/A action should be marked as DONE, not null
                     r.ActionStatus = true;
-                    r.ActionDate = DateTime.Now;
+                    r.ActionDate = _clock.Now;
                 }
                 else
                 {
                     if (!r.ActionStatus.HasValue) r.ActionStatus = false; // PENDING
                     // FIX: ALWAYS update ActionDate when Action changes
-                    r.ActionDate = DateTime.Now;
+                    r.ActionDate = _clock.Now;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "EnsureActionDefaults failed for reco {RecoId}", r?.ID);
+            }
         }
         #endregion
 

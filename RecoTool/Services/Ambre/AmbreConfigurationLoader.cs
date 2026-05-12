@@ -14,12 +14,12 @@ namespace RecoTool.Services.Ambre
     /// </summary>
     public class AmbreConfigurationLoader
     {
-        private readonly OfflineFirstService _offlineFirstService;
+        private readonly IOfflineFirstService _offlineFirstService;
         private TransformationService _transformationService;
         private Dictionary<string, TransactionType> _codeToCategory;
         private bool _initialized;
 
-        public AmbreConfigurationLoader(OfflineFirstService offlineFirstService)
+        public AmbreConfigurationLoader(IOfflineFirstService offlineFirstService)
         {
             _offlineFirstService = offlineFirstService ?? throw new ArgumentNullException(nameof(offlineFirstService));
         }

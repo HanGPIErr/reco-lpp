@@ -5,18 +5,106 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using Microsoft.Extensions.DependencyInjection;
+using RecoTool.Models;
 using RecoTool.Services;
 using RecoTool.Services.Rules;
 using RecoTool.Services.DTOs;
+using RecoTool.Services.UI;
 using RecoTool.UI.Models;
+using RecoTool.ViewModels;
 
 namespace RecoTool.Windows
 {
     public partial class RulesAdminWindow : Window
     {
+        private readonly RulesAdminViewModel _vm;
+
+        /// <summary>
+        /// MVVM constructor. The VM exposes Rules / Scopes / AccountSides / Signs /
+        /// RuleModes / ApplyTargets / MtStatusChoices / Action/KPI/IncidentType/ReasonOptions
+        /// — the same surface as the legacy <c>DataContext = this</c> path. The XAML bindings
+        /// resolve unchanged. EditRuleRequested is wired to open <see cref="RuleEditorWindow"/>
+        /// and ApplyEditedRule is called on save. RunRulesNowRequested is wired to call
+        /// <see cref="ReconciliationService"/> via App DI.
+        /// </summary>
+        public RulesAdminWindow(RulesAdminViewModel vm)
+        {
+            _vm = vm ?? throw new ArgumentNullException(nameof(vm));
+            InitializeComponent();
+            try
+            {
+                Resources["ScopeToBadgeBrushConverter"] = new ScopeToBadgeBrushConverter();
+                Resources["PriorityToBadgeBrushConverter"] = new PriorityToBadgeBrushConverter();
+            }
+            catch { }
+            DataContext = _vm;
+
+            // Initialise the legacy private service fields so XAML Click handlers
+            // (Add_Click, Edit_Click, Delete_Click, RunRulesNow_Click, etc.) that
+            // still read them keep working under the VM ctor. They are populated
+            // from DI exactly like the legacy parameterless ctor does.
+            // Service locator removal: this is the ONE-SHOT resolution site; all
+            // subsequent event handlers reuse the fields rather than calling
+            // App.ServiceProvider on every invocation.
+            _offlineFirstService = App.ServiceProvider?.GetService<OfflineFirstService>();
+            _reconciliationService = App.ServiceProvider?.GetService<ReconciliationService>();
+            _dialogService = App.ServiceProvider?.GetService<IDialogService>();
+            if (_offlineFirstService != null)
+                _repository = new TruthTableRepository(_offlineFirstService);
+
+            _vm.EditRuleRequested += OnVmEditRuleRequested;
+            _vm.RunRulesNowRequested += OnVmRunRulesNowRequested;
+            Loaded += async (s, e) => await _vm.ReloadRulesAsync();
+        }
+
+        private async void OnVmEditRuleRequested(object sender, TruthRule rule)
+        {
+            try
+            {
+                // Service locator removal: reuse fields hydrated ONCE in the ctor body.
+                // OfflineFirstService implements IOfflineFirstService, so it satisfies the VM ctor.
+                IOfflineFirstService offline = _offlineFirstService;
+                var dialog = _dialogService;
+                if (offline == null || dialog == null) return;
+                var editorVm = new RuleEditorViewModel(rule, offline, dialog);
+                var editor = new RuleEditorWindow(editorVm) { Owner = this };
+                if (editor.ShowDialog() == true && editor.ResultRule != null)
+                {
+                    await _vm.ApplyEditedRule(editor.ResultRule);
+                    if (editor.RunNow) OnVmRunRulesNowRequested(this, EventArgs.Empty);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Edit rule failed: {ex.Message}", "Error",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private async void OnVmRunRulesNowRequested(object sender, EventArgs e)
+        {
+            try
+            {
+                // Service locator removal: reuse the field hydrated ONCE in the ctor body.
+                if (_reconciliationService == null) return;
+                // Delegate to the legacy click handler which already orchestrates the run.
+                RunRulesNow_Click(this, new RoutedEventArgs());
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Run rules failed: {ex.Message}", "Error",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+
+            await Task.CompletedTask;
+        }
+
         private readonly OfflineFirstService _offlineFirstService;
         private readonly TruthTableRepository _repository;
         private readonly ReconciliationService _reconciliationService;
+        // Service locator removal: resolved ONCE in the MVVM ctor; handlers reuse fields.
+        private readonly IDialogService _dialogService;
 
         public ObservableCollection<TruthRule> Rules { get; set; } = new ObservableCollection<TruthRule>();
 
@@ -271,7 +359,7 @@ namespace RecoTool.Windows
 
         private string SuggestRuleId()
         {
-            string baseId = "RULE_" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string baseId = "RULE_" + BaseEntity.Clock.Now.ToString("yyyyMMdd_HHmmss");
             string id = baseId;
             int i = 1;
             while (Rules.Any(r => string.Equals(r.RuleId, id, StringComparison.OrdinalIgnoreCase)))
@@ -431,7 +519,20 @@ namespace RecoTool.Windows
         {
             try
             {
-                var win = new RuleEditorWindow(draft, _offlineFirstService);
+                // MVVM call site (Option B): resolve the VM through DI when possible
+                // and use the VM-aware RuleEditorWindow ctor. Falls back to the
+                // legacy ctor if collaborators aren't available (shouldn't happen
+                // in normal app startup, but keeps unit testing/debug forgiving).
+                RuleEditorWindow win;
+                if (_offlineFirstService != null && _dialogService != null)
+                {
+                    var editorVm = new RuleEditorViewModel(draft, _offlineFirstService, _dialogService);
+                    win = new RuleEditorWindow(editorVm);
+                }
+                else
+                {
+                    win = new RuleEditorWindow(draft, _offlineFirstService);
+                }
                 win.Owner = this;
                 var ok = win.ShowDialog();
                 if (ok == true)
@@ -550,7 +651,12 @@ namespace RecoTool.Windows
                     MessageBox.Show(this, "ReconciliationService is not available.", "Rules Health", MessageBoxButton.OK, MessageBoxImage.Error);
                     return;
                 }
-                var w = new RulesHealthWindow(_reconciliationService, _offlineFirstService) { Owner = this };
+                // MVVM call site (Option B): resolve through DI when possible.
+                var spRH = App.ServiceProvider;
+                var w = spRH != null
+                    ? spRH.GetRequiredService<RulesHealthWindow>()
+                    : new RulesHealthWindow(_reconciliationService, _offlineFirstService);
+                w.Owner = this;
                 w.Show();
             }
             catch (Exception ex)
@@ -574,7 +680,12 @@ namespace RecoTool.Windows
                     MessageBox.Show(this, "ReconciliationService is not available.", "Rules Health", MessageBoxButton.OK, MessageBoxImage.Error);
                     return;
                 }
-                var w = new RulesHealthWindow(_reconciliationService, _offlineFirstService) { Owner = this };
+                // MVVM call site (Option B): resolve through DI when possible.
+                var spRH = App.ServiceProvider;
+                var w = spRH != null
+                    ? spRH.GetRequiredService<RulesHealthWindow>()
+                    : new RulesHealthWindow(_reconciliationService, _offlineFirstService);
+                w.Owner = this;
                 w.Show();
                 // Wait for window Loaded to prime internal state, then focus the Impact tab
                 w.Dispatcher.BeginInvoke(new Action(() => w.FocusImpactTabForRule(rule)), System.Windows.Threading.DispatcherPriority.ApplicationIdle);

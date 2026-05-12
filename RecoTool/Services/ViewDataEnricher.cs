@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using RecoTool.Models;
 using RecoTool.Services.DTOs;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace RecoTool.Services
 {
@@ -12,6 +14,9 @@ namespace RecoTool.Services
         private static Dictionary<int, string> _userFieldColorCache;
         private static Dictionary<string, string> _assigneeNameCache;
         private static IReadOnlyList<UserField> _lastUserFields;
+
+        /// <summary>Logger for diagnostics. Defaults to <see cref="NullLogger.Instance"/>; replace via DI bootstrap.</summary>
+        public static ILogger Logger { get; set; } = NullLogger.Instance;
 
         #region Public enrichment entry points
         public static void EnrichAll(
@@ -43,7 +48,10 @@ namespace RecoTool.Services
                 // This eliminates thousands of re-computations during DataGrid scroll
                 row.PreCalculateDisplayProperties();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "ViewDataEnricher.EnrichRow failed for row {RowId}", row?.ID);
+            }
         }
         #endregion
 
@@ -216,7 +224,10 @@ namespace RecoTool.Services
                         if (!string.IsNullOrEmpty(id) && !_assigneeNameCache.ContainsKey(id))
                             _assigneeNameCache[id] = name ?? string.Empty;
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        Logger.LogDebug(ex, "ViewDataEnricher: failed to add assignee to cache");
+                    }
                 }
             }
         }

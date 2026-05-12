@@ -5,6 +5,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using RecoTool.Models;
 using RecoTool.Services;
 using RecoTool.Services.DTOs;
 using RecoTool.Services.Helpers;
@@ -263,7 +264,7 @@ namespace RecoTool.Windows
                     await _reconciliationService.SaveReconciliationAsync(reco, applyRulesOnEdit: false);
                 }
                 StampRowsModified(new[] { row });
-                
+
                 // Refresh KPIs to reflect changes immediately
                 UpdateKpis(_filteredData);
 
@@ -274,6 +275,17 @@ namespace RecoTool.Windows
                 }
                 catch { /* ignore any scheduling errors */ }
                 try { RefreshActivityLog(); } catch { }
+
+                // Notify parent: a single-row Action/KPI/IncidentType/ReasonNonRisky/ActionStatus
+                // change was persisted (DB write happened above when ruleApplied=true). When the
+                // user declined the rule confirmation (ruleApplied=false), no DB write occurred so
+                // we must NOT raise DataChanged. Note: TRIGGER propagation may have written extra
+                // rows via PropagateTriggerToGroupAsync above; we still fire only once here to
+                // coalesce them into a single HomePage staleness signal.
+                if (ruleApplied)
+                {
+                    DataChanged?.Invoke();
+                }
             }
             catch (Exception ex)
             {
@@ -473,6 +485,9 @@ namespace RecoTool.Windows
                     StampRowsModified(new[] { row });
                     try { ScheduleBulkPushDebounced(); } catch { }
                     try { RefreshActivityLog(); } catch { }
+                    // Notify parent: a DB write happened (archived-row comment).
+                    // Guarded by the string-equality check above, so no-op edits don't fire.
+                    DataChanged?.Invoke();
                 }
                 return;
             }
@@ -654,6 +669,14 @@ namespace RecoTool.Windows
             }
             catch { }
             try { RefreshActivityLog(); } catch { }
+
+            // Notify parent (ReconciliationPage → MainWindow → HomePage stale flag):
+            // a single-row write happened (Action / KPI / Status / Comments / DWINGS link /
+            // assignee / reminder / claim date / ACK / RiskyItem). The Save calls above are the
+            // only persistence points in this method, so reaching this line means the DB was
+            // written exactly once (or twice if rule outputs were applied on top). No-op paths
+            // exit earlier (null row / null service / archived early-return / archived no-change).
+            DataChanged?.Invoke();
         }
         
         /// <summary>
@@ -915,7 +938,7 @@ namespace RecoTool.Windows
                         try
                         {
                             var currentUser = ResolveUserDisplayName(_reconciliationService?.CurrentUser ?? Environment.UserName);
-                            var prefix = $"[{DateTime.Now:yyyy-MM-dd HH:mm}] {currentUser}: ";
+                            var prefix = $"[{BaseEntity.Clock.Now:yyyy-MM-dd HH:mm}] {currentUser}: ";
                             var msg = prefix + $"[Rule {res.Rule.RuleId ?? "(unnamed)"}] {res.UserMessage}";
                             if (string.IsNullOrWhiteSpace(row.Comments))
                             {
@@ -1033,7 +1056,7 @@ namespace RecoTool.Windows
 
                 // Mettre à jour les lignes liées en mémoire et en base
                 var triggerActionId = (int)ActionType.Trigger;
-                var now = DateTime.Now;
+                var now = BaseEntity.Clock.Now;
                 var updatedCount = 0;
 
                 foreach (var row in relatedRows)

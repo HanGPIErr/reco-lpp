@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data.OleDb;
 using System.Linq;
 using System.Threading;
+using RecoTool.Infrastructure;
 using RecoTool.Models;
 
 namespace RecoTool.Services
@@ -155,16 +156,16 @@ namespace RecoTool.Services
                 try
                 {
                     // Vérifier si le paramètre existe
-                    string checkQuery = "SELECT COUNT(*) FROM T_Param WHERE PAR_Key = ?";
+                    string checkQuery = $"SELECT COUNT(*) FROM {Schema.Tables.T_Param} WHERE {Schema.Columns.Param.PAR_Key} = ?";
                     using (var checkCommand = new OleDbCommand(checkQuery, connection))
                     {
                         checkCommand.Parameters.Add("@key", OleDbType.VarChar).Value = key;
                         int count = (int)checkCommand.ExecuteScalar();
-                        
+
                         if (count > 0)
                         {
                             // Mise à jour
-                            string updateQuery = "UPDATE T_Param SET PAR_Value = ? WHERE PAR_Key = ?";
+                            string updateQuery = $"UPDATE {Schema.Tables.T_Param} SET {Schema.Columns.Param.PAR_Value} = ? WHERE {Schema.Columns.Param.PAR_Key} = ?";
                             using (var updateCommand = new OleDbCommand(updateQuery, connection))
                             {
                                 updateCommand.Parameters.Add("@value", OleDbType.VarChar).Value = value ?? "";
@@ -175,7 +176,7 @@ namespace RecoTool.Services
                         else
                         {
                             // Insertion
-                            string insertQuery = "INSERT INTO T_Param (PAR_Key, PAR_Value) VALUES (?, ?)";
+                            string insertQuery = $"INSERT INTO {Schema.Tables.T_Param} ({Schema.Columns.Param.PAR_Key}, {Schema.Columns.Param.PAR_Value}) VALUES (?, ?)";
                             using (var insertCommand = new OleDbCommand(insertQuery, connection))
                             {
                                 insertCommand.Parameters.Add("@key", OleDbType.VarChar).Value = key;
@@ -237,8 +238,8 @@ namespace RecoTool.Services
 
                 try
                 {
-                    string query = "SELECT PAR_Key, PAR_Value FROM T_Param";
-                    
+                    string query = $"SELECT {Schema.Columns.Param.PAR_Key}, {Schema.Columns.Param.PAR_Value} FROM {Schema.Tables.T_Param}";
+
                     using (var command = new OleDbCommand(query, connection))
                     using (var reader = command.ExecuteReader())
                     {
@@ -246,8 +247,8 @@ namespace RecoTool.Services
                         {
                             var param = new Param
                             {
-                                PAR_Key = reader["PAR_Key"].ToString(),
-                                PAR_Value = reader["PAR_Value"].ToString()
+                                PAR_Key = reader[Schema.Columns.Param.PAR_Key].ToString(),
+                                PAR_Value = reader[Schema.Columns.Param.PAR_Value].ToString()
                             };
                             _parameters.Add(param);
                         }
@@ -257,8 +258,8 @@ namespace RecoTool.Services
                 {
                     if (ownsConnection) connection?.Dispose();
                 }
-                
-                System.Diagnostics.Debug.WriteLine($"Chargement de {_parameters.Count} paramètres depuis T_Param");
+
+                System.Diagnostics.Debug.WriteLine($"Chargement de {_parameters.Count} paramètres depuis {Schema.Tables.T_Param}");
             }
             catch (Exception ex)
             {

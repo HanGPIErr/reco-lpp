@@ -6,10 +6,13 @@ using System.Data.Common;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using RecoTool.Infrastructure.DataAccess;
 using RecoTool.Services.DTOs;
 using RecoTool.Services.Helpers;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace RecoTool.Services
 {
@@ -17,14 +20,19 @@ namespace RecoTool.Services
     /// Encapsulates DWINGS local database access with shared, coalesced in-memory caches.
     /// Extracted from ReconciliationService to reduce responsibility and improve reuse.
     /// </summary>
-    public class DwingsService
+    public class DwingsService : IDwingsService
     {
-        private readonly OfflineFirstService _offlineFirstService;
+        private readonly IOfflineFirstService _offlineFirstService;
+        private readonly ILogger<DwingsService> _logger;
 
-        public DwingsService(OfflineFirstService offlineFirstService)
+        public DwingsService(IOfflineFirstService offlineFirstService, ILogger<DwingsService> logger = null)
         {
             _offlineFirstService = offlineFirstService;
+            _logger = logger ?? NullLogger<DwingsService>.Instance;
         }
+
+        // Static fallback for static helpers like InvalidateSharedCacheForPath
+        public static ILogger StaticLogger { get; set; } = NullLogger.Instance;
 
         private List<DwingsInvoiceDto> _invoicesCache;
         private List<DwingsGuaranteeDto> _guaranteesCache;
@@ -38,7 +46,8 @@ namespace RecoTool.Services
         public static void InvalidateSharedCacheForPath(string dwPath)
         {
             if (string.IsNullOrWhiteSpace(dwPath)) return;
-            try { _sharedDwCache.TryRemove(dwPath, out _); } catch { }
+            try { _sharedDwCache.TryRemove(dwPath, out _); }
+            catch (Exception ex) { StaticLogger.LogWarning(ex, "DwingsService: failed to invalidate shared cache for path {DwPath}", dwPath); }
         }
 
         public async Task PrimeCachesAsync()
@@ -103,16 +112,18 @@ namespace RecoTool.Services
         /// the database is extracted to a temp file, loaded, then the temp file is deleted.
         /// </summary>
         /// <param name="path">Absolute path to a DWINGS `.accdb` or `.zip`.</param>
-        public static async Task<(List<DwingsInvoiceDto> invoices, List<DwingsGuaranteeDto> guarantees)> LoadFromPathAsync(string path)
+        public static async Task<(List<DwingsInvoiceDto> invoices, List<DwingsGuaranteeDto> guarantees)> LoadFromPathAsync(string path, CancellationToken ct = default)
         {
             if (string.IsNullOrWhiteSpace(path))
                 throw new ArgumentException("path is required", nameof(path));
             if (!File.Exists(path))
                 throw new FileNotFoundException("DWINGS file not found", path);
 
+            ct.ThrowIfCancellationRequested();
+
             bool isZip = string.Equals(Path.GetExtension(path), ".zip", StringComparison.OrdinalIgnoreCase);
             if (!isZip)
-                return await LoadDwingsAsync(path).ConfigureAwait(false);
+                return await LoadDwingsAsync(path, ct).ConfigureAwait(false);
 
             // Extract the single .accdb from the zip into a temp file.
             string tempAccdb = Path.Combine(Path.GetTempPath(), $"dwings_sim_{Guid.NewGuid():N}.accdb");
@@ -129,30 +140,32 @@ namespace RecoTool.Services
                     using (var entryStream = entry.Open())
                     using (var fs = new FileStream(tempAccdb, FileMode.Create, FileAccess.Write, FileShare.None))
                     {
-                        await entryStream.CopyToAsync(fs).ConfigureAwait(false);
+                        await entryStream.CopyToAsync(fs, 81920, ct).ConfigureAwait(false);
                     }
                 }
-                return await LoadDwingsAsync(tempAccdb).ConfigureAwait(false);
+                return await LoadDwingsAsync(tempAccdb, ct).ConfigureAwait(false);
             }
             finally
             {
-                try { if (File.Exists(tempAccdb)) File.Delete(tempAccdb); } catch { /* best-effort cleanup */ }
+                try { if (File.Exists(tempAccdb)) File.Delete(tempAccdb); }
+                catch (Exception ex) { StaticLogger.LogWarning(ex, "DwingsService: failed to delete temp accdb {TempPath}", tempAccdb); }
             }
         }
 
-        private static async Task<(List<DwingsInvoiceDto> invoices, List<DwingsGuaranteeDto> guarantees)> LoadDwingsAsync(string dwPath)
+        private static async Task<(List<DwingsInvoiceDto> invoices, List<DwingsGuaranteeDto> guarantees)> LoadDwingsAsync(string dwPath, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             var dwCs = DbConn.AceConn(dwPath);
             var invoices = new List<DwingsInvoiceDto>();
             var guarantees = new List<DwingsGuaranteeDto>();
 
             using (var connection = new OleDbConnection(dwCs))
             {
-                await connection.OpenAsync().ConfigureAwait(false);
+                await connection.OpenAsync(ct).ConfigureAwait(false);
                 using (var cmd = new OleDbCommand(@"SELECT * FROM T_DW_Data ORDER BY INVOICE_ID, BGPMT", connection))
-                using (var rd = await cmd.ExecuteReaderAsync().ConfigureAwait(false))
+                using (var rd = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false))
                 {
-                    while (await rd.ReadAsync().ConfigureAwait(false))
+                    while (await rd.ReadAsync(ct).ConfigureAwait(false))
                     {
                         invoices.Add(new DwingsInvoiceDto
                         {
@@ -190,9 +203,9 @@ namespace RecoTool.Services
                 }
 
                 using (var cmdG = new OleDbCommand(@"SELECT * FROM T_DW_Guarantee", connection))
-                using (var rdG = await cmdG.ExecuteReaderAsync().ConfigureAwait(false))
+                using (var rdG = await cmdG.ExecuteReaderAsync(ct).ConfigureAwait(false))
                 {
-                    while (await rdG.ReadAsync().ConfigureAwait(false))
+                    while (await rdG.ReadAsync(ct).ConfigureAwait(false))
                     {
                         guarantees.Add(new DwingsGuaranteeDto
                         {

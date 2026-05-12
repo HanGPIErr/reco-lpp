@@ -43,11 +43,11 @@ namespace RecoTool.Services
 
                 // Debounce: skip if a push just happened very recently
                 var last = _lastPushTimesUtc.TryGetValue(cid, out var t) ? t : DateTime.MinValue;
-                if (DateTime.UtcNow - last < _pushCooldown)
+                if (_clock.UtcNow - last < _pushCooldown)
                 {
                     if (diag)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[PUSH][{cid}] Skipped due to cooldown. SinceLast={(DateTime.UtcNow - last).TotalSeconds:F1}s, Cooldown={_pushCooldown.TotalSeconds}s");
+                        System.Diagnostics.Debug.WriteLine($"[PUSH][{cid}] Skipped due to cooldown. SinceLast={(_clock.UtcNow - last).TotalSeconds:F1}s, Cooldown={_pushCooldown.TotalSeconds}s");
                         try { LogManager.Info($"[PUSH][{cid}] Skipped due to cooldown"); } catch { }
                     }
                     return false;
@@ -56,7 +56,7 @@ namespace RecoTool.Services
                 if (diag)
                 {
                     var lastDbg = _lastPushTimesUtc.TryGetValue(cid, out var tdbg) ? tdbg : DateTime.MinValue;
-                    System.Diagnostics.Debug.WriteLine($"[PUSH][{cid}] Enter PushReconciliationIfPendingAsync. NowUtc={DateTime.UtcNow:o}, LastPushUtc={lastDbg:o}");
+                    System.Diagnostics.Debug.WriteLine($"[PUSH][{cid}] Enter PushReconciliationIfPendingAsync. NowUtc={_clock.UtcNow:o}, LastPushUtc={lastDbg:o}");
                     try { LogManager.Info($"[PUSH][{cid}] Enter PushReconciliationIfPendingAsync"); } catch { }
                 }
 
@@ -74,7 +74,7 @@ namespace RecoTool.Services
 
                 if (!recoUnsynced.Any())
                 {
-                    _lastPushTimesUtc[cid] = DateTime.UtcNow;
+                    _lastPushTimesUtc[cid] = _clock.UtcNow;
                     return true; // Nothing to push — skip all network I/O
                 }
 
@@ -135,7 +135,7 @@ namespace RecoTool.Services
                     }
                     // best-effort: do not fail the overall operation
                 }
-                _lastPushTimesUtc[cid] = DateTime.UtcNow;
+                _lastPushTimesUtc[cid] = _clock.UtcNow;
                 try { await RaiseSyncStateAsync(cid, SyncStateKind.UpToDate, pendingOverride: 0); } catch { }
 
                 // Write sync marker so other users detect the change within 3s
@@ -788,11 +788,11 @@ namespace RecoTool.Services
                                         var paramCols = new List<string>();
                                         var parameters = new List<object>();
                                         if (hasIsDeleted) setParts.Add($"[{_syncConfig.IsDeletedColumn}] = true");
-                                        if (hasDeleteDate) { setParts.Add("[DeleteDate] = @p0"); parameters.Add(DateTime.UtcNow); paramCols.Add("DeleteDate"); }
+                                        if (hasDeleteDate) { setParts.Add("[DeleteDate] = @p0"); parameters.Add(_clock.UtcNow); paramCols.Add("DeleteDate"); }
                                         if (hasLastMod)
                                         {
                                             var col = cols.Contains(_syncConfig.LastModifiedColumn) ? _syncConfig.LastModifiedColumn : "LastModified";
-                                            setParts.Add($"[{col}] = @p1"); parameters.Add(DateTime.UtcNow); paramCols.Add(col);
+                                            setParts.Add($"[{col}] = @p1"); parameters.Add(_clock.UtcNow); paramCols.Add(col);
                                         }
                                         using (var cmd = new OleDbCommand($"UPDATE [{table}] SET {string.Join(", ", setParts)} WHERE [{pkCol}] = @key", netConn, tx))
                                         {

@@ -3,9 +3,11 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using RecoTool.Models;
 using RecoTool.Services.DTOs;
 using RecoTool.Services;
 
@@ -114,6 +116,121 @@ namespace RecoTool.Windows
         }
 
         /// <summary>
+        /// Targeted, in-place refresh for a small set of rows after the user edited them in the
+        /// detail dialog (or any single-row save flow). Unlike <see cref="RefreshAsync"/> this does
+        /// NOT re-fetch the whole grid, re-run the enrichment pipeline, or rebuild filters — it
+        /// simply re-reads each row's <see cref="Reconciliation"/> persistence state from the DB,
+        /// copies the editable fields onto the existing <see cref="ReconciliationViewData"/>
+        /// instance (so INPC fires and the grid cell repaints in place), then re-resolves the
+        /// DWINGS-derived <c>I_*</c>/<c>G_*</c> columns and the per-row display brushes.
+        /// <para>
+        /// The in-memory list ordering and the user's scroll position are preserved. Failures on
+        /// an individual row are swallowed so other rows still update. Always returns on the UI
+        /// thread — safe to call from a background context (dispatcher dispatch is internal).
+        /// </para>
+        /// </summary>
+        /// <param name="rowIds">Reconciliation IDs (== AMBRE line IDs) that need to be refreshed.</param>
+        /// <param name="ct">Optional cancellation — checked between rows; in-flight DB reads are
+        /// allowed to complete (they're cheap single-row lookups).</param>
+        public async Task RefreshRowsAsync(IReadOnlyList<string> rowIds, CancellationToken ct = default)
+        {
+            if (rowIds == null || rowIds.Count == 0) return;
+            if (_reconciliationService == null) return;
+
+            // Ensure we're on the UI thread for any property mutation (INPC) and brush recomputation.
+            if (!Dispatcher.CheckAccess())
+            {
+                var op = Dispatcher.InvokeAsync(() => RefreshRowsAsync(rowIds, ct));
+                await op.Task.Unwrap().ConfigureAwait(false);
+                return;
+            }
+
+            if (_allViewData == null) return;
+
+            // Build a quick lookup once instead of N linear scans.
+            var byId = _allViewData
+                .Where(r => !string.IsNullOrWhiteSpace(r?.ID))
+                .GroupBy(r => r.ID, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+            foreach (var id in rowIds)
+            {
+                if (ct.IsCancellationRequested) break;
+                if (string.IsNullOrWhiteSpace(id)) continue;
+                if (!byId.TryGetValue(id, out var viewRow) || viewRow == null) continue;
+
+                try
+                {
+                    // Pull the freshest persisted state. GetOrCreateReconciliationAsync is a single
+                    // primary-key lookup against the local Access DB — ~1-5ms typical, vs 2-3s for
+                    // the full RefreshAsync pipeline.
+                    var reco = await _reconciliationService.GetOrCreateReconciliationAsync(id).ConfigureAwait(true);
+                    if (reco == null) continue;
+
+                    // Copy editable Reconciliation fields back onto the view row. Each setter raises
+                    // PropertyChanged so the SfDataGrid cell repaints in place.
+                    CopyReconciliationFieldsToViewRow(reco, viewRow);
+
+                    // Re-resolve I_*/G_* enrichment columns from the DWINGS caches against the
+                    // (possibly new) BGI/Guarantee references we just copied in. This raises
+                    // PropertyChanged for every DWINGS-derived column in one batch.
+                    try { viewRow.RefreshDwingsData(); } catch { }
+
+                    // Recompute display brushes / cached strings so the row's visual state matches
+                    // the new business state (status badge, action color, comments preview, etc.).
+                    try { viewRow.PreCalculateDisplayProperties(); } catch { }
+                }
+                catch (Exception exRow)
+                {
+                    // Best-effort: a failure on one row must not stop the others.
+                    System.Diagnostics.Debug.WriteLine($"[RefreshRowsAsync] row '{id}' failed: {exRow.Message}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Copies the persisted <see cref="Reconciliation"/> fields onto the existing
+        /// <see cref="ReconciliationViewData"/> instance, mirroring the field-by-field mapping
+        /// used by the rules catch-up block in <see cref="LoadReconciliationDataAsync"/>.
+        /// Only writes when the source has a meaningful value so we don't clobber INPC-set state
+        /// with stale nulls from a partial save.
+        /// </summary>
+        private static void CopyReconciliationFieldsToViewRow(Reconciliation reco, ReconciliationViewData viewRow)
+        {
+            if (reco == null || viewRow == null) return;
+
+            // DWINGS references — these can be cleared (e.g. Unlink), so always copy including nulls.
+            viewRow.DWINGS_InvoiceID   = reco.DWINGS_InvoiceID;
+            viewRow.DWINGS_GuaranteeID = reco.DWINGS_GuaranteeID;
+            viewRow.DWINGS_BGPMT       = reco.DWINGS_BGPMT;
+
+            // User-edited fields. We copy unconditionally — the dialog Save path persists the full
+            // edit state, so the DB is authoritative for these.
+            viewRow.Action          = reco.Action;
+            viewRow.ActionStatus    = reco.ActionStatus;
+            viewRow.ActionDate      = reco.ActionDate;
+            viewRow.KPI             = reco.KPI;
+            viewRow.IncidentType    = reco.IncidentType;
+            viewRow.RiskyItem       = reco.RiskyItem ?? false;
+            viewRow.ReasonNonRisky  = reco.ReasonNonRisky;
+            viewRow.Assignee        = reco.Assignee;
+            viewRow.Comments        = reco.Comments;
+            viewRow.InternalInvoiceReference = reco.InternalInvoiceReference;
+            viewRow.FirstClaimDate  = reco.FirstClaimDate;
+            viewRow.LastClaimDate   = reco.LastClaimDate;
+            viewRow.ToRemind        = reco.ToRemind;
+            viewRow.ToRemindDate    = reco.ToRemindDate;
+            viewRow.ACK             = reco.ACK;
+            viewRow.SwiftCode       = reco.SwiftCode;
+            viewRow.PaymentReference = reco.PaymentReference;
+            viewRow.MbawData        = reco.MbawData;
+            viewRow.SpiritData      = reco.SpiritData;
+            viewRow.IncNumber       = reco.IncNumber;
+            viewRow.TriggerDate     = reco.TriggerDate;
+            viewRow.RemainingAmount = reco.RemainingAmount;
+        }
+
+        /// <summary>
         /// Charge les données initiales
         /// </summary>
         private async void LoadInitialData()
@@ -199,61 +316,73 @@ namespace RecoTool.Windows
                 // Scenario: DWINGS data wasn't available on day N → rows loaded without BGI → rules couldn't match.
                 // On day N+1, DWINGS data is available → BGI is filled → re-run rules ONLY for rows where Action is still null.
                 // Safeguard: never touch rows where user already set an Action (prevents overwriting manual choices).
-                try
+                //
+                // PERF: Run as fire-and-forget on the dispatcher (Background priority). Previously this
+                // block was awaited synchronously inside LoadReconciliationDataAsync — blocking the
+                // initial grid render by N round-trips to ApplyRulesNowAsync + GetOrCreateReconciliationAsync.
+                // Now the grid materialises immediately with the loaded rows; rules-applied rows update
+                // a few hundred ms later (via property change notifications already raised on each setter).
+                _ = Dispatcher?.InvokeAsync(async () =>
                 {
-                    var catchUpIds = _allViewData
-                        .Where(r => !r.IsDeleted
-                                    && !r.Action.HasValue
-                                    && (!string.IsNullOrWhiteSpace(r.DWINGS_InvoiceID)
-                                        || !string.IsNullOrWhiteSpace(r.DWINGS_GuaranteeID)
-                                        || !string.IsNullOrWhiteSpace(r.DWINGS_BGPMT)))
-                        .Select(r => r.ID)
-                        .Where(id => !string.IsNullOrWhiteSpace(id))
-                        .ToList();
-
-                    if (catchUpIds.Count > 0 && _reconciliationService != null)
+                    try
                     {
+                        if (_reconciliationService == null || _allViewData == null) return;
+                        var catchUpIds = _allViewData
+                            .Where(r => !r.IsDeleted
+                                        && !r.Action.HasValue
+                                        && (!string.IsNullOrWhiteSpace(r.DWINGS_InvoiceID)
+                                            || !string.IsNullOrWhiteSpace(r.DWINGS_GuaranteeID)
+                                            || !string.IsNullOrWhiteSpace(r.DWINGS_BGPMT)))
+                            .Select(r => r.ID)
+                            .Where(id => !string.IsNullOrWhiteSpace(id))
+                            .ToList();
+
+                        if (catchUpIds.Count == 0) return;
                         System.Diagnostics.Debug.WriteLine($"[RulesCatchUp] {catchUpIds.Count} rows have DWINGS link but no Action — running rules...");
                         var applied = await _reconciliationService.ApplyRulesNowAsync(catchUpIds, "Linking");
-                        if (applied > 0)
+                        if (applied <= 0) return;
+
+                        System.Diagnostics.Debug.WriteLine($"[RulesCatchUp] Rules applied to {applied} rows. Scheduling push.");
+                        // Reload affected rows from DB so the grid shows updated Action/KPI
+                        try
                         {
-                            System.Diagnostics.Debug.WriteLine($"[RulesCatchUp] Rules applied to {applied} rows. Scheduling push.");
-                            // Reload affected rows from DB so the grid shows updated Action/KPI
-                            try
+                            foreach (var id in catchUpIds)
                             {
-                                foreach (var id in catchUpIds)
-                                {
-                                    var viewRow = _allViewData.FirstOrDefault(r => string.Equals(r.ID, id, StringComparison.OrdinalIgnoreCase));
-                                    if (viewRow == null) continue;
-                                    var reco = await _reconciliationService.GetOrCreateReconciliationAsync(id);
-                                    if (reco == null) continue;
-                                    if (reco.Action.HasValue) viewRow.Action = reco.Action;
-                                    if (reco.ActionStatus.HasValue) viewRow.ActionStatus = reco.ActionStatus;
-                                    if (reco.KPI.HasValue) viewRow.KPI = reco.KPI;
-                                    if (reco.IncidentType.HasValue) viewRow.IncidentType = reco.IncidentType;
-                                    if (reco.RiskyItem.HasValue) viewRow.RiskyItem = reco.RiskyItem.Value;
-                                    if (reco.ReasonNonRisky.HasValue) viewRow.ReasonNonRisky = reco.ReasonNonRisky;
-                                }
+                                var viewRow = _allViewData.FirstOrDefault(r => string.Equals(r.ID, id, StringComparison.OrdinalIgnoreCase));
+                                if (viewRow == null) continue;
+                                var reco = await _reconciliationService.GetOrCreateReconciliationAsync(id);
+                                if (reco == null) continue;
+                                if (reco.Action.HasValue) viewRow.Action = reco.Action;
+                                if (reco.ActionStatus.HasValue) viewRow.ActionStatus = reco.ActionStatus;
+                                if (reco.KPI.HasValue) viewRow.KPI = reco.KPI;
+                                if (reco.IncidentType.HasValue) viewRow.IncidentType = reco.IncidentType;
+                                if (reco.RiskyItem.HasValue) viewRow.RiskyItem = reco.RiskyItem.Value;
+                                if (reco.ReasonNonRisky.HasValue) viewRow.ReasonNonRisky = reco.ReasonNonRisky;
                             }
-                            catch { }
-                            // Re-enrich display properties after rule application
-                            try { ViewDataEnricher.EnrichAll(_allViewData, AllUserFields, AssigneeOptions); } catch { }
-                            try { ScheduleBulkPushDebounced(); } catch { }
                         }
+                        catch { }
+                        // Re-enrich display properties after rule application
+                        try { ViewDataEnricher.EnrichAll(_allViewData, AllUserFields, AssigneeOptions); } catch { }
+                        try { ScheduleBulkPushDebounced(); } catch { }
                     }
-                }
-                catch (Exception exRules)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[RulesCatchUp] Error: {exRules.Message}");
-                }
+                    catch (Exception exRules)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[RulesCatchUp] Error: {exRules.Message}");
+                    }
+                }, System.Windows.Threading.DispatcherPriority.Background);
 
                 // Resolve UIDs in comments to display names for DataGrid display
+                // PERF: Fast-path skip rows whose Comments contain neither '[' (timestamp header)
+                // nor '@' (mention) — they cannot match either of the resolver regexes, so we avoid
+                // the regex-compilation + 2 Regex.Replace calls on the vast majority of rows.
                 try
                 {
                     foreach (var r in _allViewData)
                     {
-                        if (!string.IsNullOrWhiteSpace(r.Comments))
-                            r.Comments = ResolveCommentsForDisplay(r.Comments);
+                        var c = r.Comments;
+                        if (string.IsNullOrWhiteSpace(c)) continue;
+                        if (c.IndexOf('[') < 0 && c.IndexOf('@') < 0) continue;
+                        r.Comments = ResolveCommentsForDisplay(c);
                     }
                 }
                 catch { }

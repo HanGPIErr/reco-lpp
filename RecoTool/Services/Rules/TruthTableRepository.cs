@@ -5,17 +5,22 @@ using System.Data.OleDb;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using RecoTool.Infrastructure;
+using RecoTool.Infrastructure.DataAccess;
 using RecoTool.Services;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace RecoTool.Services.Rules
 {
     /// <summary>
-    /// Administrative interface to manage rules storage (create table, upsert and delete rules).
+    /// Administrative interface to manage rules storage (create table, load, upsert and delete rules).
     /// Placed here to avoid new files while project includes are static.
     /// </summary>
     public interface IRulesAdmin
     {
         Task<bool> EnsureRulesTableAsync(CancellationToken token = default);
+        Task<List<TruthRule>> LoadRulesAsync(CancellationToken token = default);
         Task<bool> UpsertRuleAsync(TruthRule rule, CancellationToken token = default);
         Task<int> DeleteRuleAsync(string ruleId, CancellationToken token = default);
     }
@@ -23,8 +28,9 @@ namespace RecoTool.Services.Rules
 
     public class TruthTableRepository : IRulesAdmin
     {
-        private readonly OfflineFirstService _offlineFirstService;
+        private readonly IOfflineFirstService _offlineFirstService;
         private readonly ReferentialService _referentialService;
+        private readonly ILogger<TruthTableRepository> _logger;
 
         /// <summary>
         /// Process-wide event raised when a rule is created, updated or deleted.
@@ -33,20 +39,25 @@ namespace RecoTool.Services.Rules
         /// </summary>
         public static event EventHandler RulesChanged;
 
+        /// <summary>Logger used by static methods. Defaults to <see cref="NullLogger.Instance"/>; replace via DI bootstrap.</summary>
+        public static ILogger StaticLogger { get; set; } = NullLogger.Instance;
+
         private static void RaiseRulesChanged()
         {
-            try { RulesChanged?.Invoke(null, EventArgs.Empty); } catch { }
+            try { RulesChanged?.Invoke(null, EventArgs.Empty); }
+            catch (Exception ex) { StaticLogger.LogWarning(ex, "TruthTableRepository: RulesChanged handler threw"); }
         }
 
-        public TruthTableRepository(OfflineFirstService offlineFirstService)
+        public TruthTableRepository(IOfflineFirstService offlineFirstService, ILogger<TruthTableRepository> logger = null)
         {
             _offlineFirstService = offlineFirstService ?? throw new ArgumentNullException(nameof(offlineFirstService));
             _referentialService = new ReferentialService(_offlineFirstService);
+            _logger = logger ?? NullLogger<TruthTableRepository>.Instance;
         }
 
         private async Task<string> GetRulesTableNameAsync(CancellationToken token)
         {
-            return "T_Reco_Rules";
+            return Schema.Tables.T_Reco_Rules;
         }
 
         private async Task<(OleDbConnection Connection, bool OwnsConnection)> GetConnectionAsync(CancellationToken token = default)
@@ -154,7 +165,10 @@ namespace RecoTool.Services.Rules
                                 };
                                 list.Add(rule);
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "TruthTableRepository.LoadRulesAsync: failed to materialize a rule row (skipped)");
+                            }
                         }
                     }
                 }
@@ -201,50 +215,50 @@ namespace RecoTool.Services.Rules
                 {
                     // Create table with full schema (columns are optional when reading; we create full set)
                     var sql = $@"CREATE TABLE [{tableName}] (
-                        RuleId TEXT(50),
-                        Enabled YESNO,
-                        Priority INTEGER,
-                        Scope TEXT(10),
-                        AccountSide TEXT(1),
-                        GuaranteeType TEXT(255),
-                        TransactionType TEXT(255),
-                        Booking TEXT(50),
-                        HasDwingsLink INTEGER,
-                        IsGrouped INTEGER,
-                        IsAmountMatch INTEGER,
-                        Sign TEXT(1),
-                        MTStatus TEXT(20),
-                        CommIdEmail INTEGER,
-                        BgiStatusInitiated INTEGER,
-                        TriggerDateIsNull INTEGER,
-                        DaysSinceTriggerMin INTEGER,
-                        DaysSinceTriggerMax INTEGER,
-                        OperationDaysAgoMin INTEGER,
-                        OperationDaysAgoMax INTEGER,
-                        IsMatched INTEGER,
-                        HasManualMatch INTEGER,
-                        IsFirstRequest INTEGER,
-                        IsNewLine INTEGER,
-                        DaysSinceReminderMin INTEGER,
-                        DaysSinceReminderMax INTEGER,
-                        CurrentActionId TEXT(255),
-                        PaymentRequestStatus TEXT(255),
-                        OutputActionId INTEGER,
-                        OutputKpiId INTEGER,
-                        OutputIncidentTypeId INTEGER,
-                        OutputRiskyItem INTEGER,
-                        OutputReasonNonRiskyId INTEGER,
-                        OutputToRemind INTEGER,
-                        OutputToRemindDays INTEGER,
-                        OutputActionDone INTEGER,
-                        OutputFirstClaimToday INTEGER,
-                        ApplyTo TEXT(12),
-                        AutoApply YESNO,
-                        Message LONGTEXT,
-                        TriggerOnField TEXT(100),
-                        RespectUserEdits YESNO,
-                        UserEditLockDays INTEGER,
-                        Mode TEXT(20)
+                        {Schema.Columns.RecoRules.RuleId} TEXT(50),
+                        {Schema.Columns.RecoRules.Enabled} YESNO,
+                        {Schema.Columns.RecoRules.Priority} INTEGER,
+                        {Schema.Columns.RecoRules.Scope} TEXT(10),
+                        {Schema.Columns.RecoRules.AccountSide} TEXT(1),
+                        {Schema.Columns.RecoRules.GuaranteeType} TEXT(255),
+                        {Schema.Columns.RecoRules.TransactionType} TEXT(255),
+                        {Schema.Columns.RecoRules.Booking} TEXT(50),
+                        {Schema.Columns.RecoRules.HasDwingsLink} INTEGER,
+                        {Schema.Columns.RecoRules.IsGrouped} INTEGER,
+                        {Schema.Columns.RecoRules.IsAmountMatch} INTEGER,
+                        {Schema.Columns.RecoRules.Sign} TEXT(1),
+                        {Schema.Columns.RecoRules.MTStatus} TEXT(20),
+                        {Schema.Columns.RecoRules.CommIdEmail} INTEGER,
+                        {Schema.Columns.RecoRules.BgiStatusInitiated} INTEGER,
+                        {Schema.Columns.RecoRules.TriggerDateIsNull} INTEGER,
+                        {Schema.Columns.RecoRules.DaysSinceTriggerMin} INTEGER,
+                        {Schema.Columns.RecoRules.DaysSinceTriggerMax} INTEGER,
+                        {Schema.Columns.RecoRules.OperationDaysAgoMin} INTEGER,
+                        {Schema.Columns.RecoRules.OperationDaysAgoMax} INTEGER,
+                        {Schema.Columns.RecoRules.IsMatched} INTEGER,
+                        {Schema.Columns.RecoRules.HasManualMatch} INTEGER,
+                        {Schema.Columns.RecoRules.IsFirstRequest} INTEGER,
+                        {Schema.Columns.RecoRules.IsNewLine} INTEGER,
+                        {Schema.Columns.RecoRules.DaysSinceReminderMin} INTEGER,
+                        {Schema.Columns.RecoRules.DaysSinceReminderMax} INTEGER,
+                        {Schema.Columns.RecoRules.CurrentActionId} TEXT(255),
+                        {Schema.Columns.RecoRules.PaymentRequestStatus} TEXT(255),
+                        {Schema.Columns.RecoRules.OutputActionId} INTEGER,
+                        {Schema.Columns.RecoRules.OutputKpiId} INTEGER,
+                        {Schema.Columns.RecoRules.OutputIncidentTypeId} INTEGER,
+                        {Schema.Columns.RecoRules.OutputRiskyItem} INTEGER,
+                        {Schema.Columns.RecoRules.OutputReasonNonRiskyId} INTEGER,
+                        {Schema.Columns.RecoRules.OutputToRemind} INTEGER,
+                        {Schema.Columns.RecoRules.OutputToRemindDays} INTEGER,
+                        {Schema.Columns.RecoRules.OutputActionDone} INTEGER,
+                        {Schema.Columns.RecoRules.OutputFirstClaimToday} INTEGER,
+                        {Schema.Columns.RecoRules.ApplyTo} TEXT(12),
+                        {Schema.Columns.RecoRules.AutoApply} YESNO,
+                        {Schema.Columns.RecoRules.Message} LONGTEXT,
+                        {Schema.Columns.RecoRules.TriggerOnField} TEXT(100),
+                        {Schema.Columns.RecoRules.RespectUserEdits} YESNO,
+                        {Schema.Columns.RecoRules.UserEditLockDays} INTEGER,
+                        {Schema.Columns.RecoRules.Mode} TEXT(20)
                     )";
                     using (var cmd = new OleDbCommand(sql, conn))
                     {
@@ -254,7 +268,7 @@ namespace RecoTool.Services.Rules
                     // Unique index on RuleId to avoid duplicates
                     try
                     {
-                        var idx = $"CREATE UNIQUE INDEX UX_{tableName}_RuleId ON [{tableName}] (RuleId)";
+                        var idx = $"CREATE UNIQUE INDEX UX_{tableName}_RuleId ON [{tableName}] ({Schema.Columns.RecoRules.RuleId})";
                         using (var cmd = new OleDbCommand(idx, conn))
                         {
                             await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
@@ -365,7 +379,7 @@ namespace RecoTool.Services.Rules
             {
                 // Exists?
                 int count = 0;
-                using (var check = new OleDbCommand($"SELECT COUNT(*) FROM [{tableName}] WHERE RuleId = ?", conn))
+                using (var check = new OleDbCommand($"SELECT COUNT(*) FROM [{tableName}] WHERE {Schema.Columns.RecoRules.RuleId} = ?", conn))
                 {
                     check.Parameters.AddWithValue("@p1", rule.RuleId);
                     var obj = await check.ExecuteScalarAsync(token).ConfigureAwait(false);
@@ -378,16 +392,16 @@ namespace RecoTool.Services.Rules
                     // UPDATE
                     await EnsureMissingColumnsAsync(conn, tableName).ConfigureAwait(false);
                     var sql = $@"UPDATE [{tableName}] SET
-                        Enabled=?, Priority=?, Scope=?, AccountSide=?, GuaranteeType=?, TransactionType=?, Booking=?,
-                        HasDwingsLink=?, IsGrouped=?, IsAmountMatch=?, Sign=?,
-                        MTStatus=?, CommIdEmail=?, BgiStatusInitiated=?,
-                        TriggerDateIsNull=?, DaysSinceTriggerMin=?, DaysSinceTriggerMax=?,
-                        OperationDaysAgoMin=?, OperationDaysAgoMax=?,
-                        IsMatched=?, HasManualMatch=?, IsFirstRequest=?, IsNewLine=?, DaysSinceReminderMin=?, DaysSinceReminderMax=?, CurrentActionId=?, IsActionDone=?, PaymentRequestStatus=?,
-                        OutputActionId=?, OutputKpiId=?, OutputIncidentTypeId=?, OutputRiskyItem=?, OutputReasonNonRiskyId=?,
-                        OutputToRemind=?, OutputToRemindDays=?, OutputActionDone=?, OutputFirstClaimToday=?, ApplyTo=?, AutoApply=?, Message=?, TriggerOnField=?,
-                        RespectUserEdits=?, UserEditLockDays=?, Mode=?
-                        WHERE RuleId=?";
+                        {Schema.Columns.RecoRules.Enabled}=?, {Schema.Columns.RecoRules.Priority}=?, {Schema.Columns.RecoRules.Scope}=?, {Schema.Columns.RecoRules.AccountSide}=?, {Schema.Columns.RecoRules.GuaranteeType}=?, {Schema.Columns.RecoRules.TransactionType}=?, {Schema.Columns.RecoRules.Booking}=?,
+                        {Schema.Columns.RecoRules.HasDwingsLink}=?, {Schema.Columns.RecoRules.IsGrouped}=?, {Schema.Columns.RecoRules.IsAmountMatch}=?, {Schema.Columns.RecoRules.Sign}=?,
+                        {Schema.Columns.RecoRules.MTStatus}=?, {Schema.Columns.RecoRules.CommIdEmail}=?, {Schema.Columns.RecoRules.BgiStatusInitiated}=?,
+                        {Schema.Columns.RecoRules.TriggerDateIsNull}=?, {Schema.Columns.RecoRules.DaysSinceTriggerMin}=?, {Schema.Columns.RecoRules.DaysSinceTriggerMax}=?,
+                        {Schema.Columns.RecoRules.OperationDaysAgoMin}=?, {Schema.Columns.RecoRules.OperationDaysAgoMax}=?,
+                        {Schema.Columns.RecoRules.IsMatched}=?, {Schema.Columns.RecoRules.HasManualMatch}=?, {Schema.Columns.RecoRules.IsFirstRequest}=?, {Schema.Columns.RecoRules.IsNewLine}=?, {Schema.Columns.RecoRules.DaysSinceReminderMin}=?, {Schema.Columns.RecoRules.DaysSinceReminderMax}=?, {Schema.Columns.RecoRules.CurrentActionId}=?, {Schema.Columns.RecoRules.IsActionDone}=?, {Schema.Columns.RecoRules.PaymentRequestStatus}=?,
+                        {Schema.Columns.RecoRules.OutputActionId}=?, {Schema.Columns.RecoRules.OutputKpiId}=?, {Schema.Columns.RecoRules.OutputIncidentTypeId}=?, {Schema.Columns.RecoRules.OutputRiskyItem}=?, {Schema.Columns.RecoRules.OutputReasonNonRiskyId}=?,
+                        {Schema.Columns.RecoRules.OutputToRemind}=?, {Schema.Columns.RecoRules.OutputToRemindDays}=?, {Schema.Columns.RecoRules.OutputActionDone}=?, {Schema.Columns.RecoRules.OutputFirstClaimToday}=?, {Schema.Columns.RecoRules.ApplyTo}=?, {Schema.Columns.RecoRules.AutoApply}=?, {Schema.Columns.RecoRules.Message}=?, {Schema.Columns.RecoRules.TriggerOnField}=?,
+                        {Schema.Columns.RecoRules.RespectUserEdits}=?, {Schema.Columns.RecoRules.UserEditLockDays}=?, {Schema.Columns.RecoRules.Mode}=?
+                        WHERE {Schema.Columns.RecoRules.RuleId}=?";
                     using (var cmd = new OleDbCommand(sql, conn))
                     {
                         AddRuleParams(cmd, rule, includeRuleIdAtEnd: true);
@@ -400,15 +414,15 @@ namespace RecoTool.Services.Rules
                     // INSERT
                     await EnsureMissingColumnsAsync(conn, tableName).ConfigureAwait(false);
                     var sql = $@"INSERT INTO [{tableName}] (
-                        RuleId, Enabled, Priority, Scope, AccountSide, GuaranteeType, TransactionType, Booking,
-                        HasDwingsLink, IsGrouped, IsAmountMatch, Sign,
-                        MTStatus, CommIdEmail, BgiStatusInitiated,
-                        TriggerDateIsNull, DaysSinceTriggerMin, DaysSinceTriggerMax,
-                        OperationDaysAgoMin, OperationDaysAgoMax,
-                        IsMatched, HasManualMatch, IsFirstRequest, IsNewLine, DaysSinceReminderMin, DaysSinceReminderMax, CurrentActionId, IsActionDone, PaymentRequestStatus,
-                        OutputActionId, OutputKpiId, OutputIncidentTypeId, OutputRiskyItem, OutputReasonNonRiskyId,
-                        OutputToRemind, OutputToRemindDays, OutputActionDone, OutputFirstClaimToday, ApplyTo, AutoApply, Message, TriggerOnField,
-                        RespectUserEdits, UserEditLockDays, Mode)
+                        {Schema.Columns.RecoRules.RuleId}, {Schema.Columns.RecoRules.Enabled}, {Schema.Columns.RecoRules.Priority}, {Schema.Columns.RecoRules.Scope}, {Schema.Columns.RecoRules.AccountSide}, {Schema.Columns.RecoRules.GuaranteeType}, {Schema.Columns.RecoRules.TransactionType}, {Schema.Columns.RecoRules.Booking},
+                        {Schema.Columns.RecoRules.HasDwingsLink}, {Schema.Columns.RecoRules.IsGrouped}, {Schema.Columns.RecoRules.IsAmountMatch}, {Schema.Columns.RecoRules.Sign},
+                        {Schema.Columns.RecoRules.MTStatus}, {Schema.Columns.RecoRules.CommIdEmail}, {Schema.Columns.RecoRules.BgiStatusInitiated},
+                        {Schema.Columns.RecoRules.TriggerDateIsNull}, {Schema.Columns.RecoRules.DaysSinceTriggerMin}, {Schema.Columns.RecoRules.DaysSinceTriggerMax},
+                        {Schema.Columns.RecoRules.OperationDaysAgoMin}, {Schema.Columns.RecoRules.OperationDaysAgoMax},
+                        {Schema.Columns.RecoRules.IsMatched}, {Schema.Columns.RecoRules.HasManualMatch}, {Schema.Columns.RecoRules.IsFirstRequest}, {Schema.Columns.RecoRules.IsNewLine}, {Schema.Columns.RecoRules.DaysSinceReminderMin}, {Schema.Columns.RecoRules.DaysSinceReminderMax}, {Schema.Columns.RecoRules.CurrentActionId}, {Schema.Columns.RecoRules.IsActionDone}, {Schema.Columns.RecoRules.PaymentRequestStatus},
+                        {Schema.Columns.RecoRules.OutputActionId}, {Schema.Columns.RecoRules.OutputKpiId}, {Schema.Columns.RecoRules.OutputIncidentTypeId}, {Schema.Columns.RecoRules.OutputRiskyItem}, {Schema.Columns.RecoRules.OutputReasonNonRiskyId},
+                        {Schema.Columns.RecoRules.OutputToRemind}, {Schema.Columns.RecoRules.OutputToRemindDays}, {Schema.Columns.RecoRules.OutputActionDone}, {Schema.Columns.RecoRules.OutputFirstClaimToday}, {Schema.Columns.RecoRules.ApplyTo}, {Schema.Columns.RecoRules.AutoApply}, {Schema.Columns.RecoRules.Message}, {Schema.Columns.RecoRules.TriggerOnField},
+                        {Schema.Columns.RecoRules.RespectUserEdits}, {Schema.Columns.RecoRules.UserEditLockDays}, {Schema.Columns.RecoRules.Mode})
                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
                     using (var cmd = new OleDbCommand(sql, conn))
                     {
@@ -436,13 +450,16 @@ namespace RecoTool.Services.Rules
             var (conn, ownsConnection) = await GetConnectionAsync(token).ConfigureAwait(false);
             try
             {
-                using (var cmd = new OleDbCommand($"DELETE FROM [{tableName}] WHERE RuleId = ?", conn))
+                var n = await OleDbAsyncExecutor.RunAsync<int>(c =>
                 {
-                    cmd.Parameters.AddWithValue("@p1", ruleId);
-                    var n = await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false);
-                    if (n > 0) RaiseRulesChanged();
-                    return n;
-                }
+                    using (var cmd = new OleDbCommand($"DELETE FROM [{tableName}] WHERE {Schema.Columns.RecoRules.RuleId} = ?", c))
+                    {
+                        cmd.Parameters.AddWithValue("@p1", ruleId);
+                        return cmd.ExecuteNonQuery();
+                    }
+                }, conn, token).ConfigureAwait(false);
+                if (n > 0) RaiseRulesChanged();
+                return n;
             }
             finally
             {

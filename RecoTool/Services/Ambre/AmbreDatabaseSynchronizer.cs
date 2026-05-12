@@ -2,10 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Data.OleDb;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using OfflineFirstAccess.Helpers;
 using OfflineFirstAccess.Models;
 using RecoTool.Helpers;
+using RecoTool.Infrastructure;
+using RecoTool.Infrastructure.DataAccess;
+using RecoTool.Infrastructure.Time;
 using RecoTool.Models;
 using RecoTool.Services.DTOs;
 using RecoTool.Services.Snapshots;
@@ -20,12 +24,14 @@ namespace RecoTool.Services.Ambre
         private readonly OfflineFirstService _offlineFirstService;
         private readonly string _currentUser;
         private readonly SnapshotService _snapshotService;
+        private readonly IClock _clock;
         private ReconciliationService _reconciliationService;
 
-        public AmbreDatabaseSynchronizer(OfflineFirstService offlineFirstService, string currentUser)
+        public AmbreDatabaseSynchronizer(OfflineFirstService offlineFirstService, string currentUser, IClock clock = null)
         {
             _offlineFirstService = offlineFirstService ?? throw new ArgumentNullException(nameof(offlineFirstService));
             _currentUser = currentUser;
+            _clock = clock ?? SystemClock.Instance;
             _snapshotService = new SnapshotService(_offlineFirstService);
         }
 
@@ -36,13 +42,15 @@ namespace RecoTool.Services.Ambre
             List<DataAmbre> validData,
             string countryId,
             ImportResult result,
-            Action<string, int> progressCallback)
+            Action<string, int> progressCallback,
+            CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             progressCallback?.Invoke("Synchronizing with database...", 80);
-            
+
             var syncResult = await SynchronizeWithDatabaseAsync(
-                validData, countryId, performNetworkSync: true, assumeGlobalLockHeld: true, progressCallback: progressCallback);
-                
+                validData, countryId, performNetworkSync: true, assumeGlobalLockHeld: true, progressCallback: progressCallback, ct: ct);
+
             result.NewRecords = syncResult.newCount;
             result.UpdatedRecords = syncResult.updatedCount;
             result.DeletedRecords = syncResult.deletedCount;
@@ -50,17 +58,20 @@ namespace RecoTool.Services.Ambre
         }
 
         private async Task<(int newCount, int updatedCount, int deletedCount)> SynchronizeWithDatabaseAsync(
-            List<DataAmbre> newData, 
-            string countryId, 
-            bool performNetworkSync, 
+            List<DataAmbre> newData,
+            string countryId,
+            bool performNetworkSync,
             bool assumeGlobalLockHeld = false,
-            Action<string, int> progressCallback = null)
+            Action<string, int> progressCallback = null,
+            CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             // Snapshot: captures the pre-import state of AMBRE+DW+Reco so the UI can compute
             // "what changed since last import" on demand. Runs BEFORE any DB load so the .accdb
             // files are closed and File.Copy cannot hit a sharing violation.
             SnapshotHandle snapshot = null;
-            try { snapshot = await _snapshotService.BeginAsync(countryId, RunKind.AmbreImport, _currentUser).ConfigureAwait(false); }
+            try { snapshot = await _snapshotService.BeginAsync(countryId, RunKind.AmbreImport, _currentUser, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
             catch (Exception snapEx) { LogManager.Warning($"Snapshot (begin) failed for {countryId}: {snapEx.Message}"); }
 
             bool runSucceeded = false;
@@ -78,7 +89,7 @@ namespace RecoTool.Services.Ambre
                 LogManager.Info($"Calculated changes for {countryId} - New: {newCount}, Updated: {updCount}, Deleted: {arcCount}");
 
                 // 2. Appliquer les changements
-                await ExecuteChangesAsync(changes, countryId, assumeGlobalLockHeld, progressCallback);
+                await ExecuteChangesAsync(changes, countryId, assumeGlobalLockHeld, progressCallback, ct);
 
                 // 3. Synchronisation réseau si nécessaire
                 if (performNetworkSync && !assumeGlobalLockHeld)
@@ -98,39 +109,45 @@ namespace RecoTool.Services.Ambre
             finally
             {
                 // Always finalise — gives the UI a success flag + final counts even on failure.
-                try { await _snapshotService.CompleteAsync(snapshot, newCount, updCount, arcCount, runSucceeded, errorMsg).ConfigureAwait(false); }
+                try { await _snapshotService.CompleteAsync(snapshot, newCount, updCount, arcCount, runSucceeded, errorMsg, ct).ConfigureAwait(false); }
                 catch (Exception endEx) { LogManager.Warning($"Snapshot (complete) failed for {countryId}: {endEx.Message}"); }
             }
         }
 
-        private async Task ExecuteChangesAsync(ImportChanges changes, string countryId, bool assumeGlobalLockHeld, Action<string, int> progressCallback = null)
+        private async Task ExecuteChangesAsync(ImportChanges changes, string countryId, bool assumeGlobalLockHeld, Action<string, int> progressCallback = null, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             async Task ApplyChangesInternalAsync()
             {
+                ct.ThrowIfCancellationRequested();
                 try
                 {
                     // Backup
                     var backupTimer = System.Diagnostics.Stopwatch.StartNew();
-                    try { await _offlineFirstService.CreateLocalReconciliationBackupAsync(countryId, "PreImport"); } catch { }
+                    try { await _offlineFirstService.CreateLocalReconciliationBackupAsync(countryId, "PreImport"); }
+                    catch (Exception exBak) { try { LogManager.Debug($"[Import] Pre-import reconciliation backup failed (best-effort): {exBak.Message}"); } catch { } }
                     backupTimer.Stop();
                     LogManager.Info($"[PERF] Backup completed in {backupTimer.ElapsedMilliseconds}ms");
 
                     // Apply changes
-                    try { await _offlineFirstService.SetSyncStatusAsync("ApplyingChanges"); } catch { }
+                    try { await _offlineFirstService.SetSyncStatusAsync("ApplyingChanges"); }
+                    catch (Exception exStat) { try { LogManager.Debug($"[Import] SetSyncStatusAsync(ApplyingChanges) failed: {exStat.Message}"); } catch { } }
                     var applyTimer = System.Diagnostics.Stopwatch.StartNew();
                     await ApplyChangesAsync(changes, countryId);
                     applyTimer.Stop();
                     LogManager.Info($"[PERF] ApplyChanges (T_Data_Ambre) completed in {applyTimer.ElapsedMilliseconds}ms");
 
                     // Update reconciliation
-                    try { await _offlineFirstService.SetSyncStatusAsync("Reconciling"); } catch { }
+                    try { await _offlineFirstService.SetSyncStatusAsync("Reconciling"); }
+                    catch (Exception exStat) { try { LogManager.Debug($"[Import] SetSyncStatusAsync(Reconciling) failed: {exStat.Message}"); } catch { } }
                     var recoTimer = System.Diagnostics.Stopwatch.StartNew();
                     await UpdateReconciliationTableAsync(changes, countryId, progressCallback);
                     recoTimer.Stop();
                     LogManager.Info($"[PERF] UpdateReconciliationTable completed in {recoTimer.ElapsedMilliseconds}ms");
 
                     // Publish to network
-                    try { await _offlineFirstService.SetSyncStatusAsync("Publishing"); } catch { }
+                    try { await _offlineFirstService.SetSyncStatusAsync("Publishing"); }
+                    catch (Exception exStat) { try { LogManager.Debug($"[Import] SetSyncStatusAsync(Publishing) failed: {exStat.Message}"); } catch { } }
                     var publishTimer = System.Diagnostics.Stopwatch.StartNew();
                     // 1) Publish AMBRE as ZIP to network
                     try { await _offlineFirstService.CopyLocalToNetworkAmbreAsync(countryId).ConfigureAwait(false); } catch (Exception ex) { LogManager.Warning($"AMBRE: publish to network failed: {ex.Message}"); }
@@ -142,10 +159,12 @@ namespace RecoTool.Services.Ambre
                     // PERF: Advance pull watermark to prevent re-pulling the 20K rows we just published.
                     // Without this, the next PullReconciliationFromNetworkAsync sees all imported rows as "new"
                     // and re-processes them one by one (minutes of wasted work).
-                    try { _offlineFirstService.AdvancePullWatermark(countryId, DateTime.UtcNow); } catch { }
+                    try { _offlineFirstService.AdvancePullWatermark(countryId, _clock.UtcNow); }
+                    catch (Exception exWm) { try { LogManager.Debug($"[Import] AdvancePullWatermark failed: {exWm.Message}"); } catch { } }
 
                     // Finalize
-                    try { await _offlineFirstService.SetSyncStatusAsync("Finalizing"); } catch { }
+                    try { await _offlineFirstService.SetSyncStatusAsync("Finalizing"); }
+                    catch (Exception exStat) { try { LogManager.Debug($"[Import] SetSyncStatusAsync(Finalizing) failed: {exStat.Message}"); } catch { } }
                     var finalizeTimer = System.Diagnostics.Stopwatch.StartNew();
                     await _offlineFirstService.MarkAllLocalChangesAsSyncedAsync(countryId);
 
@@ -156,10 +175,11 @@ namespace RecoTool.Services.Ambre
                         var pfx = _offlineFirstService.GetParameter("CountryDatabasePrefix") ?? "DB_";
                         SyncMonitorService.WriteSyncMarker(dir, pfx, countryId);
                     }
-                    catch { }
+                    catch (Exception exMarker) { try { LogManager.Debug($"[Import] WriteSyncMarker failed (peers may detect changes via poll only): {exMarker.Message}"); } catch { } }
 
                     // Cleanup
-                    try { await _offlineFirstService.CleanupChangeLogAndCompactAsync(countryId); } catch { }
+                    try { await _offlineFirstService.CleanupChangeLogAndCompactAsync(countryId); }
+                    catch (Exception exClean) { try { LogManager.Debug($"[Import] CleanupChangeLogAndCompactAsync failed: {exClean.Message}"); } catch { } }
                     finalizeTimer.Stop();
                     LogManager.Info($"[PERF] Finalize and cleanup completed in {finalizeTimer.ElapsedMilliseconds}ms");
                 }
@@ -192,8 +212,10 @@ namespace RecoTool.Services.Ambre
             // Derive wait and lease from T_Param if present; defaults: wait=120s, lease=300s
             int waitSec = 120;
             int leaseSec = 300;
-            try { var s = _offlineFirstService.GetParameter("ImportGlobalLockAcquireWaitSeconds"); if (!string.IsNullOrWhiteSpace(s)) int.TryParse(s, out waitSec); } catch { }
-            try { var s = _offlineFirstService.GetParameter("ImportGlobalLockLeaseSeconds"); if (!string.IsNullOrWhiteSpace(s)) int.TryParse(s, out leaseSec); } catch { }
+            try { var s = _offlineFirstService.GetParameter("ImportGlobalLockAcquireWaitSeconds"); if (!string.IsNullOrWhiteSpace(s)) int.TryParse(s, out waitSec); }
+            catch (Exception exP) { try { LogManager.Debug($"[Import] GetParameter(ImportGlobalLockAcquireWaitSeconds) failed, using default {waitSec}s: {exP.Message}"); } catch { } }
+            try { var s = _offlineFirstService.GetParameter("ImportGlobalLockLeaseSeconds"); if (!string.IsNullOrWhiteSpace(s)) int.TryParse(s, out leaseSec); }
+            catch (Exception exP) { try { LogManager.Debug($"[Import] GetParameter(ImportGlobalLockLeaseSeconds) failed, using default {leaseSec}s: {exP.Message}"); } catch { } }
 
             if (waitSec < 30) waitSec = 30; if (waitSec > 600) waitSec = 600;
             if (leaseSec < 120) leaseSec = 120; if (leaseSec > 1800) leaseSec = 1800;
@@ -243,7 +265,7 @@ namespace RecoTool.Services.Ambre
         {
             LogManager.Info($"Loading existing Ambre data for {countryId}");
             
-            var entities = await _offlineFirstService.GetEntitiesAsync(countryId, "T_Data_Ambre");
+            var entities = await _offlineFirstService.GetEntitiesAsync(countryId, Schema.Tables.T_Data_Ambre);
             var existingData = new List<DataAmbre>();
             
             if (entities != null)
@@ -375,7 +397,7 @@ namespace RecoTool.Services.Ambre
                 newItem.Version = existingItem.Version + 1;
                 newItem.CreationDate = existingItem.CreationDate;
                 newItem.DeleteDate = null;
-                newItem.LastModified = DateTime.UtcNow;
+                newItem.LastModified = _clock.UtcNow;
                 newItem.ModifiedBy = _currentUser;
                 changes.ToUpdate.Add(newItem);
             }
@@ -385,7 +407,7 @@ namespace RecoTool.Services.Ambre
                 newItem.ID = existingItem.ID;
                 newItem.Version = existingItem.Version + 1;
                 newItem.CreationDate = existingItem.CreationDate;
-                newItem.LastModified = DateTime.UtcNow;
+                newItem.LastModified = _clock.UtcNow;
                 newItem.ModifiedBy = _currentUser;
                 changes.ToUpdate.Add(newItem);
             }
@@ -406,16 +428,18 @@ namespace RecoTool.Services.Ambre
         {
             newItem.ID = newItem.GetUniqueKey();
             newItem.Version = 1;
-            newItem.CreationDate = DateTime.UtcNow;
-            newItem.LastModified = DateTime.UtcNow;
+            var now = _clock.UtcNow;
+            newItem.CreationDate = now;
+            newItem.LastModified = now;
             newItem.ModifiedBy = _currentUser;
             changes.ToAdd.Add(newItem);
         }
 
         private void ProcessDeletedItem(DataAmbre existingItem, ImportChanges changes)
         {
-            existingItem.DeleteDate = DateTime.UtcNow;
-            existingItem.LastModified = DateTime.UtcNow;
+            var now = _clock.UtcNow;
+            existingItem.DeleteDate = now;
+            existingItem.LastModified = now;
             existingItem.ModifiedBy = _currentUser;
             existingItem.Version += 1;
             changes.ToArchive.Add(existingItem);
@@ -465,8 +489,8 @@ namespace RecoTool.Services.Ambre
         {
             return new Entity
             {
-                TableName = "T_Data_Ambre",
-                PrimaryKeyColumn = "ID",
+                TableName = Schema.Tables.T_Data_Ambre,
+                PrimaryKeyColumn = Schema.Columns.Ambre.ID,
                 Properties = new Dictionary<string, object>
                 {
                     ["ID"] = dataAmbre.ID,

@@ -99,12 +99,28 @@ namespace RecoTool.Windows
                 var selectedItem = ResultsDataGrid.SelectedItem as ReconciliationViewData;
                 if (selectedItem != null)
                 {
+                    // Legacy ctor: the code-behind's LoadReconciliationAsync drives
+                    // the DWINGS guarantee/BGI/BGPMT pre-selection in the UI. The
+                    // MVVM ctor only loads Action/KPI/IncidentType/etc. so we keep
+                    // legacy here to preserve the full UI behavior on double-click.
                     var win = new ReconciliationDetailWindow(selectedItem, _allViewData, _reconciliationService, _offlineFirstService);
                     win.Owner = Window.GetWindow(this);
                     var result = win.ShowDialog();
                     if (result == true)
                     {
-                        await RefreshAsync();
+                        // Fast path: the detail dialog reports exactly which rows it touched, so
+                        // we re-fetch only those rows and update them in place (sub-100ms typical).
+                        // Falls back to the full RefreshAsync pipeline only when no targeted list
+                        // is available (defensive — should not happen with the current dialog).
+                        var affected = win.AffectedRowIds;
+                        if (affected != null && affected.Count > 0)
+                        {
+                            await RefreshRowsAsync(affected);
+                        }
+                        else
+                        {
+                            await RefreshAsync();
+                        }
                         // After successful detail save, push pending changes best-effort (debounced)
                         try
                         {

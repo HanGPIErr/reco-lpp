@@ -140,6 +140,31 @@ namespace RecoTool.Windows
             CheckDW();
         }
 
+        private RecoTool.ViewModels.ImportAmbreViewModel _vm;
+
+        /// <summary>
+        /// MVVM constructor. The VM owns the import workflow state (file paths,
+        /// progress, errors). The XAML uses Click handlers (no command bindings)
+        /// so the legacy code-behind continues to drive the buttons; the VM is
+        /// available for future migration of those handlers. On CompletedWithResult
+        /// the dialog closes with DialogResult reflecting success.
+        /// </summary>
+        public ImportAmbreWindow(OfflineFirstService offlineFirstService,
+                                 AmbreImportService ambreImportService,
+                                 RecoTool.ViewModels.ImportAmbreViewModel vm)
+            : this(offlineFirstService, ambreImportService)
+        {
+            _vm = vm ?? throw new ArgumentNullException(nameof(vm));
+            // We leave DataContext = this so the existing direct-property access in
+            // the code-behind keeps working (no XAML bindings against the VM exist
+            // today). The VM is wired for completion notification only.
+            _vm.CompletedWithResult += (_, success) => Dispatcher.Invoke(() =>
+            {
+                try { DialogResult = success; } catch { }
+                Close();
+            });
+        }
+
         #endregion
 
         #region Initialization
@@ -816,7 +841,7 @@ namespace RecoTool.Windows
         {
             Dispatcher.Invoke(() =>
             {
-                var timestamp = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+                var timestamp = BaseEntity.Clock.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
                 var prefix = isError ? "[ERREUR]" : "[INFO]";
                 var logEntry = $"{timestamp} {prefix} {message}\n";
                 

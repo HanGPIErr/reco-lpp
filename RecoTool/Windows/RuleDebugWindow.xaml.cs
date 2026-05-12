@@ -10,9 +10,18 @@ namespace RecoTool.Windows
 {
     public partial class RuleDebugWindow : Window
     {
+        // Service locator removal: resolved ONCE in the ctor body; the double-click handler
+        // reuses the field instead of reaching into App.ServiceProvider on every invocation.
+        private readonly OfflineFirstService _offlineFirstService;
+
         public RuleDebugWindow()
         {
             InitializeComponent();
+            try
+            {
+                _offlineFirstService = App.ServiceProvider?.GetService(typeof(OfflineFirstService)) as OfflineFirstService;
+            }
+            catch { _offlineFirstService = null; }
         }
 
         public void SetDebugInfo(string lineInfo, string contextInfo, List<RuleDebugItem> rules)
@@ -42,8 +51,8 @@ namespace RecoTool.Windows
                 var item = RulesDataGrid.SelectedItem as RuleDebugItem;
                 if (item?.Rule == null) return;
 
-                // Resolve services from the app container — same pattern as RulesAdminWindow.
-                var offlineSvc = App.ServiceProvider?.GetService(typeof(OfflineFirstService)) as OfflineFirstService;
+                // Service locator removal: reuse the field hydrated ONCE in the ctor body.
+                var offlineSvc = _offlineFirstService;
                 if (offlineSvc == null)
                 {
                     MessageBox.Show(this, "OfflineFirstService not available.", "Edit Rule", MessageBoxButton.OK, MessageBoxImage.Error);
@@ -52,7 +61,19 @@ namespace RecoTool.Windows
 
                 // Clone so that a canceled edit doesn't corrupt the snapshot currently displayed.
                 var seed = item.Rule.Clone();
-                var editor = new RuleEditorWindow(seed, offlineSvc) { Owner = this };
+                // MVVM call site (Option B): prefer the VM ctor when the dialog
+                // service is resolvable. Falls back to legacy ctor otherwise.
+                RuleEditorWindow editor;
+                var dialogSvc = App.ServiceProvider?.GetService(typeof(RecoTool.Services.UI.IDialogService)) as RecoTool.Services.UI.IDialogService;
+                if (dialogSvc != null)
+                {
+                    var editorVm = new RecoTool.ViewModels.RuleEditorViewModel(seed, offlineSvc, dialogSvc);
+                    editor = new RuleEditorWindow(editorVm) { Owner = this };
+                }
+                else
+                {
+                    editor = new RuleEditorWindow(seed, offlineSvc) { Owner = this };
+                }
                 if (editor.ShowDialog() != true || editor.ResultRule == null)
                     return;
 

@@ -66,5 +66,6 @@ namespace RecoTool.Configuration
         /// Country DB directory parameter key override for UAT.
         /// </summary>
         public static string CountryDbDirParamKey => IsUAT ? "CountryDatabaseDirectory_UAT" : "CountryDatabaseDirectory";
+
     }
 }

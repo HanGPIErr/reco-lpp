@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using OfflineFirstAccess.Helpers;
+using RecoTool.Infrastructure.Time;
 using RecoTool.Services.DTOs;
 
 namespace RecoTool.Services.Snapshots
@@ -73,10 +74,12 @@ namespace RecoTool.Services.Snapshots
             new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
 
         private readonly OfflineFirstService _ofs;
+        private readonly IClock _clock;
 
-        public SnapshotService(OfflineFirstService ofs)
+        public SnapshotService(OfflineFirstService ofs, IClock clock = null)
         {
             _ofs = ofs ?? throw new ArgumentNullException(nameof(ofs));
+            _clock = clock ?? SystemClock.Instance;
         }
 
         // ──────────────────────────────────────────────────────────────────────────────────────
@@ -93,10 +96,11 @@ namespace RecoTool.Services.Snapshots
         /// if the snapshot location cannot be resolved — callers should treat this as "journaling
         /// disabled for this run" and continue.
         /// </returns>
-        public async Task<SnapshotHandle> BeginAsync(string countryId, RunKind kind, string triggeredBy)
+        public async Task<SnapshotHandle> BeginAsync(string countryId, RunKind kind, string triggeredBy, CancellationToken ct = default)
         {
             if (string.IsNullOrWhiteSpace(countryId))
                 throw new ArgumentException("countryId is required", nameof(countryId));
+            ct.ThrowIfCancellationRequested();
 
             string countryDir;
             try
@@ -114,7 +118,7 @@ namespace RecoTool.Services.Snapshots
             try { PurgeOld(countryId, Math.Max(1, GetRetainCount() - 1)); }
             catch (Exception ex) { LogManager.Warning($"Snapshot: pre-rotation failed: {ex.Message}"); }
 
-            var started = DateTime.UtcNow;
+            var started = _clock.UtcNow;
             var stamp = started.ToString(TimestampFormat);
             var runId = Guid.NewGuid();
 
@@ -184,16 +188,18 @@ namespace RecoTool.Services.Snapshots
         public async Task CompleteAsync(
             SnapshotHandle handle,
             int newCount, int updatedCount, int archivedCount,
-            bool success, string errorMessage = null)
+            bool success, string errorMessage = null,
+            CancellationToken ct = default)
         {
             if (handle == null || string.IsNullOrEmpty(handle.ManifestPath) || !File.Exists(handle.ManifestPath))
                 return;
+            ct.ThrowIfCancellationRequested();
 
             try
             {
                 var manifest = await Task.Run(() => ReadManifest(handle.ManifestPath)).ConfigureAwait(false);
                 if (manifest == null) return;
-                manifest.EndedUtc = DateTime.UtcNow;
+                manifest.EndedUtc = _clock.UtcNow;
                 manifest.NewCount = newCount;
                 manifest.UpdatedCount = updatedCount;
                 manifest.ArchivedCount = archivedCount;
@@ -209,7 +215,8 @@ namespace RecoTool.Services.Snapshots
             // Publish to the shared network folder so other users see the diff on their next
             // view load. Best-effort and separately guarded: a publish failure must not mask
             // the import outcome the caller is waiting for.
-            try { await PublishAsync(handle).ConfigureAwait(false); }
+            try { await PublishAsync(handle, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex) { LogManager.Warning($"Snapshot: publish failed: {ex.Message}"); }
         }
 
@@ -233,10 +240,11 @@ namespace RecoTool.Services.Snapshots
         /// always remains available as a fallback.
         /// </para>
         /// </remarks>
-        public async Task PublishAsync(SnapshotHandle handle)
+        public async Task PublishAsync(SnapshotHandle handle, CancellationToken ct = default)
         {
             if (handle == null || string.IsNullOrEmpty(handle.CountryId)) return;
             if (string.IsNullOrEmpty(handle.ManifestPath) || !File.Exists(handle.ManifestPath)) return;
+            ct.ThrowIfCancellationRequested();
 
             string netDir;
             try { netDir = EnsureNetworkCountryDir(handle.CountryId); }
@@ -250,7 +258,7 @@ namespace RecoTool.Services.Snapshots
             // Serialize publish+pull per country so two concurrent imports (shouldn't happen thanks
             // to the global lock, but be defensive) don't race on the same zip path.
             var gate = _networkGates.GetOrAdd(handle.CountryId, _ => new SemaphoreSlim(1, 1));
-            await gate.WaitAsync().ConfigureAwait(false);
+            await gate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
                 var stamp = handle.StartedUtc.ToString(TimestampFormat);
@@ -303,19 +311,21 @@ namespace RecoTool.Services.Snapshots
         /// diff entry point — under the <see cref="PullRefreshInterval"/> window it's a no-op,
         /// so rapid view refreshes don't spam the share with directory scans.
         /// </summary>
-        public async Task EnsureLatestAsync(string countryId)
+        public async Task EnsureLatestAsync(string countryId, CancellationToken ct = default)
         {
             if (string.IsNullOrWhiteSpace(countryId)) return;
+            ct.ThrowIfCancellationRequested();
 
             // Read-then-write on the timestamp map without locking: worst case, two concurrent
             // callers both pass the gate and do a scan — the per-country semaphore in PullLatestAsync
             // still serializes the actual IO, so there's no correctness issue.
-            var now = DateTime.UtcNow;
+            var now = _clock.UtcNow;
             if (_lastPullUtc.TryGetValue(countryId, out var last) && (now - last) < PullRefreshInterval)
                 return;
             _lastPullUtc[countryId] = now;
 
-            try { await PullLatestAsync(countryId).ConfigureAwait(false); }
+            try { await PullLatestAsync(countryId, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex) { LogManager.Warning($"Snapshot: EnsureLatestAsync failed: {ex.Message}"); }
         }
 
@@ -326,9 +336,10 @@ namespace RecoTool.Services.Snapshots
         /// transparently sees shared runs as if they had been produced locally.
         /// </summary>
         /// <returns>Number of new runs pulled during this invocation.</returns>
-        public async Task<int> PullLatestAsync(string countryId)
+        public async Task<int> PullLatestAsync(string countryId, CancellationToken ct = default)
         {
             if (string.IsNullOrWhiteSpace(countryId)) return 0;
+            ct.ThrowIfCancellationRequested();
 
             string netDir;
             try { netDir = GetNetworkCountrySnapshotDir(countryId); }
@@ -340,7 +351,7 @@ namespace RecoTool.Services.Snapshots
             catch { return 0; }
 
             var gate = _networkGates.GetOrAdd(countryId, _ => new SemaphoreSlim(1, 1));
-            await gate.WaitAsync().ConfigureAwait(false);
+            await gate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
                 int pulled = 0;
@@ -350,6 +361,7 @@ namespace RecoTool.Services.Snapshots
 
                 foreach (var netZip in netZips)
                 {
+                    ct.ThrowIfCancellationRequested();
                     // Dedup by filename stamp. The snapshots are named deterministically from the
                     // run's StartedUtc, so if the local manifest with that stamp exists the content
                     // is already extracted — skip without touching the share.
@@ -362,9 +374,10 @@ namespace RecoTool.Services.Snapshots
 
                     try
                     {
-                        await PullSingleZipAsync(netZip, localDir).ConfigureAwait(false);
+                        await PullSingleZipAsync(netZip, localDir, ct).ConfigureAwait(false);
                         pulled++;
                     }
+                    catch (OperationCanceledException) { throw; }
                     catch (Exception ex)
                     {
                         LogManager.Warning($"Snapshot: pull {Path.GetFileName(netZip)} failed: {ex.Message}");
@@ -391,8 +404,9 @@ namespace RecoTool.Services.Snapshots
         /// into <paramref name="localDir"/>. The network zip is treated as immutable — a partially
         /// downloaded temp file never replaces a valid local artefact.
         /// </summary>
-        private static async Task PullSingleZipAsync(string netZip, string localDir)
+        private static async Task PullSingleZipAsync(string netZip, string localDir, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             var tempZip = Path.Combine(Path.GetTempPath(), Path.GetFileName(netZip) + ".tmp_" + Guid.NewGuid().ToString("N"));
             try
             {
@@ -401,7 +415,7 @@ namespace RecoTool.Services.Snapshots
                 using (var src = new FileStream(netZip, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true))
                 using (var dst = new FileStream(tempZip, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
                 {
-                    await src.CopyToAsync(dst).ConfigureAwait(false);
+                    await src.CopyToAsync(dst, 81920, ct).ConfigureAwait(false);
                 }
 
                 await Task.Run(() =>

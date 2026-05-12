@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using RecoTool.Infrastructure.Time;
 using RecoTool.Services;
 
 namespace RecoTool.Services.Rules
@@ -12,21 +13,35 @@ namespace RecoTool.Services.Rules
     /// </summary>
     public class RulesEngine
     {
-        // DEBUG FLAG: Set to true to log detailed rule matching failures
-        private const bool DEBUG_RULES = true;
-        
+        // DEBUG FLAG: flip to true locally to trace every rule evaluation
+        // (applied or skipped). Kept false in production to avoid the spam in
+        // attached Debug listeners during bulk imports (20k+ rows × N rules).
+        private const bool DEBUG_RULES = false;
+
         private readonly TruthTableRepository _repo;
+        private readonly IClock _clock;
         private List<TruthRule> _cache;
         private DateTime _cacheTimeUtc;
         private readonly TimeSpan _cacheTtl = TimeSpan.FromMinutes(2);
 
-        public RulesEngine(OfflineFirstService offlineFirstService)
+        public RulesEngine(IOfflineFirstService offlineFirstService, IClock clock = null)
         {
             if (offlineFirstService == null) throw new ArgumentNullException(nameof(offlineFirstService));
             _repo = new TruthTableRepository(offlineFirstService);
+            _clock = clock ?? SystemClock.Instance;
             // Auto-invalidate cache when a rule is created/updated/deleted elsewhere in the process
             // (typically through RulesAdminWindow). Weak-ref not required here: engine lifetime == process.
             TruthTableRepository.RulesChanged += OnRulesChanged;
+        }
+
+        /// <summary>
+        /// Test seam: pre-seed the in-memory rule cache (bypasses the repository load).
+        /// Use only from unit tests via InternalsVisibleTo.
+        /// </summary>
+        internal void __TestSeedRules(IEnumerable<TruthRule> rules)
+        {
+            _cache = (rules ?? Enumerable.Empty<TruthRule>()).ToList();
+            _cacheTimeUtc = _clock.UtcNow;
         }
 
         private void OnRulesChanged(object sender, EventArgs e) => InvalidateCache();
@@ -42,11 +57,11 @@ namespace RecoTool.Services.Rules
 
         private async Task<List<TruthRule>> GetRulesAsync(CancellationToken token)
         {
-            if (_cache != null && DateTime.UtcNow - _cacheTimeUtc < _cacheTtl)
+            if (_cache != null && _clock.UtcNow - _cacheTimeUtc < _cacheTtl)
                 return _cache;
             var rules = await _repo.LoadRulesAsync(token).ConfigureAwait(false);
             _cache = rules ?? new List<TruthRule>();
-            _cacheTimeUtc = DateTime.UtcNow;
+            _cacheTimeUtc = _clock.UtcNow;
             return _cache;
         }
 

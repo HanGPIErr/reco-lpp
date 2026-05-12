@@ -6,6 +6,9 @@ using System.Collections.Concurrent;
 using System.Threading;
 using System.Linq;
 using OfflineFirstAccess.Helpers;
+using RecoTool.Infrastructure.Time;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace RecoTool.Services
 {
@@ -15,6 +18,12 @@ namespace RecoTool.Services
     /// </summary>
     public sealed class SyncMonitorService : IDisposable
     {
+        /// <summary>Clock used for sync-marker timestamps & cooldown logic. Defaults to <see cref="SystemClock.Instance"/>; swappable for tests.</summary>
+        public static IClock Clock { get; set; } = SystemClock.Instance;
+
+        /// <summary>Logger for diagnostics. Defaults to <see cref="NullLogger.Instance"/>; replace via DI bootstrapping.</summary>
+        public static ILogger Logger { get; set; } = NullLogger.Instance;
+
         private static readonly Lazy<SyncMonitorService> _instance = new Lazy<SyncMonitorService>(() => new SyncMonitorService());
         public static SyncMonitorService Instance => _instance.Value;
 
@@ -84,11 +93,15 @@ namespace RecoTool.Services
                         {
                             svc.SyncStateChanged += (s, e) => ForwardSyncState(e);
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            Logger.LogWarning(ex, "SyncMonitorService.Initialize: failed to subscribe to SyncStateChanged");
+                        }
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Logger.LogWarning(ex, "SyncMonitorService.Initialize: failed to prime initial states; defaulting to offline/idle");
                     _lastNetworkAvailable = false;
                     _lastLockActive = false;
                 }
@@ -151,7 +164,8 @@ namespace RecoTool.Services
                 // ──────────────────────────────────────────────────────────────
                 bool remoteChanged = false;
                 bool importInProgress = false;
-                try { importInProgress = svc.IsAmbreImportInProgress(); } catch { }
+                try { importInProgress = svc.IsAmbreImportInProgress(); }
+                catch (Exception ex) { Logger.LogDebug(ex, "SyncMonitorService.Tick: IsAmbreImportInProgress check failed"); }
 
                 if (!importInProgress)
                 {
@@ -159,7 +173,10 @@ namespace RecoTool.Services
                     {
                         remoteChanged = await CheckSyncMarkerChangedAsync(svc, cid).ConfigureAwait(false);
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        Logger.LogWarning(ex, "SyncMonitorService.Tick: CheckSyncMarkerChanged failed for country {CountryId}", cid);
+                    }
                 }
 
                 // ──────────────────────────────────────────────────────────────
@@ -214,7 +231,7 @@ namespace RecoTool.Services
                         _bulkPushQueue.TryRemove(queuedCid, out _);
                         shouldPush = true;
                     }
-                    var nowUtc = DateTime.UtcNow;
+                    var nowUtc = Clock.UtcNow;
                     if (nowUtc - _lastPeriodicPushUtc >= PeriodicPushInterval)
                     {
                         _lastPeriodicPushUtc = nowUtc;
@@ -225,7 +242,8 @@ namespace RecoTool.Services
                         // Fire-and-forget: push runs on thread pool, never blocks the tick
                         _ = Task.Run(async () =>
                         {
-                            try { await svc.PushReconciliationIfPendingAsync(cid); } catch { }
+                            try { await svc.PushReconciliationIfPendingAsync(cid); }
+                            catch (Exception ex) { Logger.LogWarning(ex, "SyncMonitorService: background PushReconciliationIfPending failed for country {CountryId}", cid); }
                         });
                     }
                 }
@@ -242,11 +260,15 @@ namespace RecoTool.Services
                             var pulled = await svc.PullReconciliationFromNetworkAsync(cid);
                             if (pulled > 0)
                             {
-                                try { ReconciliationService.InvalidateReconciliationViewCache(cid); } catch { }
+                                try { ReconciliationService.InvalidateReconciliationViewCache(cid); }
+                                catch (Exception ex) { Logger.LogWarning(ex, "SyncMonitorService: failed to invalidate reco view cache after pull for {CountryId}", cid); }
                                 SafeInvoke(() => SyncPulledChanges?.Invoke(cid, pulled));
                             }
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            Logger.LogWarning(ex, "SyncMonitorService: background PullReconciliationFromNetwork failed for country {CountryId}", cid);
+                        }
                     });
                 }
             }
@@ -266,10 +288,11 @@ namespace RecoTool.Services
         /// Reading this tiny file (~30 bytes) takes <1ms on LAN vs 100ms-3s for FileInfo on .accdb.
         /// Returns true if the marker changed since last check (= another user pushed changes).
         /// </summary>
-        private async Task<bool> CheckSyncMarkerChangedAsync(OfflineFirstService svc, string countryId)
+        private async Task<bool> CheckSyncMarkerChangedAsync(OfflineFirstService svc, string countryId, CancellationToken ct = default)
         {
             try
             {
+                ct.ThrowIfCancellationRequested();
                 string remoteDir = svc.GetParameter("CountryDatabaseDirectory");
                 if (string.IsNullOrWhiteSpace(remoteDir)) return false;
                 string prefix = svc.GetParameter("CountryDatabasePrefix") ?? "DB_";
@@ -283,11 +306,15 @@ namespace RecoTool.Services
                     {
                         if (!File.Exists(markerPath)) return null;
                         return File.ReadAllText(markerPath).Trim();
-                    });
-                    if (await Task.WhenAny(readTask, Task.Delay(2000)) == readTask)
+                    }, ct);
+                    if (await Task.WhenAny(readTask, Task.Delay(2000, ct)) == readTask)
                         content = await readTask;
                 }
-                catch { return false; }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "SyncMonitorService.CheckSyncMarker: failed to read marker for {CountryId}", countryId);
+                    return false;
+                }
 
                 if (string.IsNullOrWhiteSpace(content)) return false;
 
@@ -308,7 +335,10 @@ namespace RecoTool.Services
                         }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "SyncMonitorService.CheckSyncMarker: failed to parse marker content for {CountryId}", countryId);
+                }
 
                 var previous = _syncMarkerCache.GetOrAdd(countryId, string.Empty);
                 if (string.Equals(content, previous, StringComparison.Ordinal))
@@ -335,14 +365,14 @@ namespace RecoTool.Services
                 var prefix = string.IsNullOrWhiteSpace(countryDatabasePrefix) ? "DB_" : countryDatabasePrefix;
                 var markerPath = Path.Combine(countryDatabaseDirectory, $"{prefix}{countryId}.sync");
                 // Write timestamp + machine name for debugging
-                File.WriteAllText(markerPath, $"{DateTime.UtcNow:O}|{Environment.MachineName}|{Environment.UserName}");
+                File.WriteAllText(markerPath, $"{Clock.UtcNow:O}|{Environment.MachineName}|{Environment.UserName}");
             }
             catch { /* best-effort, don't fail the push */ }
         }
 
         private void SuggestIfCooldownAllows(string reason)
         {
-            var now = DateTime.UtcNow;
+            var now = Clock.UtcNow;
             if (now - _lastSuggestUtc < SuggestCooldown) return;
             _lastSuggestUtc = now;
             SafeInvoke(() => SyncSuggested?.Invoke(reason));
@@ -352,12 +382,15 @@ namespace RecoTool.Services
         {
             try
             {
-                var now = DateTime.UtcNow;
+                var now = Clock.UtcNow;
                 if (now - _lastForwardUtc < ForwardCooldown) return;
                 _lastForwardUtc = now;
                 SafeInvoke(() => SyncStateChanged?.Invoke(e));
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "SyncMonitorService.ForwardSyncState failed");
+            }
         }
 
         /// <summary>
@@ -374,7 +407,8 @@ namespace RecoTool.Services
 
         private static void SafeInvoke(Action action)
         {
-            try { action?.Invoke(); } catch { }
+            try { action?.Invoke(); }
+            catch (Exception ex) { Logger.LogWarning(ex, "SyncMonitorService.SafeInvoke: event handler threw"); }
         }
 
         public void Dispose()

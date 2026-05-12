@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using RecoTool.Models;
 using RecoTool.Services.Rules;
@@ -24,12 +25,12 @@ namespace RecoTool.Services
             => _matchingService ?? (_matchingService = new ReconciliationMatchingService(this, _offlineFirstService, _currentUser));
 
         /// <summary>Runs the automatic matching pipeline for the given country.</summary>
-        public Task<int> PerformAutomaticMatchingAsync(string countryId)
-            => MatchingService.PerformAutomaticMatchingAsync(countryId, _countries);
+        public Task<int> PerformAutomaticMatchingAsync(string countryId, CancellationToken ct = default)
+            => MatchingService.PerformAutomaticMatchingAsync(countryId, _countries, ct);
 
         /// <summary>Applies the manual-outgoing rule pass on the given country.</summary>
-        public Task<int> ApplyManualOutgoingRuleAsync(string countryId)
-            => MatchingService.ApplyManualOutgoingRuleAsync(countryId, _countries);
+        public Task<int> ApplyManualOutgoingRuleAsync(string countryId, CancellationToken ct = default)
+            => MatchingService.ApplyManualOutgoingRuleAsync(countryId, _countries, ct);
 
         // ── Truth-table helpers (delegated to RuleContextBuilder) ────────────────────────────────
         private RuleContextBuilder _ruleContextBuilder;
@@ -48,9 +49,10 @@ namespace RecoTool.Services
         /// Returns <c>null</c> when the country has no database configured, when the ID is missing,
         /// or on any OleDb failure. Used by rule context builders that need the full source row.
         /// </summary>
-        private async Task<DataAmbre> GetAmbreRowByIdAsync(string countryId, string id)
+        private async Task<DataAmbre> GetAmbreRowByIdAsync(string countryId, string id, CancellationToken ct = default)
         {
             if (string.IsNullOrWhiteSpace(countryId) || string.IsNullOrWhiteSpace(id)) return null;
+            ct.ThrowIfCancellationRequested();
             try
             {
                 var ambreCs = _offlineFirstService?.GetAmbreConnectionString(countryId);
@@ -61,6 +63,7 @@ namespace RecoTool.Services
                     id).ConfigureAwait(false);
                 return list?.FirstOrDefault();
             }
+            catch (OperationCanceledException) { throw; }
             catch { return null; }
         }
     }

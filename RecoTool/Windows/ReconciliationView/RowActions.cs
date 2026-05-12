@@ -110,6 +110,9 @@ namespace RecoTool.Windows
             {
                 if (row == null || _reconciliationService == null) return;
 
+                // Legacy flow: dialog returns the new comment line via
+                // GetNewCommentText; we stamp it with BaseEntity.Clock + resolved
+                // display name and append to the existing conversation.
                 var dlg = new CommentsDialog
                 {
                     Owner = Window.GetWindow(this)
@@ -123,7 +126,7 @@ namespace RecoTool.Windows
                     var newLine = dlg.GetNewCommentText()?.Trim();
                     if (!string.IsNullOrWhiteSpace(newLine))
                     {
-                        string prefix = $"[{DateTime.Now:yyyy-MM-dd HH:mm}] {user}: ";
+                        string prefix = $"[{BaseEntity.Clock.Now:yyyy-MM-dd HH:mm}] {user}: ";
                         string existing = row.Comments?.TrimEnd();
                         string appended = string.IsNullOrWhiteSpace(existing)
                             ? prefix + newLine
@@ -137,7 +140,7 @@ namespace RecoTool.Windows
                         reco.Comments = appended;
                         await _reconciliationService.SaveReconciliationAsync(reco);
                         StampRowsModified(new[] { row });
-                        
+
                         // Refresh KPIs to reflect changes immediately
                         UpdateKpis(_filteredData);
 
@@ -146,6 +149,11 @@ namespace RecoTool.Windows
 
                         // Best-effort background sync
                         try { ScheduleBulkPushDebounced(); } catch { }
+
+                        // Notify parent: a DB write happened so HomePage cached state is stale.
+                        // Guarded by the !string.IsNullOrWhiteSpace(newLine) branch above, so this
+                        // never fires on the no-op (dialog cancelled or empty input) path.
+                        DataChanged?.Invoke();
                     }
                 }
             } catch (Exception ex) 
@@ -401,7 +409,7 @@ Do you want to apply these automatic rules?
                                 if (!string.IsNullOrWhiteSpace(preview.UserMessage))
                                 {
                                     var curUser = ResolveUserDisplayName(_reconciliationService?.CurrentUser ?? Environment.UserName);
-                                    var prefix = $"[{DateTime.Now:yyyy-MM-dd HH:mm}] {curUser}: ";
+                                    var prefix = $"[{BaseEntity.Clock.Now:yyyy-MM-dd HH:mm}] {curUser}: ";
                                     var msg = prefix + $"[Rule {preview.Rule.RuleId ?? "(unnamed)"}] {preview.UserMessage}";
 
                                     if (string.IsNullOrWhiteSpace(r.Comments))
@@ -497,7 +505,9 @@ Do you want to apply these automatic rules?
                 if (!string.IsNullOrEmpty(summary))
                     ShowToast($"{summary} on {targetRows.Count} line(s)");
 
-                // Notify parent page to refresh sibling views
+                // Notify parent page to refresh sibling views.
+                // Note: INPC on the mutated rows already repaints the grid in place; only the
+                // detail-dialog save flow uses RefreshRowsAsync via the AffectedRowIds protocol.
                 DataChanged?.Invoke();
             }
             catch (Exception ex)
@@ -522,7 +532,7 @@ Do you want to apply these automatic rules?
                 if (text == null) return;
 
                 var user = ResolveUserDisplayName(_reconciliationService.CurrentUser ?? Environment.UserName);
-                string prefix = $"[{DateTime.Now:yyyy-MM-dd HH:mm}] {user}: ";
+                string prefix = $"[{BaseEntity.Clock.Now:yyyy-MM-dd HH:mm}] {user}: ";
                 var updates = new List<Reconciliation>();
                 foreach (var r in selected)
                 {
@@ -537,7 +547,10 @@ Do you want to apply these automatic rules?
                 }
                 await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
                 StampRowsModified(selected);
-                AfterSave();
+                // raiseDataChanged: comments persisted on N rows → HomePage KPIs/charts may shift.
+                // Note: INPC on the mutated rows already repaints the grid in place; no RefreshRowsAsync
+                // needed here. Only the detail-dialog save flow takes the RefreshRowsAsync path.
+                AfterSave(raiseDataChanged: true);
                 try { RefreshMentionBadge(); } catch { }
             }
             catch (Exception ex)
@@ -567,7 +580,7 @@ Do you want to apply these automatic rules?
                 if (targetRows.Count == 0) return;
 
                 var triggerActionId = (int)ActionType.Trigger;
-                var now = DateTime.UtcNow;
+                var now = BaseEntity.Clock.UtcNow;
                 var updates = new List<Reconciliation>();
                 foreach (var r in targetRows)
                 {
@@ -592,7 +605,7 @@ Do you want to apply these automatic rules?
                     else
                     {
                         r.ActionStatus = isDone;
-                        r.ActionDate = DateTime.Now;
+                        r.ActionDate = BaseEntity.Clock.Now;
                         reco.ActionStatus = isDone;
                         reco.ActionDate = r.ActionDate;
                         // Stamp user-edit protection on ActionStatus
@@ -603,7 +616,10 @@ Do you want to apply these automatic rules?
                 if (updates.Count == 0) return;
                 await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
                 StampRowsModified(targetRows);
-                AfterSave();
+                // raiseDataChanged: action status changes (Done/Pending) shift KPI buckets on the dashboard.
+                // Note: INPC + RefreshDwingsData covers most quick edits; only full save flows
+                // (detail dialog) use RefreshRowsAsync via the AffectedRowIds protocol.
+                AfterSave(raiseDataChanged: true);
             }
             catch (Exception ex)
             {
@@ -634,7 +650,10 @@ Do you want to apply these automatic rules?
                 }
                 await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
                 StampRowsModified(targetRows);
-                AfterSave();
+                // raiseDataChanged: assignee changes affect "by user" widgets on the dashboard.
+                // Note: INPC + RefreshDwingsData covers most quick edits; only full save flows
+                // (detail dialog) use RefreshRowsAsync via the AffectedRowIds protocol.
+                AfterSave(raiseDataChanged: true);
             }
             catch (Exception ex)
             {
@@ -673,7 +692,10 @@ Do you want to apply these automatic rules?
                 }
                 await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
                 StampRowsModified(targetRows);
-                AfterSave();
+                // raiseDataChanged: reminders enter the "To remind" KPI bucket on the dashboard.
+                // Note: INPC + RefreshDwingsData covers most quick edits; only full save flows
+                // (detail dialog) use RefreshRowsAsync via the AffectedRowIds protocol.
+                AfterSave(raiseDataChanged: true);
             }
             catch (Exception ex)
             {
@@ -826,7 +848,7 @@ Do you want to apply these automatic rules?
         private async Task<List<Reconciliation>> MarkTriggerDoneAsync(
             IEnumerable<string> ids, HashSet<string> alreadyProcessedIds = null)
         {
-            var now = DateTime.UtcNow;
+            var now = BaseEntity.Clock.UtcNow;
             var updates = new List<Reconciliation>();
             foreach (var id in ids)
             {
@@ -901,7 +923,10 @@ Do you want to apply these automatic rules?
                 }
                 await _reconciliationService.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
                 StampRowsModified(targetRows);
-                AfterSave();
+                // raiseDataChanged: claim dates change the "claimed/aging" KPI on the dashboard.
+                // Note: INPC + RefreshDwingsData covers most quick edits; only full save flows
+                // (detail dialog) use RefreshRowsAsync via the AffectedRowIds protocol.
+                AfterSave(raiseDataChanged: true);
             }
             catch (Exception ex)
             {
@@ -951,8 +976,9 @@ Do you want to apply these automatic rules?
                 var rowData = (sender as FrameworkElement)?.DataContext as ReconciliationViewData;
                 if (rowData == null) return;
 
-                // Resolve SpiritGene service (try DI first, then create directly)
-                var spiritGene = RecoTool.App.ServiceProvider?.GetService(typeof(RecoTool.API.SpiritGene)) as RecoTool.API.SpiritGene;
+                // Service locator removal: reuse the field hydrated ONCE in the DI ctor.
+                // Fallback to direct construction (kept for designer/standalone scenarios).
+                var spiritGene = _spiritGene;
                 if (spiritGene == null)
                 {
                     try { spiritGene = new RecoTool.API.SpiritGene(); }
@@ -1175,7 +1201,7 @@ Do you want to apply these automatic rules?
                     {
                         var (ok, msg) = dw.Dwings_PressBlueButton(
                             item.PaymentRef,
-                            item.ValueDate ?? DateTime.UtcNow,
+                            item.ValueDate ?? BaseEntity.Clock.UtcNow,
                             item.RequestedAmount,
                             country.CNT_DWID,
                             item.Currency,
@@ -1226,7 +1252,7 @@ Do you want to apply these automatic rules?
                 if (allUpdates.Count > 0)
                 {
                     var triggerActionIdUi = (int)ActionType.Trigger;
-                    var nowUi = DateTime.UtcNow;
+                    var nowUi = BaseEntity.Clock.UtcNow;
                     var paidNotReconciledKpi = (int)KPIType.PaidButNotReconciled;
                     var commissionsCollectedReason = (int)Risky.CollectedCommissionsCredit67P;
                     foreach (var viewRow in allData.Where(r => allGroupIds.Contains(r.ID)))
@@ -1239,6 +1265,8 @@ Do you want to apply these automatic rules?
                         viewRow.RiskyItem = false;
                     }
                 }
+                // Note: INPC + RefreshDwingsData covers most quick edits; only full save flows
+                // (detail dialog) use RefreshRowsAsync via the AffectedRowIds protocol.
                 AfterSave(raiseDataChanged: true);
 
                 ShowToast($"DWINGS: {successCount}/{triggerItems.Count} processed.\n" + string.Join("\n", messages));

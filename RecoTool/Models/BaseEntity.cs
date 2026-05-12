@@ -1,12 +1,22 @@
 using System;
+using RecoTool.Infrastructure.Time;
 
 namespace RecoTool.Models
 {
     /// <summary>
-    /// Classe de base pour toutes les entités avec gestion de la synchronisation
+    /// Classe de base pour toutes les entités avec gestion de la synchronisation.
+    /// <para>
+    /// Les estampes temporelles passent par <see cref="Clock"/> (par défaut
+    /// <see cref="SystemClock.Instance"/>). Les tests qui veulent des dates
+    /// déterministes peuvent assigner un fake clock global avant d'instancier
+    /// les entités.
+    /// </para>
     /// </summary>
     public abstract class BaseEntity
     {
+        /// <summary>Clock global pour les estampes temporelles. Swappable en tests.</summary>
+        public static IClock Clock { get; set; } = SystemClock.Instance;
+
         public DateTime? CreationDate { get; set; }
         public DateTime? DeleteDate { get; set; }
         public string ModifiedBy { get; set; }
@@ -15,7 +25,7 @@ namespace RecoTool.Models
 
         protected BaseEntity()
         {
-            CreationDate = DateTime.Now;
+            CreationDate = Clock.Now;
             Version = 1;
         }
 
@@ -29,7 +39,7 @@ namespace RecoTool.Models
         /// </summary>
         public virtual void MarkAsDeleted()
         {
-            DeleteDate = DateTime.Now;
+            DeleteDate = Clock.Now;
         }
 
         /// <summary>
@@ -39,7 +49,7 @@ namespace RecoTool.Models
         public virtual void UpdateModification(string modifiedBy)
         {
             ModifiedBy = modifiedBy;
-            LastModified = DateTime.Now;
+            LastModified = Clock.Now;
             Version++;
         }
     }

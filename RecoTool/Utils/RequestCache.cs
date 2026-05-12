@@ -2,11 +2,15 @@
 using System.Collections.Concurrent;
 using System.Net.Http;
 using System.Threading.Tasks;
+using RecoTool.Infrastructure.Time;
 
 namespace RecoTool.Utils
 {
     public class RequestCache
     {
+        /// <summary>Clock used for cache expiration checks. Defaults to <see cref="SystemClock.Instance"/>; swappable for tests.</summary>
+        public static IClock Clock { get; set; } = SystemClock.Instance;
+
         // stocke key → (json, expiration)
         private class CacheEntry
         {
@@ -33,7 +37,7 @@ namespace RecoTool.Utils
         public bool TryGet(string cacheKey, out string json)
         {
             if (_dict.TryGetValue(cacheKey, out var entry)
-             && entry.Expiration > DateTime.UtcNow)
+             && entry.Expiration > Clock.UtcNow)
             {
                 json = entry.Json;
                 return true;
@@ -48,7 +52,7 @@ namespace RecoTool.Utils
             var entry = new CacheEntry
             {
                 Json = json,
-                Expiration = DateTime.UtcNow.Add(TimeSpan.FromMinutes(15))
+                Expiration = Clock.UtcNow.Add(TimeSpan.FromMinutes(15))
             };
             _dict.AddOrUpdate(cacheKey, entry, (_, __) => entry);
         }

@@ -18,6 +18,8 @@ using System.Reflection;
 using System.Deployment.Application;
 using RecoTool.Services.External;
 using RecoTool.Services.Helpers;
+using RecoTool.ViewModels;
+using RecoTool.Infrastructure.Logging;
 
 namespace RecoTool.Windows
 {
@@ -26,6 +28,78 @@ namespace RecoTool.Windows
     /// </summary>
     public partial class MainWindow : Window, INotifyPropertyChanged
     {
+        private MainWindowViewModel _vm;
+
+        /// <summary>
+        /// MVVM constructor. The VM exposes <c>AvailableCountries</c>,
+        /// <c>ShowFreeAuthButton</c>, <c>IsMultiUserMode</c>, status surface, etc.
+        /// All bindings in MainWindow.xaml resolve via the VM. Cross-window
+        /// navigation events (ImportRequested / OpenReconciliationRequested /
+        /// ExitRequested) are bridged to existing legacy handlers so the
+        /// menu Click handlers in XAML keep working.
+        /// </summary>
+        public MainWindow(OfflineFirstService offlineService, MainWindowViewModel vm)
+            : this(offlineService)
+        {
+            _vm = vm ?? throw new ArgumentNullException(nameof(vm));
+            this.DataContext = _vm;
+            _vm.ImportRequested += (_, __) => Dispatcher.Invoke(() => ShowImportDialog());
+            _vm.OpenReconciliationRequested += (_, __) => Dispatcher.Invoke(() => NavigateToReconciliation());
+            _vm.ExitRequested += (_, __) => Dispatcher.Invoke(() => Close());
+
+            // Bridge the VM's IsMultiUserMode toggle → Window's legacy IsMultiUserMode
+            // setter so that the side effects (OFS.AllowBackgroundPushes, SyncMonitorService
+            // start/stop, status bar update) actually fire when the user clicks the
+            // ToggleButton. The VM owns the feature-flag write; the Window owns the
+            // imperative wiring. Idempotent — Window setter early-returns on no change.
+            _vm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(MainWindowViewModel.IsMultiUserMode))
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        // This invokes the legacy setter at line 420, which runs ApplyMultiUserMode.
+                        this.IsMultiUserMode = _vm.IsMultiUserMode;
+                    });
+                }
+            };
+            // Initial sync — VM defaulted to FeatureFlags.ENABLE_MULTI_USER, mirror it once.
+            this.IsMultiUserMode = _vm.IsMultiUserMode;
+
+            // Pre-load countries through the VM so the combobox is populated.
+            _ = ((AsyncRelayCommand)_vm.LoadCountriesCommand).ExecuteAsync(null);
+        }
+
+        // Legacy navigation/dialog helpers used by the VM bridge.
+        private void ShowImportDialog()
+        {
+            try
+            {
+                // MVVM call site (Option B): resolve through DI when possible so
+                // the 3-arg MVVM ctor (with ImportAmbreViewModel) is used. The
+                // returned window already has DataContext seeded correctly.
+                var sp = App.ServiceProvider;
+                var win = sp != null
+                    ? sp.GetRequiredService<ImportAmbreWindow>()
+                    : new ImportAmbreWindow(_offlineFirstService, _ambreImportService);
+                win.Owner = this;
+                win.ShowDialog();
+            }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "Import", MessageBoxButton.OK, MessageBoxImage.Error); }
+        }
+
+        private void NavigateToReconciliation()
+        {
+            try
+            {
+                if (_reconciliationPage == null)
+                    _reconciliationPage = new ReconciliationPage();
+                MainContent.Content = _reconciliationPage;
+                _currentPage = _reconciliationPage;
+            }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "Reconciliation", MessageBoxButton.OK, MessageBoxImage.Error); }
+        }
+
         private readonly OfflineFirstService _offlineFirstService;
         private AmbreImportService _ambreImportService;
         private ReconciliationService _reconciliationService;
@@ -49,6 +123,11 @@ namespace RecoTool.Windows
         private bool _reconciliationDataChangedHooked;
         private IFreeApiClient _freeApi;
         private bool _showFreeAuthButton;
+        // Service locator removal: cached references resolved once in the legacy ctor body.
+        // All subsequent event handlers and operational methods reuse these fields rather
+        // than calling App.ServiceProvider on every invocation.
+        private readonly RecoTool.Services.Policies.ISyncPolicy _syncPolicy;
+        private readonly Func<ReconciliationPage> _reconciliationPageFactory;
 
         private DwingsButtonsWindow? _dwingsButtonsWindow;
 
@@ -75,6 +154,7 @@ namespace RecoTool.Windows
             SetupSyncMonitor();
 
             // Free API auth button initial state
+            // Service locator removal: hydrate fields here ONCE; handlers reuse them.
             try
             {
                 _freeApi = App.ServiceProvider?.GetService<IFreeApiClient>();
@@ -82,6 +162,25 @@ namespace RecoTool.Windows
                 OnPropertyChanged(nameof(ShowFreeAuthButton));
             }
             catch { }
+            // Resolve sync policy and the DI factory for ReconciliationPage ONCE up front
+            // so subsequent handlers can use the fields/factory instead of reaching into
+            // App.ServiceProvider repeatedly (service locator anti-pattern).
+            try
+            {
+                _syncPolicy = App.ServiceProvider?.GetService(typeof(RecoTool.Services.Policies.ISyncPolicy)) as RecoTool.Services.Policies.ISyncPolicy;
+            }
+            catch { _syncPolicy = null; }
+            try
+            {
+                var sp = App.ServiceProvider;
+                _reconciliationPageFactory = sp != null
+                    ? new Func<ReconciliationPage>(() => sp.GetRequiredService<ReconciliationPage>())
+                    : new Func<ReconciliationPage>(() => new ReconciliationPage());
+            }
+            catch
+            {
+                _reconciliationPageFactory = () => new ReconciliationPage();
+            }
 
             // Set app version for header display (prefer ClickOnce deployment version when available)
             try
@@ -124,12 +223,14 @@ namespace RecoTool.Windows
                         _closingPushHandled = true;
                         Mouse.OverrideCursor = Cursors.Wait;
                         ProgressWindow progressWindow = null;
+                        ProgressWindowViewModel pvm = null;
                         try
                         {
                             // Display a progress window to prevent users from forcing closure and to signal ongoing sync
                             try
                             {
-                                progressWindow = new ProgressWindow("Synchronization in progress...");
+                                pvm = new ProgressWindowViewModel("Synchronization in progress...", canCancel: false);
+                                progressWindow = new ProgressWindow(pvm);
                                 if (this.IsVisible || this.IsLoaded)
                                 {
                                     progressWindow.Owner = this;
@@ -143,14 +244,14 @@ namespace RecoTool.Windows
                                 progressWindow.ShowActivated = true;
                                 progressWindow.Show();
                                 progressWindow.Activate();
-                                try { progressWindow.UpdateProgress("Synchronisation en cours...", 10); } catch { }
+                                try { pvm.Report("Synchronisation en cours...", 10); } catch { }
                             }
                             catch { /* best effort UI */ }
 
                             // Temporarily enable background pushes for explicit app-close push
                             bool prevAllow = false;
                             try { prevAllow = _offlineFirstService.AllowBackgroundPushes; _offlineFirstService.AllowBackgroundPushes = true; } catch { }
-                            
+
                             bool syncSuccess = false;
                             string syncError = null;
                             try
@@ -160,12 +261,12 @@ namespace RecoTool.Windows
                                     null,
                                     (progress, message) =>
                                     {
-                                        try { progressWindow?.UpdateProgress(message ?? "Synchronisation...", progress); } catch { }
+                                        try { pvm?.Report(message ?? "Synchronisation...", progress); } catch { }
                                     });
                                 if (result != null && result.Success)
                                 {
                                     syncSuccess = true;
-                                    try { progressWindow?.UpdateProgress("Synchronisation terminée avec succès", 90); } catch { }
+                                    try { pvm?.Report("Synchronisation terminée avec succès", 90); } catch { }
                                 }
                                 else
                                 {
@@ -177,7 +278,7 @@ namespace RecoTool.Windows
                             {
                                 syncError = syncEx.Message;
                                 System.Diagnostics.Debug.WriteLine($"[MainWindow.Closing] Sync error: {syncEx.Message}");
-                                try { progressWindow?.UpdateProgress($"Erreur de synchronisation: {syncEx.Message}", 50); } catch { }
+                                try { pvm?.Report($"Erreur de synchronisation: {syncEx.Message}", 50); } catch { }
                             }
                             
                             // Restore policy
@@ -373,7 +474,7 @@ namespace RecoTool.Windows
             try { Configuration.FeatureFlags.SetMultiUserEnabled(enabled); } catch { }
 
             // 2) Hard kill-switch on background pushes/pulls. This stops automatic sync
-            //    in PushReconciliationIfPendingAsync, BackgroundSyncEngine and SyncMonitorService.
+            //    in PushReconciliationIfPendingAsync, BackgroundSyncEngine, and SyncMonitorService.
             if (_offlineFirstService != null)
             {
                 try { _offlineFirstService.AllowBackgroundPushes = enabled; } catch { }
@@ -796,7 +897,11 @@ namespace RecoTool.Windows
         {
             try
             {
-                var win = new RulesAdminWindow();
+                // MVVM call site (Option B): resolve through DI so the VM ctor
+                // is picked (RulesAdminViewModel). Falls back to legacy parameterless
+                // ctor if DI is unavailable.
+                var sp = App.ServiceProvider;
+                var win = sp != null ? sp.GetRequiredService<RulesAdminWindow>() : new RulesAdminWindow();
                 win.Owner = this;
                 win.WindowStartupLocation = WindowStartupLocation.CenterOwner;
                 win.Show();
@@ -855,10 +960,12 @@ namespace RecoTool.Windows
                 _isChangingCountrySelection = true;
                 Mouse.OverrideCursor = Cursors.Wait;
                 ProgressWindow progressWindow = null;
+                ProgressWindowViewModel pvm = null;
                 try
                 {
                     // Afficher une ProgressWindow pendant tout le traitement (copie, synchro, etc.)
-                    progressWindow = new ProgressWindow("Initializing country...");
+                    pvm = new ProgressWindowViewModel("Initializing country...", canCancel: false);
+                    progressWindow = new ProgressWindow(pvm);
                     progressWindow.Owner = this;
                     progressWindow.Show();
 
@@ -870,7 +977,7 @@ namespace RecoTool.Windows
                             Dispatcher.Invoke(() =>
                             {
                                 var pct = Math.Max(0, Math.Min(99, progress)); // réserver 100% pour la fin
-                                progressWindow.UpdateProgress(message ?? "En cours...", pct);
+                                pvm.Report(message ?? "En cours...", pct);
                             });
                         }
                         catch { /* best-effort UI update */ }
@@ -905,12 +1012,12 @@ namespace RecoTool.Windows
                         SetReferentialState("Error", Brushes.Crimson, false);
                         return;
                     }
-                    progressWindow.UpdateProgress("Finalisation...", 95);
+                    pvm.Report("Finalisation...", 95);
                     _currentCountryId = newCountryId;
                     await NotifyCurrentPageOfCountryChange();
 
                     // Attendre la fin du premier rafraîchissement de la page courante (si exposé)
-                    progressWindow.UpdateProgress("Loading data...", 98);
+                    pvm.Report("Loading data...", 98);
                     await WaitForCurrentPageRefreshAsync(TimeSpan.FromSeconds(15));
                     SetInitializationState($"Country selected: {selected.CNT_Name}", Brushes.DarkGreen);
                     OperationalDataStatus = "ONLINE";
@@ -938,7 +1045,7 @@ namespace RecoTool.Windows
                     // If policy allows, perform a one-shot push right after country change (without enabling background pushes)
                     try
                     {
-                        var policy = RecoTool.App.ServiceProvider?.GetService(typeof(RecoTool.Services.Policies.ISyncPolicy)) as RecoTool.Services.Policies.ISyncPolicy;
+                        var policy = _syncPolicy;
                         if (policy != null && policy.ShouldSyncOnCountryChange)
                         {
                             bool prev = false;
@@ -986,6 +1093,22 @@ namespace RecoTool.Windows
 
                 // Guard: we are initializing a new country; prevent page refresh until done
                 _isCountryInitializing = true;
+
+                // Close any open ReconciliationView instances of the PREVIOUS country BEFORE we
+                // swap the OfflineFirstService connection. Otherwise the views being torn down
+                // could try to read data with the new country's connection string, surfacing
+                // stale rows or OLE DB errors. Only meaningful when the country actually changes
+                // and the reconciliation page was instantiated at least once.
+                try
+                {
+                    var prevCountryId = _offlineFirstService?.CurrentCountryId;
+                    bool countryActuallyChanged = !string.Equals(prevCountryId, countryId, StringComparison.OrdinalIgnoreCase);
+                    if (countryActuallyChanged && _reconciliationPage != null)
+                    {
+                        _reconciliationPage.CloseAllReconciliationViews();
+                    }
+                }
+                catch { /* teardown is best-effort: never block the country switch */ }
 
                 // Mettre à jour OfflineFirstService avec le nouveau pays
                 var setOk = await _offlineFirstService.SetCurrentCountryAsync(countryId, suppressPush: false, onProgress: onProgress);
@@ -1257,6 +1380,10 @@ namespace RecoTool.Windows
 
                 if (_homePage == null)
                 {
+                    // Direct ctor: tolerates null _reconciliationService at startup
+                    // (before a country is selected). The DI path would eagerly
+                    // resolve HomePageViewModel → IReconciliationService whose
+                    // factory needs an initialized OFS — which isn't ready yet.
                     _homePage = new HomePage(_offlineFirstService, _reconciliationService);
                     // First instantiation: HomePage.UserControl_Loaded will run its own initial load
                     // (guarded by _hasLoadedOnce inside HomePage). No explicit Refresh() needed here.
@@ -1276,11 +1403,21 @@ namespace RecoTool.Windows
                 NavigateToPage(_homePage);
                 UpdateNavigationButtons("Home");
 
+                // Trace-only log: shows why a Refresh was (or wasn't) issued. Debug-level
+                // equivalent of LogDebug("Navigating to Home: stale={Stale}, firstShown={First} → refresh={WillRefresh}").
+                bool willRefresh = refreshNeeded && !string.IsNullOrEmpty(_offlineFirstService?.CurrentCountryId);
+                try
+                {
+                    LogHelper.WriteAction("HomePage.Refresh",
+                        $"navigateToHome stale={_homeIsStale} firstShown={_homeFirstShown} willRefresh={willRefresh}");
+                }
+                catch { /* logging is best-effort */ }
+
                 // Cold start fallback: if the page was just created and a country is already selected,
                 // its own Loaded handler will load data. We do NOT trigger an extra Refresh here
                 // (avoids the previous "IsLoaded == false on every reattach" bug that forced a full
                 // dashboard rebuild on every navigation back to Home).
-                if (refreshNeeded && !string.IsNullOrEmpty(_offlineFirstService?.CurrentCountryId))
+                if (willRefresh)
                 {
                     _homePage.Refresh();
                     _homeIsStale = false;
@@ -1303,7 +1440,16 @@ namespace RecoTool.Windows
             if (page == null || _reconciliationDataChangedHooked) return;
             try
             {
-                page.DataChanged += () => { _homeIsStale = true; };
+                page.DataChanged += () =>
+                {
+                    _homeIsStale = true;
+                    // Equivalent of LogDebug("ReconciliationView.DataChanged → HomePage marked stale").
+                    // We don't refresh here: HomePage refreshes on next Home navigation, which
+                    // naturally coalesces a burst of edits (multi-row bulk, trigger propagation,
+                    // rule application) into a single refresh.
+                    try { LogHelper.WriteAction("HomePage.Refresh", "stale=true (ReconciliationView.DataChanged)"); }
+                    catch { }
+                };
                 _reconciliationDataChangedHooked = true;
             }
             catch { /* best-effort */ }
@@ -1386,7 +1532,8 @@ private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
         var button = sender as Button;
         if (button != null) button.IsEnabled = false;
 
-        var progressWindow = new ProgressWindow("Synchronization in progress...");
+        var pvm = new ProgressWindowViewModel("Synchronization in progress...", canCancel: false);
+        var progressWindow = new ProgressWindow(pvm);
         progressWindow.Owner = this;
         progressWindow.Show();
 
@@ -1401,8 +1548,8 @@ private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
                 {
                     Dispatcher.Invoke(() =>
                     {
-                        // ProgressWindow.UpdateProgress attend (message, progress)
-                        progressWindow.UpdateProgress(message ?? "En cours...", progress);
+                        // VM-driven progress update via Report (message, percent)
+                        pvm.Report(message ?? "En cours...", progress);
                     });
                 });
 
@@ -1463,7 +1610,7 @@ private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
                 bool isFirstNavigation = (_reconciliationPage == null);
                 if (isFirstNavigation)
                 {
-                    _reconciliationPage = App.ServiceProvider.GetRequiredService<ReconciliationPage>();
+                    _reconciliationPage = _reconciliationPageFactory();
                 }
                 var reconciliationPage = _reconciliationPage;
 
@@ -1522,7 +1669,7 @@ private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
                     return;
                 }
 
-                var defaultName = $"Reconciliation_Dashboard_{_currentCountryId}_{DateTime.Now:yyyyMMdd_HHmm}.xlsx";
+                var defaultName = $"Reconciliation_Dashboard_{_currentCountryId}_{BaseEntity.Clock.Now:yyyyMMdd_HHmm}.xlsx";
                 var sfd = new Microsoft.Win32.SaveFileDialog
                 {
                     FileName = defaultName,
@@ -1613,7 +1760,7 @@ private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
                 bool isFirstNavigation = (_reconciliationPage == null);
                 if (isFirstNavigation)
                 {
-                    _reconciliationPage = App.ServiceProvider.GetRequiredService<ReconciliationPage>();
+                    _reconciliationPage = _reconciliationPageFactory();
                 }
                 var reconciliationPage = _reconciliationPage;
 
@@ -1672,7 +1819,8 @@ private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
                 if (openFileDialog.ShowDialog() == true)
                 {
                     // Afficher une fenêtre de progression
-                    var progressWindow = new ProgressWindow("Import en cours...");
+                    var pvm = new ProgressWindowViewModel("Import en cours...", canCancel: false);
+                    var progressWindow = new ProgressWindow(pvm);
                     progressWindow.Owner = this;
                     progressWindow.Show();
 
@@ -1685,7 +1833,7 @@ private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
                             {
                                 Dispatcher.Invoke(() =>
                                 {
-                                    progressWindow.UpdateProgress(message, progress);
+                                    pvm.Report(message, progress);
                                 });
                             });
 
@@ -1693,10 +1841,25 @@ private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
 
                         if (result.IsSuccess)
                         {
-                            ShowInfo("Import successful", $"Import completed successfully.\n" +
-                                   $"Rows added: {result.NewRecords}\n" +
-                                   $"Rows updated: {result.ProcessedRecords}\n" +
-                                   $"Rows deleted: {result.DeletedRecords}");
+                            var summary = new System.Text.StringBuilder();
+                            summary.AppendLine("Import completed successfully.");
+                            summary.AppendLine($"Rows added: {result.NewRecords}");
+                            summary.AppendLine($"Rows updated: {result.ProcessedRecords}");
+                            summary.AppendLine($"Rows deleted: {result.DeletedRecords}");
+                            if (result.SkippedRows > 0)
+                            {
+                                summary.AppendLine();
+                                summary.AppendLine($"⚠ Rows skipped: {result.SkippedRows} (foreign account or wrong entity for this country)");
+                                if (result.SkippedRowSamples != null && result.SkippedRowSamples.Count > 0)
+                                {
+                                    summary.AppendLine("Sample reasons:");
+                                    foreach (var reason in result.SkippedRowSamples.Take(5))
+                                        summary.AppendLine($"  • {reason}");
+                                    if (result.SkippedRowSamples.Count > 5)
+                                        summary.AppendLine($"  • … and {result.SkippedRowSamples.Count - 5} more (see logs)");
+                                }
+                            }
+                            ShowInfo("Import successful", summary.ToString().TrimEnd());
 
                             RefreshCurrentPage();
                         }
@@ -1881,11 +2044,9 @@ private async void SynchronizeButton_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                if (_freeApi == null)
-                {
-                    _freeApi = App.ServiceProvider?.GetService<IFreeApiClient>();
-                    if (_freeApi == null) { ShowFreeAuthButton = true; return; }
-                }
+                // Service locator removal: _freeApi is resolved ONCE in the ctor body.
+                // If it wasn't available then, it won't be now — bail out cleanly.
+                if (_freeApi == null) { ShowFreeAuthButton = true; return; }
                 var ok = await _freeApi.AuthenticateAsync();
                 ShowFreeAuthButton = !ok;
                 if (!ok)

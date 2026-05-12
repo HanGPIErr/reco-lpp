@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Data.OleDb;
 using System.Text.RegularExpressions;
+using RecoTool.Infrastructure;
 using RecoTool.Services.Cache;
 
 namespace RecoTool.Services
@@ -10,7 +11,7 @@ namespace RecoTool.Services
     /// Uses <see cref="Infrastructure.DataAccess.ReferentialConnectionPool"/> when available
     /// to avoid repeated open/close of DB_Referentiels.
     /// </summary>
-    public class UserFilterService
+    public class UserFilterService : IUserFilterService
     {
         private readonly string _connString;
         private readonly string _currentUser;
@@ -47,7 +48,7 @@ namespace RecoTool.Services
             try
             {
                 int? existingId = null;
-                using (var cmd = new OleDbCommand("SELECT UFI_id FROM T_Ref_User_Filter WHERE UFI_Name = ?", conn))
+                using (var cmd = new OleDbCommand($"SELECT {Schema.Columns.UserFilter.UFI_id} FROM {Schema.Tables.T_Ref_User_Filter} WHERE {Schema.Columns.UserFilter.UFI_Name} = ?", conn))
                 {
                     cmd.Parameters.AddWithValue("@p1", name);
                     var obj = cmd.ExecuteScalar();
@@ -57,7 +58,7 @@ namespace RecoTool.Services
 
                 if (existingId.HasValue)
                 {
-                    using (var cmd = new OleDbCommand("UPDATE T_Ref_User_Filter SET UFI_SQL = ?, UFI_CreatedBy = ? WHERE UFI_id = ?", conn))
+                    using (var cmd = new OleDbCommand($"UPDATE {Schema.Tables.T_Ref_User_Filter} SET {Schema.Columns.UserFilter.UFI_SQL} = ?, {Schema.Columns.UserFilter.UFI_CreatedBy} = ? WHERE {Schema.Columns.UserFilter.UFI_id} = ?", conn))
                     {
                         cmd.Parameters.AddWithValue("@p1", whereClause);
                         cmd.Parameters.AddWithValue("@p2", _currentUser);
@@ -67,7 +68,7 @@ namespace RecoTool.Services
                 }
                 else
                 {
-                    using (var cmd = new OleDbCommand("INSERT INTO T_Ref_User_Filter (UFI_Name, UFI_SQL, UFI_CreatedBy) VALUES (?, ?, ?)", conn))
+                    using (var cmd = new OleDbCommand($"INSERT INTO {Schema.Tables.T_Ref_User_Filter} ({Schema.Columns.UserFilter.UFI_Name}, {Schema.Columns.UserFilter.UFI_SQL}, {Schema.Columns.UserFilter.UFI_CreatedBy}) VALUES (?, ?, ?)", conn))
                     {
                         cmd.Parameters.AddWithValue("@p1", name);
                         cmd.Parameters.AddWithValue("@p2", whereClause);
@@ -145,7 +146,7 @@ namespace RecoTool.Services
                 var (conn, ownsConnection) = GetConnection();
                 try
                 {
-                    using (var cmd = new OleDbCommand("SELECT UFI_SQL FROM T_Ref_User_Filter WHERE UFI_Name = ?", conn))
+                    using (var cmd = new OleDbCommand($"SELECT {Schema.Columns.UserFilter.UFI_SQL} FROM {Schema.Tables.T_Ref_User_Filter} WHERE {Schema.Columns.UserFilter.UFI_Name} = ?", conn))
                     {
                         cmd.Parameters.AddWithValue("@p1", name);
                         var obj = cmd.ExecuteScalar();
@@ -175,8 +176,8 @@ namespace RecoTool.Services
                 try
                 {
                     using (var cmd = string.IsNullOrWhiteSpace(contains)
-                        ? new OleDbCommand("SELECT UFI_Name FROM T_Ref_User_Filter ORDER BY UFI_Name", conn)
-                        : new OleDbCommand("SELECT UFI_Name FROM T_Ref_User_Filter WHERE UFI_Name LIKE ? ORDER BY UFI_Name", conn))
+                        ? new OleDbCommand($"SELECT {Schema.Columns.UserFilter.UFI_Name} FROM {Schema.Tables.T_Ref_User_Filter} ORDER BY {Schema.Columns.UserFilter.UFI_Name}", conn)
+                        : new OleDbCommand($"SELECT {Schema.Columns.UserFilter.UFI_Name} FROM {Schema.Tables.T_Ref_User_Filter} WHERE {Schema.Columns.UserFilter.UFI_Name} LIKE ? ORDER BY {Schema.Columns.UserFilter.UFI_Name}", conn))
                     {
                         if (!string.IsNullOrWhiteSpace(contains))
                         {
@@ -209,8 +210,8 @@ namespace RecoTool.Services
             try
             {
                 using (var cmd = string.IsNullOrWhiteSpace(contains)
-                    ? new OleDbCommand("SELECT UFI_Name, UFI_CreatedBy FROM T_Ref_User_Filter ORDER BY UFI_Name", conn)
-                    : new OleDbCommand("SELECT UFI_Name, UFI_CreatedBy FROM T_Ref_User_Filter WHERE UFI_Name LIKE ? ORDER BY UFI_Name", conn))
+                    ? new OleDbCommand($"SELECT {Schema.Columns.UserFilter.UFI_Name}, {Schema.Columns.UserFilter.UFI_CreatedBy} FROM {Schema.Tables.T_Ref_User_Filter} ORDER BY {Schema.Columns.UserFilter.UFI_Name}", conn)
+                    : new OleDbCommand($"SELECT {Schema.Columns.UserFilter.UFI_Name}, {Schema.Columns.UserFilter.UFI_CreatedBy} FROM {Schema.Tables.T_Ref_User_Filter} WHERE {Schema.Columns.UserFilter.UFI_Name} LIKE ? ORDER BY {Schema.Columns.UserFilter.UFI_Name}", conn))
                 {
                     if (!string.IsNullOrWhiteSpace(contains))
                     {
@@ -240,7 +241,7 @@ namespace RecoTool.Services
             var (conn, ownsConnection) = GetConnection();
             try
             {
-                using (var cmd = new OleDbCommand("DELETE FROM T_Ref_User_Filter WHERE UFI_Name = ?", conn))
+                using (var cmd = new OleDbCommand($"DELETE FROM {Schema.Tables.T_Ref_User_Filter} WHERE {Schema.Columns.UserFilter.UFI_Name} = ?", conn))
                 {
                     cmd.Parameters.AddWithValue("@p1", name);
                     var deleted = cmd.ExecuteNonQuery() > 0;

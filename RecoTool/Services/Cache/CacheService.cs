@@ -1,45 +1,95 @@
 using System;
 using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace RecoTool.Services.Cache
 {
     /// <summary>
-    /// Service de cache global avec invalidation explicite
-    /// Thread-safe et optimisé pour les accès concurrents
-    /// Le cache n'expire jamais automatiquement - il doit être invalidé explicitement
-    /// lors d'un import AMBRE ou d'un changement de pays
+    /// Service de cache global avec invalidation explicite.
+    /// Thread-safe et optimisé pour les accès concurrents.
+    /// Par défaut, les entrées n'expirent jamais automatiquement — elles doivent être
+    /// invalidées explicitement (Invalidate / InvalidateByPrefix / InvalidateAll), typiquement
+    /// lors d'un import AMBRE ou d'un changement de pays. Une expiration peut toutefois être
+    /// passée par appel (paramètre <c>expiration</c>) ; dans ce cas elle est gérée nativement
+    /// par <see cref="IMemoryCache"/> via <see cref="MemoryCacheEntryOptions.AbsoluteExpirationRelativeToNow"/>.
     /// </summary>
+    /// <remarks>
+    /// Le stockage interne s'appuie sur <see cref="MemoryCache"/> (Microsoft.Extensions.Caching.Memory).
+    /// Comme <see cref="IMemoryCache"/> n'expose pas d'énumération des clés, on maintient en parallèle
+    /// un <see cref="ConcurrentDictionary{TKey, TValue}"/> de clés vivantes (trade-off : duplication
+    /// mineure de la clé string ; alternative — <see cref="MemoryCache.Compact(double)"/> — n'autorise
+    /// pas l'invalidation ciblée par préfixe). Le set des clés est tenu cohérent via un
+    /// <see cref="PostEvictionDelegate"/> qui retire la clé lors de l'éviction par <see cref="IMemoryCache"/>
+    /// (expiration, suppression, capacité).
+    /// </remarks>
     public sealed class CacheService
     {
-        private static readonly Lazy<CacheService> _instance = new Lazy<CacheService>(() => new CacheService(), LazyThreadSafetyMode.ExecutionAndPublication);
-        
+        private static readonly Lazy<CacheService> _instance =
+            new Lazy<CacheService>(() => new CacheService(), LazyThreadSafetyMode.ExecutionAndPublication);
+
         public static CacheService Instance => _instance.Value;
 
-        private readonly ConcurrentDictionary<string, CacheEntry> _cache = new ConcurrentDictionary<string, CacheEntry>();
-        private readonly TimeSpan _defaultExpiration = TimeSpan.MaxValue; // Never expire by default
+        // SizeLimit conservateur : 10 000 entrées max. Chaque entrée déclare Size = 1.
+        // Au-delà, IMemoryCache déclenchera sa propre éviction LRU/priority.
+        private const long DefaultSizeLimit = 10_000L;
+
+        private readonly IMemoryCache _cache;
+
+        // Suivi explicite des clés vivantes pour supporter InvalidateByPrefix() et GetStats().
+        // byte sert juste de placeholder (ConcurrentDictionary<string, byte> ≈ ConcurrentHashSet<string>).
+        private readonly ConcurrentDictionary<string, byte> _liveKeys =
+            new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+
+        private readonly PostEvictionDelegate _onEviction;
 
         private CacheService()
         {
-            // Note: Cache entries never expire automatically
-            // They must be explicitly invalidated via InvalidateAll() or InvalidateByPrefix()
-            // No cleanup timer needed
+            _cache = new MemoryCache(new MemoryCacheOptions
+            {
+                SizeLimit = DefaultSizeLimit
+            });
+            _onEviction = OnEviction;
         }
 
-        private class CacheEntry
+        private void OnEviction(object key, object value, EvictionReason reason, object state)
         {
-            public object Value { get; set; }
-            public DateTime ExpiresAt { get; set; }
-            public TimeSpan Expiration { get; set; }
+            if (key is string s)
+            {
+                _liveKeys.TryRemove(s, out _);
+            }
+        }
 
-            // Only check expiration if it's not set to MaxValue (never expire)
-            public bool IsExpired => Expiration != TimeSpan.MaxValue && DateTime.UtcNow > ExpiresAt;
+        private MemoryCacheEntryOptions BuildOptions(TimeSpan? expiration)
+        {
+            var opts = new MemoryCacheEntryOptions
+            {
+                Size = 1
+            };
+            if (expiration.HasValue && expiration.Value != TimeSpan.MaxValue && expiration.Value > TimeSpan.Zero)
+            {
+                opts.AbsoluteExpirationRelativeToNow = expiration.Value;
+            }
+            opts.PostEvictionCallbacks.Add(new PostEvictionCallbackRegistration
+            {
+                EvictionCallback = _onEviction
+            });
+            return opts;
+        }
+
+        private void StoreInternal<T>(string key, T value, TimeSpan? expiration)
+        {
+            // Réinsertion : MemoryCache.Set remplace l'entrée existante et déclenche l'éviction
+            // de l'ancienne (avec EvictionReason.Replaced) — _liveKeys est nettoyé puis réajouté
+            // ci-dessous. On force donc le ré-add dans _liveKeys après le Set.
+            _cache.Set(key, value, BuildOptions(expiration));
+            _liveKeys[key] = 0;
         }
 
         /// <summary>
-        /// Récupère une valeur du cache ou la charge si absente/expirée
+        /// Récupère une valeur du cache ou la charge si absente/expirée (asynchrone).
         /// </summary>
         public async Task<T> GetOrLoadAsync<T>(string key, Func<Task<T>> loader, TimeSpan? expiration = null)
         {
@@ -49,36 +99,18 @@ namespace RecoTool.Services.Cache
             if (loader == null)
                 throw new ArgumentNullException(nameof(loader));
 
-            var exp = expiration ?? _defaultExpiration;
-
-            // Try get from cache
-            if (_cache.TryGetValue(key, out var entry))
+            if (_cache.TryGetValue(key, out object existing))
             {
-                if (!entry.IsExpired)
-                {
-                    return (T)entry.Value;
-                }
-                // Expired, remove it
-                _cache.TryRemove(key, out _);
+                return (T)existing;
             }
 
-            // Load the value
             var value = await loader().ConfigureAwait(false);
-
-            // Store in cache
-            var newEntry = new CacheEntry
-            {
-                Value = value,
-                ExpiresAt = exp == TimeSpan.MaxValue ? DateTime.MaxValue : DateTime.UtcNow.Add(exp),
-                Expiration = exp
-            };
-            _cache[key] = newEntry;
-
+            StoreInternal(key, value, expiration);
             return value;
         }
 
         /// <summary>
-        /// Récupère une valeur du cache (synchrone) ou la charge si absente/expirée
+        /// Récupère une valeur du cache (synchrone) ou la charge si absente/expirée.
         /// </summary>
         public T GetOrLoad<T>(string key, Func<T> loader, TimeSpan? expiration = null)
         {
@@ -88,172 +120,117 @@ namespace RecoTool.Services.Cache
             if (loader == null)
                 throw new ArgumentNullException(nameof(loader));
 
-            var exp = expiration ?? _defaultExpiration;
-
-            // Try get from cache
-            if (_cache.TryGetValue(key, out var entry))
+            if (_cache.TryGetValue(key, out object existing))
             {
-                if (!entry.IsExpired)
-                {
-                    return (T)entry.Value;
-                }
-                // Expired, remove it
-                _cache.TryRemove(key, out _);
+                return (T)existing;
             }
 
-            // Load the value
             var value = loader();
-
-            // Store in cache
-            var newEntry = new CacheEntry
-            {
-                Value = value,
-                ExpiresAt = exp == TimeSpan.MaxValue ? DateTime.MaxValue : DateTime.UtcNow.Add(exp),
-                Expiration = exp
-            };
-            _cache[key] = newEntry;
-
+            StoreInternal(key, value, expiration);
             return value;
         }
 
         /// <summary>
-        /// Tente de récupérer une valeur du cache
+        /// Tente de récupérer une valeur du cache.
         /// </summary>
         public bool TryGet<T>(string key, out T value)
         {
             value = default;
-            
+
             if (string.IsNullOrWhiteSpace(key))
                 return false;
 
-            if (_cache.TryGetValue(key, out var entry))
+            if (_cache.TryGetValue(key, out object raw))
             {
-                if (!entry.IsExpired)
-                {
-                    value = (T)entry.Value;
-                    return true;
-                }
-                // Expired, remove it
-                _cache.TryRemove(key, out _);
+                value = (T)raw;
+                return true;
             }
-
             return false;
         }
 
         /// <summary>
-        /// Met en cache une valeur
+        /// Met en cache une valeur.
         /// </summary>
         public void Set<T>(string key, T value, TimeSpan? expiration = null)
         {
             if (string.IsNullOrWhiteSpace(key))
                 throw new ArgumentException("Cache key cannot be null or empty", nameof(key));
 
-            var exp = expiration ?? _defaultExpiration;
-            var entry = new CacheEntry
-            {
-                Value = value,
-                ExpiresAt = exp == TimeSpan.MaxValue ? DateTime.MaxValue : DateTime.UtcNow.Add(exp),
-                Expiration = exp
-            };
-            _cache[key] = entry;
+            StoreInternal(key, value, expiration);
         }
 
         /// <summary>
-        /// Invalide une entrée du cache
+        /// Invalide une entrée du cache.
         /// </summary>
         public void Invalidate(string key)
         {
             if (!string.IsNullOrWhiteSpace(key))
             {
-                _cache.TryRemove(key, out _);
+                _cache.Remove(key); // déclenche PostEviction -> _liveKeys nettoyé
             }
         }
 
         /// <summary>
-        /// Invalide toutes les entrées du cache correspondant au préfixe
+        /// Invalide toutes les entrées du cache dont la clé commence par <paramref name="prefix"/>.
         /// </summary>
+        /// <remarks>
+        /// <see cref="IMemoryCache"/> n'expose pas d'énumération des clés, on utilise donc le set
+        /// <c>_liveKeys</c> maintenu en parallèle. La comparaison est insensible à la casse
+        /// pour rester strictement compatible avec l'ancienne implémentation
+        /// (<see cref="StringComparison.OrdinalIgnoreCase"/>).
+        /// </remarks>
         public void InvalidateByPrefix(string prefix)
         {
             if (string.IsNullOrWhiteSpace(prefix))
                 return;
 
-            foreach (var key in _cache.Keys)
+            // Snapshot des clés pour éviter de modifier la collection pendant l'itération.
+            var snapshot = new List<string>(_liveKeys.Count);
+            foreach (var k in _liveKeys.Keys)
             {
-                if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                {
-                    _cache.TryRemove(key, out _);
-                }
+                if (k != null && k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    snapshot.Add(k);
+            }
+
+            foreach (var k in snapshot)
+            {
+                _cache.Remove(k); // PostEviction met à jour _liveKeys
             }
         }
 
         /// <summary>
-        /// Invalide toutes les entrées du cache
+        /// Invalide toutes les entrées du cache.
         /// </summary>
         public void InvalidateAll()
         {
-            _cache.Clear();
+            // Snapshot puis Remove pour conserver des callbacks d'éviction propres
+            // (et éviter de jeter le MemoryCache lui-même, qui resterait référencé via _cache).
+            var snapshot = new List<string>(_liveKeys.Keys);
+            foreach (var k in snapshot)
+            {
+                _cache.Remove(k);
+            }
+            // Filet de sécurité : si une clé avait été ajoutée hors-piste, on force le reset.
+            _liveKeys.Clear();
         }
 
         /// <summary>
-        /// Nettoie les entrées expirées du cache (only for entries with explicit expiration)
-        /// Note: Most entries never expire and must be explicitly invalidated
+        /// Obtient les statistiques du cache.
         /// </summary>
-        private void CleanupExpiredEntries(object state)
-        {
-            try
-            {
-                var now = DateTime.UtcNow;
-                var expiredKeys = new System.Collections.Generic.List<string>();
-
-                foreach (var kvp in _cache)
-                {
-                    if (kvp.Value.IsExpired)
-                    {
-                        expiredKeys.Add(kvp.Key);
-                    }
-                }
-
-                foreach (var key in expiredKeys)
-                {
-                    _cache.TryRemove(key, out _);
-                }
-
-                if (expiredKeys.Count > 0)
-                {
-                    System.Diagnostics.Debug.WriteLine($"CacheService: Cleaned up {expiredKeys.Count} expired entries");
-                }
-            }
-            catch
-            {
-                // Best effort cleanup
-            }
-        }
-
-        /// <summary>
-        /// Obtient les statistiques du cache
-        /// </summary>
+        /// <remarks>
+        /// Sous <see cref="IMemoryCache"/>, les entrées expirées sont évacuées passivement
+        /// (au prochain accès ou via le scan interne) — la valeur d'<c>ExpiredEntries</c>
+        /// est donc en général 0 ici ; elle est conservée pour rétro-compatibilité d'API.
+        /// </remarks>
         public CacheStats GetStats()
         {
-            int totalEntries = _cache.Count;
-            int expiredEntries = 0;
-            long totalSize = 0;
-
-            foreach (var entry in _cache.Values)
-            {
-                if (entry.IsExpired)
-                {
-                    expiredEntries++;
-                }
-                // Rough size estimation (this is a simplification)
-                totalSize += 100; // Base overhead
-            }
-
+            int total = _liveKeys.Count;
             return new CacheStats
             {
-                TotalEntries = totalEntries,
-                FreshEntries = totalEntries - expiredEntries,
-                ExpiredEntries = expiredEntries,
-                EstimatedSizeBytes = totalSize
+                TotalEntries = total,
+                FreshEntries = total,
+                ExpiredEntries = 0,
+                EstimatedSizeBytes = total * 100L
             };
         }
 

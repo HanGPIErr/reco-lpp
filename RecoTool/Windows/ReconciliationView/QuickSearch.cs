@@ -103,9 +103,23 @@ namespace RecoTool.Windows
 
             // Paginate
             _loadedCount = Math.Min(InitialPageSize, result.Count);
-            _viewData.Clear();
-            foreach (var item in result.Take(_loadedCount))
-                _viewData.Add(item);
+
+            // PERF: Suspend SfDataGrid layout while we swap the page data.
+            // Without BeginInit/EndInit, each Clear+Add triggers a full layout pass
+            // (N+1 CollectionChanged events → N+1 relayout). Matches the pattern used in
+            // ApplyFilters / LoadMorePage / RefreshViewData.
+            var sfGrid = this.FindName("ResultsDataGrid") as Syncfusion.UI.Xaml.Grid.SfDataGrid;
+            try { sfGrid?.View?.BeginInit(); } catch { }
+            try
+            {
+                _viewData.Clear();
+                foreach (var item in result.Take(_loadedCount))
+                    _viewData.Add(item);
+            }
+            finally
+            {
+                try { sfGrid?.View?.EndInit(); } catch { }
+            }
 
             // Restore sort
             var newView = CollectionViewSource.GetDefaultView(_viewData);

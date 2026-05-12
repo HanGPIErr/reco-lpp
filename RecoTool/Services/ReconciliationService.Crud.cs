@@ -8,6 +8,7 @@ using System.Data.OleDb;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace RecoTool.Services
 {
@@ -28,6 +29,8 @@ namespace RecoTool.Services
         /// matching Ambre line when no row has been persisted yet. Callers normally feed the result back
         /// into <see cref="SaveReconciliationsAsync"/> after edits — the stub will INSERT, the existing row UPDATEs.
         /// </summary>
+        // NOTE: IReconciliationService.GetOrCreateReconciliationAsync interface does not yet accept CancellationToken.
+        // TODO: add CT in IReconciliationService.GetOrCreateReconciliationAsync interface
         public async Task<Reconciliation> GetOrCreateReconciliationAsync(string id)
         {
             var query = "SELECT * FROM T_Reconciliation WHERE ID = ? AND DeleteDate IS NULL";
@@ -44,8 +47,9 @@ namespace RecoTool.Services
         /// Fetches a reconciliation row by ID without falling back to a stub. Returns <c>null</c> when the row
         /// does not exist (unlike <see cref="GetOrCreateReconciliationAsync"/>).
         /// </summary>
-        public async Task<Reconciliation> GetReconciliationByIdAsync(string countryId, string id)
+        public async Task<Reconciliation> GetReconciliationByIdAsync(string countryId, string id, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             var query = "SELECT * FROM T_Reconciliation WHERE ID = ? AND DeleteDate IS NULL";
             var existing = await _queryExecutor.QueryAsync<Reconciliation>(query, _connectionString, id).ConfigureAwait(false);
             return existing.FirstOrDefault();
@@ -119,11 +123,15 @@ namespace RecoTool.Services
                             UserMessage = res?.UserMessage
                         });
                     }
-                    catch { /* swallow per-row */ }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "SimulateRulesAsync: rule simulation failed for reco {RecoId} (scope={Scope})", id, scope);
+                    }
                     finally
                     {
                         done++;
-                        try { progress?.Report((done, total)); } catch { }
+                        try { progress?.Report((done, total)); }
+                        catch (Exception ex) { _logger.LogDebug(ex, "Progress reporter threw for SimulateRulesAsync"); }
                     }
                 }
             }
@@ -139,10 +147,11 @@ namespace RecoTool.Services
         /// <see cref="RuleContext"/> and the list of every rule evaluated with its pass/fail reasons.
         /// Used by the rule debugger UI to surface why a given rule did or did not match.
         /// </summary>
-        public async Task<(RuleContext Context, List<RuleDebugEvaluation> Evaluations)> GetRuleDebugInfoAsync(string reconciliationId)
+        public async Task<(RuleContext Context, List<RuleDebugEvaluation> Evaluations)> GetRuleDebugInfoAsync(string reconciliationId, CancellationToken ct = default)
         {
             try
             {
+                ct.ThrowIfCancellationRequested();
                 var currentCountryId = _offlineFirstService?.CurrentCountryId;
                 if (string.IsNullOrWhiteSpace(currentCountryId) || _rulesEngine == null)
                     return (null, null);
@@ -155,22 +164,27 @@ namespace RecoTool.Services
 
                 bool isPivot = amb.IsPivotAccount(countryCtx.CNT_AmbrePivot);
                 var ctx = await BuildRuleContextAsync(amb, r, countryCtx, currentCountryId, isPivot).ConfigureAwait(false);
-                var evaluations = await _rulesEngine.EvaluateAllForDebugAsync(ctx, RuleScope.Edit).ConfigureAwait(false);
+                var evaluations = await _rulesEngine.EvaluateAllForDebugAsync(ctx, RuleScope.Edit, ct).ConfigureAwait(false);
                 return (ctx, evaluations);
             }
-            catch { return (null, null); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "GetRuleDebugInfoAsync failed");
+                return (null, null);
+            }
         }
 
         /// <summary>Saves a single reconciliation, applying edit-scope rules by default. Thin wrapper over the batch API.</summary>
-        public async Task<bool> SaveReconciliationAsync(Reconciliation reconciliation)
+        public async Task<bool> SaveReconciliationAsync(Reconciliation reconciliation, CancellationToken ct = default)
         {
-            return await SaveReconciliationsAsync(new[] { reconciliation });
+            return await SaveReconciliationsAsync(new[] { reconciliation }, applyRulesOnEdit: true, ct);
         }
 
         /// <summary>Saves a single reconciliation, explicit control over whether edit-scope rules run.</summary>
-        public async Task<bool> SaveReconciliationAsync(Reconciliation reconciliation, bool applyRulesOnEdit)
+        public async Task<bool> SaveReconciliationAsync(Reconciliation reconciliation, bool applyRulesOnEdit, CancellationToken ct = default)
         {
-            return await SaveReconciliationsAsync(new[] { reconciliation }, applyRulesOnEdit);
+            return await SaveReconciliationsAsync(new[] { reconciliation }, applyRulesOnEdit, ct);
         }
 
         /// <summary>
@@ -188,13 +202,21 @@ namespace RecoTool.Services
         /// also swallowed but logged (they would cause background sync to miss the row until reconstruction).
         /// </para>
         /// </summary>
-        public async Task<bool> SaveReconciliationsAsync(IEnumerable<Reconciliation> reconciliations, bool applyRulesOnEdit = true)
+        // NOTE: IReconciliationService.SaveReconciliationsAsync interface does not yet accept CancellationToken.
+        // The CT-aware overload below is preferred for new callers; the interface signature is left in
+        // place to keep existing call sites and mocks compiling.
+        // TODO: add CT in IReconciliationService.SaveReconciliationsAsync interface
+        public Task<bool> SaveReconciliationsAsync(IEnumerable<Reconciliation> reconciliations, bool applyRulesOnEdit = true)
+            => SaveReconciliationsAsync(reconciliations, applyRulesOnEdit, default(CancellationToken));
+
+        public async Task<bool> SaveReconciliationsAsync(IEnumerable<Reconciliation> reconciliations, bool applyRulesOnEdit, CancellationToken ct)
         {
             try
             {
+                ct.ThrowIfCancellationRequested();
                 using (var connection = new OleDbConnection(_connectionString))
                 {
-                    await connection.OpenAsync().ConfigureAwait(false);
+                    await connection.OpenAsync(ct).ConfigureAwait(false);
                     using (var transaction = connection.BeginTransaction())
                     {
                         try
@@ -203,6 +225,7 @@ namespace RecoTool.Services
                             var updatedRows = new List<Reconciliation>();
                             foreach (var reconciliation in reconciliations)
                             {
+                                ct.ThrowIfCancellationRequested();
                                 if (applyRulesOnEdit)
                                 {
                                     try
@@ -226,10 +249,13 @@ namespace RecoTool.Services
                                             }
                                         }
                                     }
-                                    catch { /* do not block user saves on rules engine errors */ }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.LogWarning(ex, "Rules engine evaluation failed during SaveReconciliations; continuing save for reco {RecoId}", reconciliation?.ID);
+                                    }
                                 }
 
-                                var op = await SaveSingleReconciliationAsync(connection, transaction, reconciliation).ConfigureAwait(false);
+                                var op = await SaveSingleReconciliationAsync(connection, transaction, reconciliation, ct).ConfigureAwait(false);
                                 if (!string.Equals(op, "NOOP", StringComparison.OrdinalIgnoreCase))
                                 {
                                     changeTuples.Add(("T_Reconciliation", reconciliation.ID, op));
@@ -248,7 +274,10 @@ namespace RecoTool.Services
                                 else
                                     InvalidateReconciliationViewCache();
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "Failed to invalidate reconciliation view cache after SaveReconciliations");
+                            }
 
                             // Record changes in ChangeLog (stored locally via OfflineFirstService configuration)
                             try
@@ -277,10 +306,12 @@ namespace RecoTool.Services
                             }
 
                             // Invalidate Lazy<Task> coalescing cache so next loads fetch fresh data from DB
-                            try { _recoViewCache.Clear(); } catch { }
+                            try { _recoViewCache.Clear(); }
+                            catch (Exception ex) { _logger.LogWarning(ex, "Failed to clear reco view task cache after SaveReconciliations"); }
 
                             // Incrementally update materialized view lists with the modified reconciliation fields
-                            try { UpdateRecoViewCaches(updatedRows); } catch { }
+                            try { UpdateRecoViewCaches(updatedRows); }
+                            catch (Exception ex) { _logger.LogWarning(ex, "Incremental UpdateRecoViewCaches failed after SaveReconciliations (rows={RowCount})", updatedRows?.Count); }
 
                             // Synchronization is handled by background services (e.g., SyncMonitor),
                             // which read pending items from ChangeLog and then perform PUSH followed by PULL.
@@ -358,14 +389,15 @@ namespace RecoTool.Services
         /// UPDATE is dynamic to avoid touching untouched columns (reduces write amplification and
         /// preserves concurrent edits on unrelated columns).
         /// </summary>
-        private async Task<string> SaveSingleReconciliationAsync(OleDbConnection connection, OleDbTransaction transaction, Reconciliation reconciliation)
+        private async Task<string> SaveSingleReconciliationAsync(OleDbConnection connection, OleDbTransaction transaction, Reconciliation reconciliation, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             // Vérifier si l'enregistrement existe (par ID)
             var checkQuery = "SELECT COUNT(*) FROM T_Reconciliation WHERE ID = ?";
             using (var checkCmd = new OleDbCommand(checkQuery, connection, transaction))
             {
                 checkCmd.Parameters.AddWithValue("@ID", reconciliation.ID);
-                var exists = (int)await checkCmd.ExecuteScalarAsync().ConfigureAwait(false) > 0;
+                var exists = (int)await checkCmd.ExecuteScalarAsync(ct).ConfigureAwait(false) > 0;
 
                 // If the row exists, compare business fields to avoid no-op updates
                 if (exists)
@@ -384,9 +416,9 @@ namespace RecoTool.Services
                                 [RemainingAmount]
                               FROM T_Reconciliation WHERE [ID] = ?", connection, transaction);
                     selectCmd.Parameters.AddWithValue("@ID", reconciliation.ID);
-                    using (var rdr = await selectCmd.ExecuteReaderAsync().ConfigureAwait(false))
+                    using (var rdr = await selectCmd.ExecuteReaderAsync(ct).ConfigureAwait(false))
                     {
-                        if (await rdr.ReadAsync().ConfigureAwait(false))
+                        if (await rdr.ReadAsync(ct).ConfigureAwait(false))
                         {
                             object DbVal(int i) => rdr.IsDBNull(i) ? null : rdr.GetValue(i);
                             bool Equal(object a, object b) => (a == null && b == null) || (a != null && a.Equals(b));
@@ -459,7 +491,7 @@ namespace RecoTool.Services
                     // Apply update with refreshed modification metadata (partial update of changed fields only)
                     LogManager.Debug($"Reconciliation UPDATE detected: ID={reconciliation.ID} Changed=[{string.Join(",", changed)}]");
                     reconciliation.ModifiedBy = _currentUser;
-                    reconciliation.LastModified = DateTime.UtcNow;
+                    reconciliation.LastModified = _clock.UtcNow;
 
                     // Build dynamic UPDATE statement
                     var setClauses = new List<string>();
@@ -646,7 +678,7 @@ namespace RecoTool.Services
                         }
                         catch { }
 
-                        await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
                         // Encode changed fields for partial update during sync
                         var op = $"UPDATE({string.Join(",", changed)})";
                         LogManager.Debug($"Reconciliation UPDATE operation encoded: {op}");
@@ -657,9 +689,9 @@ namespace RecoTool.Services
                 {
                     // Prepare metadata for insert
                     if (!reconciliation.CreationDate.HasValue)
-                        reconciliation.CreationDate = DateTime.UtcNow;
+                        reconciliation.CreationDate = _clock.UtcNow;
                     reconciliation.ModifiedBy = _currentUser;
-                    reconciliation.LastModified = DateTime.UtcNow;
+                    reconciliation.LastModified = _clock.UtcNow;
 
                     var insertQuery = @"INSERT INTO T_Reconciliation 
                              ([ID], [DWINGS_GuaranteeID], [DWINGS_InvoiceID], [DWINGS_BGPMT],
@@ -674,7 +706,7 @@ namespace RecoTool.Services
                     {
                         AddReconciliationParameters(cmd, reconciliation, isInsert: true);
                         LogManager.Debug($"Reconciliation INSERT: ID={reconciliation.ID}");
-                        await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
                         return "INSERT";
                     }
                 }

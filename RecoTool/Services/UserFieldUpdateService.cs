@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using RecoTool.Infrastructure.Time;
 using RecoTool.Models;
 using RecoTool.Services.DTOs;
 
@@ -12,6 +13,8 @@ namespace RecoTool.Services
     /// </summary>
     public static class UserFieldUpdateService
     {
+        /// <summary>Clock used for ActionDate stamping. Defaults to <see cref="SystemClock.Instance"/>; swappable for tests.</summary>
+        public static IClock Clock { get; set; } = SystemClock.Instance;
         public static bool IsActionNA(int? actionId, IReadOnlyList<UserField> allUserFields)
         {
             try
@@ -41,7 +44,7 @@ namespace RecoTool.Services
             else
             {
                 row.ActionStatus = false; // PENDING
-                row.ActionDate = DateTime.Now;
+                row.ActionDate = Clock.Now;
                 reco.ActionStatus = false;
                 reco.ActionDate = row.ActionDate;
             }
@@ -55,7 +58,7 @@ namespace RecoTool.Services
             {
                 if (oldStatus != newStatus)
                 {
-                    row.ActionDate = DateTime.Now; reco.ActionDate = row.ActionDate;
+                    row.ActionDate = Clock.Now; reco.ActionDate = row.ActionDate;
                 }
             }
             else

@@ -8,7 +8,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using OfflineFirstAccess.Helpers;
 using RecoTool.Infrastructure.Logging;
+using RecoTool.Infrastructure.Time;
 using RecoTool.Services;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace RecoTool.Services.Rules
 {
@@ -25,11 +28,15 @@ namespace RecoTool.Services.Rules
     {
         private readonly ReconciliationService _reconciliationService;
         private readonly TruthTableRepository _ruleRepository;
+        private readonly IClock _clock;
+        private readonly ILogger<RulesDiagnosticsService> _logger;
 
-        public RulesDiagnosticsService(ReconciliationService reconciliationService, TruthTableRepository ruleRepository)
+        public RulesDiagnosticsService(ReconciliationService reconciliationService, TruthTableRepository ruleRepository, IClock clock = null, ILogger<RulesDiagnosticsService> logger = null)
         {
             _reconciliationService = reconciliationService ?? throw new ArgumentNullException(nameof(reconciliationService));
             _ruleRepository = ruleRepository ?? throw new ArgumentNullException(nameof(ruleRepository));
+            _clock = clock ?? SystemClock.Instance;
+            _logger = logger ?? NullLogger<RulesDiagnosticsService>.Instance;
         }
 
         #region Simulator
@@ -60,7 +67,10 @@ namespace RecoTool.Services.Rules
                     .Where(s => s.LastApplied.HasValue)
                     .ToDictionary(s => s.RuleId, s => s.LastApplied.Value, StringComparer.OrdinalIgnoreCase);
             }
-            catch { /* non-blocking */ }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "SimulateAsync: failed to load coverage for last-applied enrichment (scope={Scope})", scope);
+            }
 
             var hits = new List<RuleHitStats>();
             foreach (var rule in rules.OrderBy(r => r.Priority).ThenBy(r => r.RuleId))
@@ -87,7 +97,7 @@ namespace RecoTool.Services.Rules
 
             return new SimulationReport
             {
-                SimulatedAt = DateTime.Now,
+                SimulatedAt = _clock.Now,
                 Scope = scope,
                 TotalRows = rows.Count,
                 MatchedRows = rows.Count(r => !string.IsNullOrWhiteSpace(r.MatchedRuleId)),
@@ -205,7 +215,10 @@ namespace RecoTool.Services.Rules
                                 report.Warnings.Add($"⚠ Dead rule: '{r.RuleId}' never fired in the last {lastNDays} days.");
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "LoadCoverageAsync: dead-rules cross-check failed (lastNDays={LastNDays})", lastNDays);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -280,11 +293,15 @@ namespace RecoTool.Services.Rules
                         UserMessage = res?.UserMessage
                     });
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "PreviewImpactAsync: per-row evaluation failed for reco {RecoId} (rule={RuleId})", id, draft?.RuleId);
+                }
                 finally
                 {
                     done++;
-                    try { progress?.Report((done, total)); } catch { }
+                    try { progress?.Report((done, total)); }
+                    catch (Exception ex) { _logger.LogDebug(ex, "PreviewImpactAsync: progress reporter threw"); }
                 }
             }
 

@@ -34,6 +34,9 @@ namespace RecoTool.Windows
         private ReconciliationService _reconciliationService;
         private OfflineFirstService _offlineFirstService;
         private KpiSnapshotService _kpiSnapshotService;
+        // Service locator removal: resolved ONCE in MVVM ctor body, reused by handlers
+        // instead of calling App.ServiceProvider on every click.
+        private Func<ImportAmbreWindow> _importAmbreWindowFactory;
         private TodoListSessionTracker _todoSessionTracker; // Used only for multi-user checks, not for session tracking
         private bool _isLoading;
         private bool _canRefresh = true;
@@ -602,6 +605,50 @@ namespace RecoTool.Windows
             SetupTodoSessionRefreshTimer();
         }
 
+        private RecoTool.ViewModels.HomePageViewModel _vm;
+
+        /// <summary>
+        /// MVVM constructor. The VM owns the dashboard surface (KPIs, charts,
+        /// todo cards, alerts) and the cross-window navigation events
+        /// (ImportRequested / RefreshStarted/Completed / TodoCardOpened).
+        /// Legacy services are kept populated so the existing code-behind
+        /// (DWINGS timer, todo session tracker, KPI snapshot) continues to work.
+        /// </summary>
+        public HomePage(OfflineFirstService offlineFirstService,
+                        ReconciliationService reconciliationService,
+                        RecoTool.ViewModels.HomePageViewModel vm)
+            : this(offlineFirstService, reconciliationService)
+        {
+            _vm = vm ?? throw new ArgumentNullException(nameof(vm));
+            DataContext = _vm;
+            // Service locator removal: resolve the DI factory ONCE here. Handlers below
+            // (e.g. ImportAmbre_Click) reuse this factory instead of touching
+            // App.ServiceProvider on every click.
+            try
+            {
+                var sp = App.ServiceProvider;
+                _importAmbreWindowFactory = sp != null
+                    ? new Func<ImportAmbreWindow>(() => sp.GetRequiredService<ImportAmbreWindow>())
+                    : new Func<ImportAmbreWindow>(() => new ImportAmbreWindow(_offlineFirstService, null));
+            }
+            catch
+            {
+                _importAmbreWindowFactory = () => new ImportAmbreWindow(_offlineFirstService, null);
+            }
+            // Bridge VM events back to legacy code-behind flows.
+            _vm.ImportRequested += (_, __) => Dispatcher.Invoke(() =>
+            {
+                // Find the owning MainWindow to defer to its existing import dialog.
+                var main = Window.GetWindow(this) as MainWindow;
+                if (main != null)
+                {
+                    var mi = typeof(MainWindow).GetMethod("ShowImportDialog",
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    mi?.Invoke(main, null);
+                }
+            });
+        }
+
         /// <summary>
         /// Met à  jour les services injectés (appelé aprà¨s changement de country)
         /// </summary>
@@ -637,7 +684,7 @@ namespace RecoTool.Windows
             _actionDistributionSeries = new SeriesCollection();
             _kpiRiskSeries = new SeriesCollection();
             _statusMessage = "Ready";
-            _lastUpdateTime = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+            _lastUpdateTime = BaseEntity.Clock.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
             _isDwingsDataFromToday = true;
             _dwingsWarningMessage = string.Empty;
 
@@ -1100,17 +1147,81 @@ namespace RecoTool.Windows
         /// <summary>
         /// Charge les données live et met à jour KPIs, graphes et infos pays.
         /// </summary>
+        /// <remarks>
+        /// Perf optimization: compteurs/KPIs (TotalLiveCount, MatchedPercentage, …) and
+        /// TodoCards are populated eagerly so the dashboard becomes visually meaningful
+        /// within ~100ms. The expensive LiveCharts series (UpdateCharts/UpdateAnalytics)
+        /// are deferred to a Dispatcher.BeginInvoke at <see cref="System.Windows.Threading.DispatcherPriority.Background"/>
+        /// so the first layout pass for compteurs gets to run first. They will populate
+        /// progressively over the following 2-5s on a typical dataset.
+        /// </remarks>
         private async Task LoadLiveDashboardAsync()
         {
             await LoadRealDataFromDatabase();
+
+            // Eager: compteurs + country info + todo cards (cheap, drive the visible "header").
             UpdateKPISummary();
-            UpdateCharts();
             UpdateCountryInfo();
             await LoadTodoCardsAsync();
-            UpdateAnalytics();
-            
+
             // Immediately refresh TodoCard multi-user indicators after loading
             await RefreshTodoCardSessionsAsync();
+
+            // Deferred: heavy chart computation. Reset the gate so a refresh re-runs them.
+            _chartsLoaded = false;
+            ScheduleChartHydration();
+        }
+
+        /// <summary>
+        /// Guard so chart hydration only runs once per data load.
+        /// Reset in <see cref="LoadLiveDashboardAsync"/>.
+        /// </summary>
+        private bool _chartsLoaded;
+
+        /// <summary>
+        /// Queues the (expensive) chart series build on the UI Dispatcher at Background
+        /// priority. This yields back to the message pump so KPI compteurs, todo cards
+        /// and the surrounding chrome render first; the charts then populate progressively.
+        /// </summary>
+        private void ScheduleChartHydration()
+        {
+            if (_chartsLoaded) return;
+            try
+            {
+                // BeginInvoke at Background priority: KPI / layout passes will run before this.
+                Dispatcher.BeginInvoke(new Action(HydrateChartsOnce),
+                    System.Windows.Threading.DispatcherPriority.Background);
+            }
+            catch
+            {
+                // Best-effort: if dispatcher is unavailable (designer / shutting down), do nothing.
+            }
+        }
+
+        /// <summary>
+        /// Runs chart + analytics computations once. Safe to call multiple times.
+        /// All chart builders here are no-ops if <c>_reconciliationViewData</c> is null.
+        /// </summary>
+        private void HydrateChartsOnce()
+        {
+            if (_chartsLoaded) return;
+            _chartsLoaded = true;
+            try
+            {
+                UpdateCharts();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"HomePage.HydrateChartsOnce: UpdateCharts failed: {ex.Message}");
+            }
+            try
+            {
+                UpdateAnalytics();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"HomePage.HydrateChartsOnce: UpdateAnalytics failed: {ex.Message}");
+            }
         }
 
         private async void ExportDailyKpi_Click(object sender, RoutedEventArgs e)
@@ -1655,7 +1766,7 @@ namespace RecoTool.Windows
                 // Analyser la répartition des comptes pour diagnostic
                 AnalyzeAccountDistribution();
                 StatusMessage = $"Data loaded: {_reconciliationViewData.Count} rows (Live), {_reconciliationHistoricalData.Count} rows (Historical)";
-                LastUpdateTime = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+                LastUpdateTime = BaseEntity.Clock.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
                 System.Diagnostics.Debug.WriteLine($"Data loaded via ReconciliationService: {_reconciliationViewData.Count} rows (Live), {_reconciliationHistoricalData.Count} rows (Historical) for {_offlineFirstService.CurrentCountryId}");
             }
             catch (Exception ex)
@@ -2286,7 +2397,7 @@ namespace RecoTool.Windows
             try
             {
                 UpdateTextBlock("CountryNameText", _offlineFirstService.CurrentCountryId ?? "N/A");
-                UpdateTextBlock("LastUpdateText", DateTime.Now.ToString("dd/MM/yyyy HH:mm", CultureInfo.InvariantCulture));
+                UpdateTextBlock("LastUpdateText", BaseEntity.Clock.Now.ToString("dd/MM/yyyy HH:mm", CultureInfo.InvariantCulture));
             }
             catch (Exception ex)
             {
@@ -2343,8 +2454,12 @@ namespace RecoTool.Windows
         {
             try
             {
-                // Utiliser le DI container pour obtenir ImportAmbreWindow avec toutes ses dépendances
-                var importWindow = App.ServiceProvider.GetRequiredService<ImportAmbreWindow>();
+                // Service locator removal: _importAmbreWindowFactory is resolved ONCE
+                // in the MVVM ctor body. Fallback to the legacy designer-style ctor
+                // if (somehow) the factory was not initialized.
+                var factory = _importAmbreWindowFactory
+                              ?? new Func<ImportAmbreWindow>(() => new ImportAmbreWindow(_offlineFirstService, null));
+                var importWindow = factory();
                 importWindow.ShowDialog();
 
                 // Actualiser les données aprà¨s import
@@ -2372,7 +2487,7 @@ namespace RecoTool.Windows
                     return;
                 }
 
-                var defaultName = $"Reconciliation_Dashboard_{CurrentCountryId}_{DateTime.Now:yyyyMMdd_HHmm}.xlsx";
+                var defaultName = $"Reconciliation_Dashboard_{CurrentCountryId}_{BaseEntity.Clock.Now:yyyyMMdd_HHmm}.xlsx";
                 var sfd = new Microsoft.Win32.SaveFileDialog
                 {
                     FileName = defaultName,
