@@ -1299,21 +1299,30 @@ namespace RecoTool.Windows
                 IsTodoMode = true;
                 SelectedStatus = "Live";
                 
-                // Load TodoList if not already loaded
+                // Load TodoList if not already loaded.
+                // IMPORTANT: NO ConfigureAwait(false) anywhere below — the continuation must stay on
+                // the UI (STA) thread because AddViewForCurrentSelectionAsync ends up calling
+                // `new ReconciliationView(...)`, which constructs WPF UI elements that throw
+                // "The calling thread must be STA" when invoked from a thread-pool worker.
+                // Previously, .ConfigureAwait(false) on each await detached the continuation from
+                // the UI SynchronizationContext, so opening a view via a HomePage ToDo card after
+                // having opened+closed one once (the page was already loaded → IsLoading path took
+                // the await) would land on the thread pool and crash the constructor — corrupting
+                // page state and making subsequent open attempts fail silently.
                 if (TodoItems == null || TodoItems.Count == 0)
                 {
-                    await LoadTodoListAsync().ConfigureAwait(false);
+                    await LoadTodoListAsync();
                 }
-                
+
                 // Select the TodoList item
                 SelectedTodoItem = todo;
-                
+
                 // Apply the TodoList filter to prepare for the next view
-                await ApplyTodoToNextViewAsync(todo).ConfigureAwait(false);
-                
+                await ApplyTodoToNextViewAsync(todo);
+
                 // Now use the common AddView flow (which handles session registration)
-                await AwaitSafeToOpenViewAsync().ConfigureAwait(false);
-                
+                await AwaitSafeToOpenViewAsync();
+
                 // Trigger AddView_Click logic programmatically
                 await AddViewForCurrentSelectionAsync(asPopup: false);
             }
@@ -2498,34 +2507,54 @@ namespace RecoTool.Windows
                 int linked = 0;
                 var triggerActionId = (int)ActionType.Trigger;
                 var nowUtc = BaseEntity.Clock.UtcNow;
-                foreach (var id in allIds)
+                var nowLocal = BaseEntity.Clock.Now;
+                var modifiedBy = Environment.UserName;
+
+                // PERF: single batched SELECT (chunked IN(...)) replaces N round-trips to fetch each row.
+                // For a 200-line basket this collapses ~200 sequential reads into ~1-2.
+                var existing = await recoSvc.GetOrCreateReconciliationsAsync(allIds);
+
+                // PERF: stage every mutation in-memory, then persist via ONE batch save (single OleDb
+                // transaction). Previous shape ran N independent SaveReconciliationAsync calls — each
+                // opening its own connection + transaction — which dominated the wall-clock time
+                // for large baskets on Access.
+                var updates = new List<Reconciliation>(existing.Count);
+                foreach (var reco in existing)
+                {
+                    if (reco == null) continue;
+
+                    reco.InternalInvoiceReference = groupRef;
+
+                    // Always set TRIGGER PENDING after a basket link (per business rule).
+                    // We do this in code rather than relying on the "Linking - Grouped
+                    // Balance Zero" rule, which only fires when IsGrouped + IsAmountMatch
+                    // are both true. The user wants this state regardless of balance.
+                    reco.Action = triggerActionId;
+                    reco.ActionStatus = false;       // PENDING
+                    reco.ActionDate = nowUtc;
+
+                    // Stamp user-edit so subsequent rule passes won't silently overwrite
+                    // the freshly-stamped Trigger state.
+                    RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(
+                        reco, "InternalInvoiceReference", "Action", "ActionStatus", "ActionDate");
+
+                    reco.ModifiedBy = modifiedBy;
+                    reco.LastModified = nowLocal;
+                    updates.Add(reco);
+                }
+
+                if (updates.Count > 0)
                 {
                     try
                     {
-                        var reco = await recoSvc.GetOrCreateReconciliationAsync(id);
-                        if (reco == null) continue;
-
-                        reco.InternalInvoiceReference = groupRef;
-
-                        // Always set TRIGGER PENDING after a basket link (per business rule).
-                        // We do this in code rather than relying on the "Linking - Grouped
-                        // Balance Zero" rule, which only fires when IsGrouped + IsAmountMatch
-                        // are both true. The user wants this state regardless of balance.
-                        reco.Action = triggerActionId;
-                        reco.ActionStatus = false;       // PENDING
-                        reco.ActionDate = nowUtc;
-
-                        // Stamp user-edit so subsequent rule passes won't silently overwrite
-                        // the freshly-stamped Trigger state.
-                        RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(
-                            reco, "InternalInvoiceReference", "Action", "ActionStatus", "ActionDate");
-
-                        reco.ModifiedBy = Environment.UserName;
-                        reco.LastModified = BaseEntity.Clock.Now;
-                        await recoSvc.SaveReconciliationAsync(reco, applyRulesOnEdit: false);
-                        linked++;
+                        await recoSvc.SaveReconciliationsAsync(updates, applyRulesOnEdit: false);
+                        linked = updates.Count;
                     }
-                    catch { }
+                    catch (Exception exSave)
+                    {
+                        ShowError($"Batch save failed: {exSave.Message}");
+                        linked = 0;
+                    }
                 }
 
                 _linkingBasket.Clear();

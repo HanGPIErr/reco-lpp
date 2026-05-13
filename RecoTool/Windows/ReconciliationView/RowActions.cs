@@ -262,6 +262,13 @@ namespace RecoTool.Windows
                  * 7️⃣  Preview / application des règles automatiques (bulk)
                  * -----------------------------------------------------------------*/
                 bool applyRules = false;
+                // PERF: cache the preview result per row so the apply pass (loop further below) doesn't
+                // pay the cost of a second PreviewRulesForEditAsync call. Each call costs 2 DB reads
+                // (AMBRE + reconciliation) plus a rule evaluation, so on a 200-row multi-selection this
+                // halves the menu-confirmation latency. Rows beyond the sample window (Take(500)) are
+                // not cached and will fall back to a fresh call in the apply pass — same behaviour as
+                // before for those rows.
+                var previewCache = new Dictionary<string, RecoTool.Services.Rules.RuleEvaluationResult>(StringComparer.OrdinalIgnoreCase);
 
                 if (targetRows.Count > 1)                     // bulk
                 {
@@ -271,6 +278,7 @@ namespace RecoTool.Windows
                         try
                         {
                             var preview = await _reconciliationService.PreviewRulesForEditAsync(r.ID);
+                            if (r?.ID != null) previewCache[r.ID] = preview;
                             if (preview?.Rule != null) rowsWithRules++;
                         }
                         catch { /* ignore */ }
@@ -325,9 +333,19 @@ Do you want to apply these automatic rules?
                 var updates = new List<Reconciliation>();
                 int rulesAppliedCnt = 0;
 
+                // PERF: pre-fetch every reconciliation in a single chunked SELECT instead of N
+                // sequential single-row reads. Index by ID for O(1) lookup inside the loop.
+                var recosBatch = await _reconciliationService.GetOrCreateReconciliationsAsync(
+                    targetRows.Select(t => t.ID));
+                var recoById = new Dictionary<string, Reconciliation>(StringComparer.OrdinalIgnoreCase);
+                foreach (var rc in recosBatch)
+                    if (rc?.ID != null) recoById[rc.ID] = rc;
+
                 foreach (var r in targetRows)
                 {
-                    var reco = await _reconciliationService.GetOrCreateReconciliationAsync(r.ID);
+                    if (r?.ID == null) continue;
+                    if (!recoById.TryGetValue(r.ID, out var reco))
+                        reco = await _reconciliationService.GetOrCreateReconciliationAsync(r.ID); // safety net
 
                     // ---- 8.1  Mise à jour du champ demandé ----
                     string stampField = null;
@@ -367,7 +385,13 @@ Do you want to apply these automatic rules?
                     {
                         try
                         {
-                            var preview = await _reconciliationService.PreviewRulesForEditAsync(r.ID);
+                            // PERF: reuse the preview computed in the confirmation pass when available.
+                            // The cache holds entries for the first 500 rows; beyond that, the original
+                            // behaviour (one fresh preview per apply) still applies.
+                            RecoTool.Services.Rules.RuleEvaluationResult preview = null;
+                            bool fromCache = r?.ID != null && previewCache.TryGetValue(r.ID, out preview);
+                            if (!fromCache)
+                                preview = await _reconciliationService.PreviewRulesForEditAsync(r.ID);
                             if (preview?.Rule != null)
                             {
                                 // Action
@@ -533,10 +557,20 @@ Do you want to apply these automatic rules?
 
                 var user = ResolveUserDisplayName(_reconciliationService.CurrentUser ?? Environment.UserName);
                 string prefix = $"[{BaseEntity.Clock.Now:yyyy-MM-dd HH:mm}] {user}: ";
+
+                // PERF: pre-fetch reconciliations in one chunked SELECT (was N sequential round-trips).
+                var recosBatch = await _reconciliationService.GetOrCreateReconciliationsAsync(
+                    selected.Select(s => s.ID));
+                var recoById = new Dictionary<string, Reconciliation>(StringComparer.OrdinalIgnoreCase);
+                foreach (var rc in recosBatch)
+                    if (rc?.ID != null) recoById[rc.ID] = rc;
+
                 var updates = new List<Reconciliation>();
                 foreach (var r in selected)
                 {
-                    var reco = await _reconciliationService.GetOrCreateReconciliationAsync(r.ID);
+                    if (r?.ID == null) continue;
+                    if (!recoById.TryGetValue(r.ID, out var reco))
+                        reco = await _reconciliationService.GetOrCreateReconciliationAsync(r.ID); // safety net
                     string existing = r.Comments?.TrimEnd();
                     string appended = string.IsNullOrWhiteSpace(existing)
                         ? prefix + text
@@ -581,11 +615,24 @@ Do you want to apply these automatic rules?
 
                 var triggerActionId = (int)ActionType.Trigger;
                 var now = BaseEntity.Clock.UtcNow;
+
+                // PERF: pre-fetch reconciliations in one chunked SELECT. Only fetch rows that pass the
+                // "Action.HasValue" gate to avoid wasting capacity on rows that will be skipped.
+                var fetchIds = targetRows.Where(t => t?.Action.HasValue == true && t.ID != null)
+                                         .Select(t => t.ID)
+                                         .ToList();
+                var recosBatch = await _reconciliationService.GetOrCreateReconciliationsAsync(fetchIds);
+                var recoById = new Dictionary<string, Reconciliation>(StringComparer.OrdinalIgnoreCase);
+                foreach (var rc in recosBatch)
+                    if (rc?.ID != null) recoById[rc.ID] = rc;
+
                 var updates = new List<Reconciliation>();
                 foreach (var r in targetRows)
                 {
                     if (!r.Action.HasValue) continue;
-                    var reco = await _reconciliationService.GetOrCreateReconciliationAsync(r.ID);
+                    if (r.ID == null) continue;
+                    if (!recoById.TryGetValue(r.ID, out var reco))
+                        reco = await _reconciliationService.GetOrCreateReconciliationAsync(r.ID); // safety net
 
                     // When the user marks a TRIGGER row as DONE via the menu, apply the
                     // full TRIGGER DONE payload (KPI + ReasonNonRisky + RiskyItem) so the

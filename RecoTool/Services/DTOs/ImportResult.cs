@@ -21,6 +21,15 @@ namespace RecoTool.Services
         public List<string> ValidationErrors { get; set; } = new List<string>();
 
         /// <summary>
+        /// Non-fatal warnings collected during import. Unlike <see cref="Errors"/>
+        /// these do NOT mark the import as failed — they surface issues the user
+        /// should be aware of (post-save rule failures, partial enrichment skipped,
+        /// duplicate Excel rows discarded, etc.). The import still reports
+        /// <see cref="IsSuccess"/> = true when only warnings are present.
+        /// </summary>
+        public List<string> Warnings { get; set; } = new List<string>();
+
+        /// <summary>
         /// Total number of Excel rows that were silently dropped during the
         /// country-account filtering step (account didn't match the country's
         /// Pivot or Receivable). Useful to surface "you imported 1000 rows but

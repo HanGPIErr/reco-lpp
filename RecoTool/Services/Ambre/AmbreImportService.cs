@@ -352,7 +352,7 @@ namespace RecoTool.Services
                 filtered, config.Transforms, config.Country);
 
             progressCallback?.Invoke("Validating data...", 60);
-            var validationResult = _validator.ValidateTransformedData(transformed, config.Country);
+            var validationResult = _validator.ValidateTransformedData(transformed, config.Country, result);
             result.ValidationErrors.AddRange(validationResult.errors);
 
             return validationResult.validData;

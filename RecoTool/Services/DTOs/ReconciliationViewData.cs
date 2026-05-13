@@ -536,6 +536,9 @@ namespace RecoTool.Services.DTOs
                     InvalidateStatusCache();
                     _cachedStatusColor = CalculateStatusColor();
                     _statusColorBrush = GetCachedBrush(_cachedStatusColor);
+                    // Row background depends on this flag (matched-green branch).
+                    // RecalcRowBrushes is diff-based, so it no-ops when the resulting brush is unchanged.
+                    RecalcRowBrushes();
                     OnPropertyChanged(nameof(IsMatchedAcrossAccounts));
                     OnPropertyChanged(nameof(IsMatchedAcrossAccountsVisibility));
                     OnPropertyChanged(nameof(StatusColor));
@@ -1008,20 +1011,42 @@ namespace RecoTool.Services.DTOs
 
         private void RecalcRowBrushes()
         {
-            // NOTE: Matches legacy RowBackgroundConverter behavior exactly. The original
-            // converter compared `StatusColor == "Green"` (literal string) but StatusColor
-            // returns hex codes (e.g. "#4CAF50"), so the matched-green branch never fired.
-            // We preserve that behavior (only IsDeleted changes the background) to avoid
-            // unexpected visual changes. _rowBgMatchedGreen is kept as a reference.
+            // Three-state row background: deleted (pink) > matched-and-balanced (green) > default (transparent).
+            // The legacy RowBackgroundConverter intended the green branch but compared StatusColor to the
+            // literal "Green" while StatusColor returns hex codes (#4CAF50), so it never fired. The intended
+            // condition — equivalent to CalculateStatusColor's green outcome — is:
+            //   IsMatchedAcrossAccounts AND missing amount is null or exactly 0.
+            // Diff-based notification: fire PropertyChanged only when the brush identity actually changes.
+            // This makes the matched-green visual respond to in-place edits (RecalculateFlagsForGroup on
+            // basket link, RefreshRowsAsync after detail save) without flooding the binding system on every
+            // PreCalculate pass during initial load.
+            SolidColorBrush nextBg;
+            SolidColorBrush nextFg;
             if (IsDeleted)
             {
-                _rowBackgroundBrush = _rowBgDeleted;
-                _rowForegroundBrush = _rowFgDeleted;
+                nextBg = _rowBgDeleted;
+                nextFg = _rowFgDeleted;
+            }
+            else if (_isMatchedAcrossAccounts && (!_missingAmount.HasValue || _missingAmount.Value == 0))
+            {
+                nextBg = _rowBgMatchedGreen;
+                nextFg = _rowFgDefault;
             }
             else
             {
-                _rowBackgroundBrush = null; // transparent (default SfDataGrid row background)
-                _rowForegroundBrush = _rowFgDefault;
+                nextBg = null; // transparent (default SfDataGrid row background)
+                nextFg = _rowFgDefault;
+            }
+
+            if (!ReferenceEquals(_rowBackgroundBrush, nextBg))
+            {
+                _rowBackgroundBrush = nextBg;
+                OnPropertyChanged(nameof(RowBackgroundBrush));
+            }
+            if (!ReferenceEquals(_rowForegroundBrush, nextFg))
+            {
+                _rowForegroundBrush = nextFg;
+                OnPropertyChanged(nameof(RowForegroundBrush));
             }
         }
         #endregion
@@ -1297,6 +1322,9 @@ namespace RecoTool.Services.DTOs
                     InvalidateStatusCache();
                     _cachedStatusColor = CalculateStatusColor();
                     _statusColorBrush = GetCachedBrush(_cachedStatusColor);
+                    // Row background depends on whether missing amount is null/zero (matched-green branch).
+                    // RecalcRowBrushes is diff-based, so it no-ops when the resulting brush is unchanged.
+                    RecalcRowBrushes();
                     OnPropertyChanged(nameof(MissingAmount));
                     OnPropertyChanged(nameof(MissingAmountBackgroundColor));
                     OnPropertyChanged(nameof(MissingAmountForegroundColor));

@@ -42,6 +42,23 @@ namespace RecoTool.Windows
             : this(offlineService)
         {
             _vm = vm ?? throw new ArgumentNullException(nameof(vm));
+
+            // Seed the VM with whatever state the parameterless ctor (chained via :this above)
+            // already wrote to MainWindow's own properties. Without this, the VM would surface
+            // its hard-coded defaults ("Loading operational data…", "Unknown" network status,
+            // etc.) for the lifetime of the window because the forwarding inside each setter
+            // was a no-op while `_vm` was still null. Order matters: BEFORE setting DataContext
+            // so the first binding evaluation already sees the synced values.
+            _vm.InitializationStatus = this.InitializationStatus;
+            _vm.InitializationBrush = this.InitializationBrush;
+            _vm.OperationalDataStatus = this.OperationalDataStatus;
+            _vm.NetworkStatusText = this.NetworkStatusText;
+            _vm.NetworkStatusBrush = this.NetworkStatusBrush;
+            _vm.ReferentialCacheStatus = this.ReferentialCacheStatus;
+            _vm.ReferentialBrush = this.ReferentialBrush;
+            _vm.ReferentialCacheAvailable = this.ReferentialCacheAvailable;
+            _vm.IsOffline = this.IsOffline;
+
             this.DataContext = _vm;
             _vm.ImportRequested += (_, __) => Dispatcher.Invoke(() => ShowImportDialog());
             _vm.OpenReconciliationRequested += (_, __) => Dispatcher.Invoke(() => NavigateToReconciliation());
@@ -520,29 +537,36 @@ namespace RecoTool.Windows
         public bool IsOffline
         {
             get => _isOffline;
-            set { _isOffline = value; OnPropertyChanged(nameof(IsOffline)); UpdateUiForConnectivity(); }
+            set { _isOffline = value; OnPropertyChanged(nameof(IsOffline)); UpdateUiForConnectivity(); if (_vm != null) _vm.IsOffline = value; }
         }
 
         // Barre de statut (bas à droite)
+        // BUG FIX — DataContext mismatch:
+        //   The DI ctor wires `this.DataContext = _vm;` (MainWindowViewModel), so all XAML bindings
+        //   (Référentiel, Données opérationnelles, Network pill, etc.) resolve against _vm.
+        //   But every code-behind write below targets `this.X`, leaving _vm stuck on its initial
+        //   defaults ("Unknown", "Loading operational data…"). We forward each setter to _vm so
+        //   the UI actually picks up the change. Null-check covers the parameterless ctor path
+        //   used by the WPF designer.
         private string _initializationStatus = "Ready";
         public string InitializationStatus
         {
             get => _initializationStatus;
-            set { _initializationStatus = value; OnPropertyChanged(nameof(InitializationStatus)); }
+            set { _initializationStatus = value; OnPropertyChanged(nameof(InitializationStatus)); if (_vm != null) _vm.InitializationStatus = value; }
         }
 
         private Brush _initializationBrush = Brushes.Gray;
         public Brush InitializationBrush
         {
             get => _initializationBrush;
-            set { _initializationBrush = value; OnPropertyChanged(nameof(InitializationBrush)); }
+            set { _initializationBrush = value; OnPropertyChanged(nameof(InitializationBrush)); if (_vm != null) _vm.InitializationBrush = value; }
         }
 
         private string _operationalDataStatus = "OFFLINE";
         public string OperationalDataStatus
         {
             get => _operationalDataStatus;
-            set { _operationalDataStatus = value; OnPropertyChanged(nameof(OperationalDataStatus)); }
+            set { _operationalDataStatus = value; OnPropertyChanged(nameof(OperationalDataStatus)); if (_vm != null) _vm.OperationalDataStatus = value; }
         }
 
         // Header ribbon network badge
@@ -550,14 +574,14 @@ namespace RecoTool.Windows
         public string NetworkStatusText
         {
             get => _networkStatusText;
-            set { _networkStatusText = value; OnPropertyChanged(nameof(NetworkStatusText)); }
+            set { _networkStatusText = value; OnPropertyChanged(nameof(NetworkStatusText)); if (_vm != null) _vm.NetworkStatusText = value; }
         }
 
         private Brush _networkStatusBrush = Brushes.OrangeRed;
         public Brush NetworkStatusBrush
         {
             get => _networkStatusBrush;
-            set { _networkStatusBrush = value; OnPropertyChanged(nameof(NetworkStatusBrush)); }
+            set { _networkStatusBrush = value; OnPropertyChanged(nameof(NetworkStatusBrush)); if (_vm != null) _vm.NetworkStatusBrush = value; }
         }
 
         // Sync status indicator (status bar)
@@ -588,26 +612,27 @@ namespace RecoTool.Windows
             InitializationBrush = brush ?? Brushes.Gray;
         }
 
-        // Référentiel (cache de données de référence)
+        // Référentiel (cache de données de référence) — same DataContext-forwarding pattern as
+        // the status block above. See the comment near InitializationStatus for the why.
         private string _referentialCacheStatus = "Indisponible";
         public string ReferentialCacheStatus
         {
             get => _referentialCacheStatus;
-            set { _referentialCacheStatus = value; OnPropertyChanged(nameof(ReferentialCacheStatus)); }
+            set { _referentialCacheStatus = value; OnPropertyChanged(nameof(ReferentialCacheStatus)); if (_vm != null) _vm.ReferentialCacheStatus = value; }
         }
 
         private bool _referentialCacheAvailable;
         public bool ReferentialCacheAvailable
         {
             get => _referentialCacheAvailable;
-            set { _referentialCacheAvailable = value; OnPropertyChanged(nameof(ReferentialCacheAvailable)); }
+            set { _referentialCacheAvailable = value; OnPropertyChanged(nameof(ReferentialCacheAvailable)); if (_vm != null) _vm.ReferentialCacheAvailable = value; }
         }
 
         private Brush _referentialBrush = Brushes.Gray;
         public Brush ReferentialBrush
         {
             get => _referentialBrush;
-            set { _referentialBrush = value; OnPropertyChanged(nameof(ReferentialBrush)); }
+            set { _referentialBrush = value; OnPropertyChanged(nameof(ReferentialBrush)); if (_vm != null) _vm.ReferentialBrush = value; }
         }
 
         private void SetReferentialState(string text, Brush brush, bool available)

@@ -44,6 +44,57 @@ namespace RecoTool.Services
         }
 
         /// <summary>
+        /// Batch version of <see cref="GetOrCreateReconciliationAsync"/> for bulk flows (basket link,
+        /// quick-set on multi-selection, mass status change). Replaces N single-row SELECTs with a small
+        /// number of <c>WHERE ID IN (…)</c> queries, then materialises an in-memory stub for every input
+        /// ID that the DB doesn't already store.
+        /// <para>
+        /// Result order matches the input order. Duplicate IDs are de-duplicated (first occurrence wins).
+        /// The chunk size is intentionally conservative because Access OleDb limits to 255 parameters per
+        /// command, and we keep headroom for future single-row variants.
+        /// </para>
+        /// </summary>
+        public async Task<List<Reconciliation>> GetOrCreateReconciliationsAsync(IEnumerable<string> ids, CancellationToken ct = default)
+        {
+            if (ids == null) return new List<Reconciliation>();
+
+            var ordered = ids.Where(id => !string.IsNullOrWhiteSpace(id))
+                             .Distinct(StringComparer.OrdinalIgnoreCase)
+                             .ToList();
+            if (ordered.Count == 0) return new List<Reconciliation>();
+
+            var byId = new Dictionary<string, Reconciliation>(ordered.Count, StringComparer.OrdinalIgnoreCase);
+            const int chunkSize = 200; // safe under Access' 255-parameter cap with headroom
+
+            for (int offset = 0; offset < ordered.Count; offset += chunkSize)
+            {
+                ct.ThrowIfCancellationRequested();
+                var chunk = ordered.Skip(offset).Take(chunkSize).ToList();
+                var placeholders = string.Join(",", Enumerable.Repeat("?", chunk.Count));
+                var query = $"SELECT * FROM T_Reconciliation WHERE DeleteDate IS NULL AND ID IN ({placeholders})";
+                var rows = await _queryExecutor.QueryAsync<Reconciliation>(query, _connectionString, chunk.Cast<object>().ToArray()).ConfigureAwait(false);
+                foreach (var r in rows)
+                {
+                    if (r?.ID == null) continue;
+                    // First-occurrence wins — defensive against accidental duplicates in the table.
+                    if (!byId.ContainsKey(r.ID)) byId[r.ID] = r;
+                }
+            }
+
+            // Materialise the output in the original (de-duplicated) input order, creating a stub for
+            // any ID that didn't come back from the DB. Stubs feed the INSERT path on the subsequent save.
+            var result = new List<Reconciliation>(ordered.Count);
+            foreach (var id in ordered)
+            {
+                if (byId.TryGetValue(id, out var found))
+                    result.Add(found);
+                else
+                    result.Add(Reconciliation.CreateForAmbreLine(id));
+            }
+            return result;
+        }
+
+        /// <summary>
         /// Fetches a reconciliation row by ID without falling back to a stub. Returns <c>null</c> when the row
         /// does not exist (unlike <see cref="GetOrCreateReconciliationAsync"/>).
         /// </summary>
@@ -340,15 +391,28 @@ namespace RecoTool.Services
         private void UpdateRecoViewCaches(IEnumerable<Reconciliation> updated)
         {
             if (updated == null) return;
+            // PERF: materialise the updates ONCE so we can iterate them per cached view without re-
+            // enumerating an IEnumerable on each pass. Keyed lookup below replaces the previous
+            // FirstOrDefault scan that made the loop O(updates × viewSize) — pathological on bulk
+            // saves of ~200 rows over a 50k-row materialised view.
+            var updatedById = new Dictionary<string, Reconciliation>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in updated)
+            {
+                if (r?.ID == null) continue;
+                updatedById[r.ID] = r;
+            }
+            if (updatedById.Count == 0) return;
+
             foreach (var kv in _recoViewDataCache)
             {
                 var list = kv.Value;
                 if (list == null) continue;
-                // Update in place by ID (AMBRE row always exists; reconciliation fields are nullable)
-                foreach (var r in updated)
+                // Single linear pass over the cached view; O(viewSize) per cache rather than
+                // O(updates × viewSize). The hashed dictionary lookup is O(1) per row.
+                foreach (var row in list)
                 {
-                    var row = list.FirstOrDefault(x => string.Equals(x.ID, r.ID, StringComparison.OrdinalIgnoreCase));
-                    if (row == null) continue;
+                    if (row?.ID == null) continue;
+                    if (!updatedById.TryGetValue(row.ID, out var r)) continue;
                     row.DWINGS_GuaranteeID = r.DWINGS_GuaranteeID;
                     row.DWINGS_InvoiceID = r.DWINGS_InvoiceID;
                     row.DWINGS_BGPMT = r.DWINGS_BGPMT;

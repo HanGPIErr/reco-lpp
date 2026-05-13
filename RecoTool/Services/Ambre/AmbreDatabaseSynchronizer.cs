@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data.OleDb;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -49,7 +50,7 @@ namespace RecoTool.Services.Ambre
             progressCallback?.Invoke("Synchronizing with database...", 80);
 
             var syncResult = await SynchronizeWithDatabaseAsync(
-                validData, countryId, performNetworkSync: true, assumeGlobalLockHeld: true, progressCallback: progressCallback, ct: ct);
+                validData, countryId, performNetworkSync: true, assumeGlobalLockHeld: true, progressCallback: progressCallback, result: result, ct: ct);
 
             result.NewRecords = syncResult.newCount;
             result.UpdatedRecords = syncResult.updatedCount;
@@ -63,6 +64,7 @@ namespace RecoTool.Services.Ambre
             bool performNetworkSync,
             bool assumeGlobalLockHeld = false,
             Action<string, int> progressCallback = null,
+            ImportResult result = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -81,7 +83,18 @@ namespace RecoTool.Services.Ambre
             {
                 // 1. Charger les données existantes et calculer les changements
                 var existingData = await LoadExistingDataAsync(countryId);
-                var changes = CalculateChanges(existingData, newData);
+
+                // FIX B3: detect whether DWINGS source data has changed since the last rule pass.
+                // If yes, every existing AMBRE row must go through rule re-evaluation (current
+                // behavior). If no AND its AMBRE-side fields are unchanged, we skip it entirely —
+                // avoids running rules on tens of thousands of stable rows on every daily import.
+                bool dwingsChangedSinceRules = await ComputeDwingsChangedSinceRulesAsync(countryId).ConfigureAwait(false);
+                if (dwingsChangedSinceRules)
+                    LogManager.Info($"[Import] DWINGS source newer than last rule-eval anchor — all existing rows will be re-evaluated.");
+                else
+                    LogManager.Info($"[Import] DWINGS source unchanged since last rule-eval — unchanged AMBRE rows will skip rule re-eval.");
+
+                var changes = CalculateChanges(existingData, newData, result, dwingsChangedSinceRules);
                 newCount = changes.ToAdd.Count;
                 updCount = changes.ToUpdate.Count;
                 arcCount = changes.ToArchive.Count;
@@ -89,7 +102,7 @@ namespace RecoTool.Services.Ambre
                 LogManager.Info($"Calculated changes for {countryId} - New: {newCount}, Updated: {updCount}, Deleted: {arcCount}");
 
                 // 2. Appliquer les changements
-                await ExecuteChangesAsync(changes, countryId, assumeGlobalLockHeld, progressCallback, ct);
+                await ExecuteChangesAsync(changes, countryId, assumeGlobalLockHeld, progressCallback, result, ct);
 
                 // 3. Synchronisation réseau si nécessaire
                 if (performNetworkSync && !assumeGlobalLockHeld)
@@ -114,7 +127,7 @@ namespace RecoTool.Services.Ambre
             }
         }
 
-        private async Task ExecuteChangesAsync(ImportChanges changes, string countryId, bool assumeGlobalLockHeld, Action<string, int> progressCallback = null, CancellationToken ct = default)
+        private async Task ExecuteChangesAsync(ImportChanges changes, string countryId, bool assumeGlobalLockHeld, Action<string, int> progressCallback = null, ImportResult result = null, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             async Task ApplyChangesInternalAsync()
@@ -141,7 +154,7 @@ namespace RecoTool.Services.Ambre
                     try { await _offlineFirstService.SetSyncStatusAsync("Reconciling"); }
                     catch (Exception exStat) { try { LogManager.Debug($"[Import] SetSyncStatusAsync(Reconciling) failed: {exStat.Message}"); } catch { } }
                     var recoTimer = System.Diagnostics.Stopwatch.StartNew();
-                    await UpdateReconciliationTableAsync(changes, countryId, progressCallback);
+                    await UpdateReconciliationTableAsync(changes, countryId, progressCallback, result);
                     recoTimer.Stop();
                     LogManager.Info($"[PERF] UpdateReconciliationTable completed in {recoTimer.ElapsedMilliseconds}ms");
 
@@ -351,13 +364,80 @@ namespace RecoTool.Services.Ambre
             }
         }
 
-        private ImportChanges CalculateChanges(List<DataAmbre> existingData, List<DataAmbre> newData)
+        /// <summary>
+        /// Returns <c>true</c> when the DWINGS source database has been updated after the most recent
+        /// time the rules engine left a stamp on a reconciliation row (<see cref="Schema.Columns.Reconciliation.LastRuleAppliedAt"/>).
+        /// Used by <see cref="ProcessExistingItem"/> to decide whether AMBRE rows that didn't change
+        /// should still go through rule re-evaluation: when DWINGS is fresh the rule context for ANY
+        /// row could yield a different outcome, so we re-queue everyone; when it's not, we skip.
+        /// </summary>
+        /// <remarks>
+        /// Heuristic but cheap: a single SELECT MAX(LastRuleAppliedAt) plus a File.GetLastWriteTimeUtc.
+        /// On any failure (missing file, locked DB, permission issue) we return <c>true</c> so the
+        /// fallback is the previous behavior (re-evaluate all) — safer to do extra work than miss a
+        /// DWINGS-driven rule outcome.
+        /// </remarks>
+        private async Task<bool> ComputeDwingsChangedSinceRulesAsync(string countryId)
+        {
+            try
+            {
+                var dwPath = _offlineFirstService.GetLocalDWDatabasePath(countryId);
+                if (string.IsNullOrWhiteSpace(dwPath) || !File.Exists(dwPath))
+                    return true; // unknown DWINGS state — assume changed to stay correct
+
+                var dwMtime = File.GetLastWriteTimeUtc(dwPath);
+
+                var recoCs = _offlineFirstService.GetCountryConnectionString(countryId);
+                DateTime? maxRuleAt = null;
+                await OleDbAsyncExecutor.RunWithConnectionAsync(recoCs, conn =>
+                {
+                    using (var cmd = new OleDbCommand(
+                        $"SELECT MAX([{Schema.Columns.Reconciliation.LastRuleAppliedAt}]) FROM [{Schema.Tables.T_Reconciliation}]", conn))
+                    {
+                        var v = cmd.ExecuteScalar();
+                        if (v != null && v != DBNull.Value)
+                        {
+                            try
+                            {
+                                // OleDb returns DateTime with Kind=Unspecified. The column is written
+                                // via _clock.UtcNow elsewhere, so we treat the value as UTC verbatim
+                                // (no offset arithmetic). Calling ToUniversalTime() here would wrongly
+                                // subtract the local offset on Unspecified values and break the
+                                // comparison against File.GetLastWriteTimeUtc.
+                                maxRuleAt = DateTime.SpecifyKind(Convert.ToDateTime(v), DateTimeKind.Utc);
+                            }
+                            catch (Exception ex) { LogManager.Debug($"[Import] Could not parse MAX(LastRuleAppliedAt): {ex.Message}"); }
+                        }
+                    }
+                    return 0;
+                }).ConfigureAwait(false);
+
+                // No row has ever had rules applied — first real import. Run rules on every existing
+                // row (defensive) since there's no anchor to compare against.
+                if (!maxRuleAt.HasValue) return true;
+
+                return dwMtime > maxRuleAt.Value;
+            }
+            catch (Exception ex)
+            {
+                LogManager.Warning($"[Import] ComputeDwingsChangedSinceRules failed, assuming DWINGS changed: {ex.Message}");
+                return true;
+            }
+        }
+
+        private ImportChanges CalculateChanges(List<DataAmbre> existingData, List<DataAmbre> newData, ImportResult result = null, bool dwingsChangedSinceRules = true)
         {
             LogManager.Info($"Calculating changes - Existing: {existingData.Count}, New: {newData.Count}");
-            
+
             var changes = new ImportChanges();
-            var existingByKey = existingData.ToDictionary(d => d.GetUniqueKey(), d => d);
-            var newByKey = newData.ToDictionary(d => d.GetUniqueKey(), d => d);
+
+            // FIX B2: tolerate duplicate-key rows from the Excel source (and defensively, from DB).
+            // ToDictionary would throw ArgumentException with a generic "An item with the same key
+            // has already been added" message and abort the entire import. Instead we keep the FIRST
+            // occurrence (deterministic), discard the rest, and surface the count as a non-fatal
+            // warning so the user can investigate the source file.
+            var existingByKey = BuildByKeyFirstWins(existingData, sourceLabel: "DB", result);
+            var newByKey = BuildByKeyFirstWins(newData, sourceLabel: "Excel", result);
             
             // Identify additions and updates
             foreach (var newItem in newData)
@@ -366,7 +446,7 @@ namespace RecoTool.Services.Ambre
                 
                 if (existingByKey.TryGetValue(key, out var existingItem))
                 {
-                    ProcessExistingItem(newItem, existingItem, changes);
+                    ProcessExistingItem(newItem, existingItem, changes, dwingsChangedSinceRules);
                 }
                 else
                 {
@@ -388,7 +468,45 @@ namespace RecoTool.Services.Ambre
             return changes;
         }
 
-        private void ProcessExistingItem(DataAmbre newItem, DataAmbre existingItem, ImportChanges changes)
+        /// <summary>
+        /// First-wins indexing helper for <see cref="CalculateChanges"/>. Collects duplicates
+        /// instead of throwing, surfacing them as warnings in <paramref name="result"/>.
+        /// </summary>
+        private static Dictionary<string, DataAmbre> BuildByKeyFirstWins(
+            IList<DataAmbre> rows, string sourceLabel, ImportResult result)
+        {
+            var byKey = new Dictionary<string, DataAmbre>(rows?.Count ?? 0, StringComparer.Ordinal);
+            if (rows == null || rows.Count == 0) return byKey;
+
+            var dupCount = 0;
+            List<string> dupSamples = null;
+            foreach (var row in rows)
+            {
+                if (row == null) continue;
+                var key = row.GetUniqueKey();
+                if (key == null) continue;
+                if (byKey.ContainsKey(key))
+                {
+                    dupCount++;
+                    if (dupSamples == null) dupSamples = new List<string>(8);
+                    if (dupSamples.Count < 5) dupSamples.Add(key);
+                    continue;
+                }
+                byKey[key] = row;
+            }
+
+            if (dupCount > 0)
+            {
+                var sample = (dupSamples != null && dupSamples.Count > 0)
+                    ? " | sample keys: " + string.Join(", ", dupSamples)
+                    : string.Empty;
+                LogManager.Warning($"[Import] {dupCount} duplicate row(s) in {sourceLabel} source on unique key (Event_Num/RawLabel/Origin/Date/Amount). First occurrence kept, others discarded.{sample}");
+                result?.Warnings?.Add($"{dupCount} duplicate row(s) in {sourceLabel} source were discarded (first occurrence kept).{sample}");
+            }
+            return byKey;
+        }
+
+        private void ProcessExistingItem(DataAmbre newItem, DataAmbre existingItem, ImportChanges changes, bool dwingsChangedSinceRules)
         {
             if (existingItem.DeleteDate.HasValue)
             {
@@ -411,17 +529,23 @@ namespace RecoTool.Services.Ambre
                 newItem.ModifiedBy = _currentUser;
                 changes.ToUpdate.Add(newItem);
             }
-            else
+            else if (dwingsChangedSinceRules)
             {
-                // No data change, but still add to ToUpdate to reapply rules
-                // (rules may have changed, or DWINGS data may have changed)
+                // No AMBRE data change, but DWINGS source has moved since the last rule pass —
+                // queue the row so ApplyRulesToExistingRecordsAsync re-evaluates it. We keep the
+                // existing Version/LastModified/ModifiedBy so the row doesn't look "modified" to
+                // observers (only the rule outputs may change).
                 newItem.ID = existingItem.ID;
-                newItem.Version = existingItem.Version; // Keep same version since data didn't change
+                newItem.Version = existingItem.Version;
                 newItem.CreationDate = existingItem.CreationDate;
-                newItem.LastModified = existingItem.LastModified; // Keep original timestamp
-                newItem.ModifiedBy = existingItem.ModifiedBy; // Keep original user
+                newItem.LastModified = existingItem.LastModified;
+                newItem.ModifiedBy = existingItem.ModifiedBy;
                 changes.ToUpdate.Add(newItem);
             }
+            // FIX B3: when neither side changed, the row is dropped from ToUpdate entirely.
+            // Previously every existing row went through ApplyRulesToExistingRecordsAsync on every
+            // import — wasteful when nothing has changed on either side. The user-initiated
+            // "Run rules now" action remains the escape hatch for one-off re-evaluation.
         }
 
         private void ProcessNewItem(DataAmbre newItem, ImportChanges changes)
@@ -555,7 +679,7 @@ namespace RecoTool.Services.Ambre
             }
         }
 
-        private async Task UpdateReconciliationTableAsync(ImportChanges changes, string countryId, Action<string, int> progressCallback = null)
+        private async Task UpdateReconciliationTableAsync(ImportChanges changes, string countryId, Action<string, int> progressCallback = null, ImportResult result = null)
         {
             // Branch to the dedicated updater that mirrors AMBRE changes into T_Reconciliation
             LogManager.Info($"Updating T_Reconciliation for {countryId}");
@@ -580,7 +704,7 @@ namespace RecoTool.Services.Ambre
 
             // Execute reconciliation table updates (insert/unarchive/archive) using the dedicated updater
             var updater = new AmbreReconciliationUpdater(_offlineFirstService, _currentUser, _reconciliationService);
-            await updater.UpdateReconciliationTableAsync(changes, countryId, country, progressCallback).ConfigureAwait(false);
+            await updater.UpdateReconciliationTableAsync(changes, countryId, country, progressCallback, result).ConfigureAwait(false);
         }
     }
 

@@ -67,13 +67,17 @@ namespace RecoTool.Services.Ambre
         }
 
         /// <summary>
-        /// Met à  jour la table T_Reconciliation avec les changements d'import
+        /// Met à  jour la table T_Reconciliation avec les changements d'import.
+        /// <param name="result">Optional. When provided, non-fatal post-save failures (MANUAL_OUTGOING rule,
+        /// DWINGS ref backfill, ApplyRulesToExistingRecords) are surfaced as Warnings instead of being
+        /// silently logged.</param>
         /// </summary>
         public async Task UpdateReconciliationTableAsync(
             ImportChanges changes,
             string countryId,
             Country country,
-            Action<string, int> progressCallback = null)
+            Action<string, int> progressCallback = null,
+            ImportResult result = null)
         {
             var totalTimer = System.Diagnostics.Stopwatch.StartNew();
             LogManager.Info($"[PERF] UpdateReconciliationTableAsync started for {countryId}");
@@ -88,19 +92,24 @@ namespace RecoTool.Services.Ambre
                 LogManager.Info($"[PERF] DWINGS data loaded: {dwInvoices.Count} invoices, {dwGuarantees.Count} guarantees in {dwTimer.ElapsedMilliseconds}ms");
 
                 // ── PERF: Build O(1) lookup dictionaries once for entire import ──
+                // FIX B4: first-wins on duplicates so this Updater agrees with DwingsInvoiceLookup
+                // (Helpers/DwingsLinkingHelper.cs) and ReconciliationViewData.InitializeDwingsCaches.
+                // INVOICE_ID is not guaranteed unique in the source DWINGS feed, so the previous
+                // last-wins assignment could pick a different invoice than the resolver/view caches
+                // for the exact same row — producing non-deterministic rule outcomes.
                 _invoiceById = new Dictionary<string, DwingsInvoiceDto>(dwInvoices.Count, StringComparer.OrdinalIgnoreCase);
                 _invoiceByBgpmt = new Dictionary<string, DwingsInvoiceDto>(dwInvoices.Count, StringComparer.OrdinalIgnoreCase);
                 foreach (var inv in dwInvoices)
                 {
-                    if (!string.IsNullOrWhiteSpace(inv?.INVOICE_ID))
+                    if (!string.IsNullOrWhiteSpace(inv?.INVOICE_ID) && !_invoiceById.ContainsKey(inv.INVOICE_ID))
                         _invoiceById[inv.INVOICE_ID] = inv;
-                    if (!string.IsNullOrWhiteSpace(inv?.BGPMT))
+                    if (!string.IsNullOrWhiteSpace(inv?.BGPMT) && !_invoiceByBgpmt.ContainsKey(inv.BGPMT))
                         _invoiceByBgpmt[inv.BGPMT] = inv;
                 }
                 _guaranteeById = new Dictionary<string, DwingsGuaranteeDto>(dwGuarantees.Count, StringComparer.OrdinalIgnoreCase);
                 foreach (var g in dwGuarantees)
                 {
-                    if (!string.IsNullOrWhiteSpace(g?.GUARANTEE_ID))
+                    if (!string.IsNullOrWhiteSpace(g?.GUARANTEE_ID) && !_guaranteeById.ContainsKey(g.GUARANTEE_ID))
                         _guaranteeById[g.GUARANTEE_ID] = g;
                 }
 
@@ -136,6 +145,7 @@ namespace RecoTool.Services.Ambre
                 catch (Exception manualEx)
                 {
                     LogManager.Warning($"Non-blocking: MANUAL_OUTGOING rule failed: {manualEx.Message}");
+                    result?.Warnings?.Add($"MANUAL_OUTGOING rule did not run: {manualEx.Message}");
                 }
 
                 // Remplir les références DWINGS manquantes pour les enregistrements mis à  jour (sans écraser les liens manuels)
@@ -180,6 +190,7 @@ namespace RecoTool.Services.Ambre
                 catch (Exception fillEx)
                 {
                     LogManager.Warning($"Non-blocking: failed to backfill DWINGS refs for updates: {fillEx.Message}");
+                    result?.Warnings?.Add($"DWINGS reference backfill incomplete: {fillEx.Message}");
                 }
 
                 // Réappliquer les règles aux enregistrements existants
@@ -193,6 +204,7 @@ namespace RecoTool.Services.Ambre
                 catch (Exception rulesEx)
                 {
                     LogManager.Warning($"Non-blocking: failed to apply rules to existing records: {rulesEx.Message}");
+                    result?.Warnings?.Add($"Rules not reapplied to existing records: {rulesEx.Message}");
                 }
 
                 totalTimer.Stop();

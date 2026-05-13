@@ -141,24 +141,25 @@ namespace RecoTool.Services.Ambre
         {
             var connectionString = _offlineFirstService.GetCountryConnectionString(countryId);
 
-            await OleDbAsyncExecutor.RunWithConnectionAsync(connectionString, conn =>
+            // FIX F2: a single OleDb transaction now wraps Unarchive + Archive + Insert. Previously
+            // each helper opened its own BeginTransaction()/Commit(), so a crash between the three
+            // phases left T_Reconciliation in a half-applied state (e.g. unarchived rows without
+            // their replacement INSERTs, or archives without the corresponding new lines). With
+            // RunInTransactionAsync any exception rolls back ALL three phases — the import bubbles
+            // the error up and the snapshot still reflects pre-import state.
+            await OleDbAsyncExecutor.RunInTransactionAsync(connectionString, (conn, tx) =>
             {
-                // Unarchive updated records
                 if (toUpdate.Any())
                 {
-                    UnarchiveRecords(conn, toUpdate);
+                    UnarchiveRecords(conn, tx, toUpdate);
                 }
-
-                // Archive deleted records
                 if (toArchive.Any())
                 {
-                    ArchiveRecords(conn, toArchive);
+                    ArchiveRecords(conn, tx, toArchive);
                 }
-
-                // Insert new reconciliations
                 if (toInsert.Any())
                 {
-                    InsertReconciliations(conn, toInsert);
+                    InsertReconciliations(conn, tx, toInsert);
                 }
                 return 0;
             }).ConfigureAwait(false);
@@ -254,7 +255,7 @@ namespace RecoTool.Services.Ambre
             }
         }
 
-        private void UnarchiveRecords(OleDbConnection conn, List<DataAmbre> records)
+        private void UnarchiveRecords(OleDbConnection conn, OleDbTransaction tx, List<DataAmbre> records)
         {
             var ids = records
                 .Select(d => d?.ID)
@@ -264,47 +265,36 @@ namespace RecoTool.Services.Ambre
 
             if (!ids.Any()) return;
 
-            using (var tx = conn.BeginTransaction())
+            var nowUtc = _clock.UtcNow;
+
+            // OPTIMIZATION: Batch update with IN clause (Access supports up to ~1000 items)
+            const int batchSize = 500;
+            int totalCount = 0;
+
+            for (int i = 0; i < ids.Count; i += batchSize)
             {
-                try
+                var batch = ids.Skip(i).Take(batchSize).ToList();
+                var inClause = string.Join(",", batch.Select((_, idx) => $"?"));
+
+                using (var cmd = new OleDbCommand(
+                    $"UPDATE [{Schema.Tables.T_Reconciliation}] SET [{Schema.Columns.Reconciliation.DeleteDate}]=NULL, [{Schema.Columns.Reconciliation.LastModified}]=?, [{Schema.Columns.Reconciliation.ModifiedBy}]=? " +
+                    $"WHERE [{Schema.Columns.Reconciliation.ID}] IN ({inClause}) AND [{Schema.Columns.Reconciliation.DeleteDate}] IS NOT NULL", conn, tx))
                 {
-                    var nowUtc = _clock.UtcNow;
-
-                    // OPTIMIZATION: Batch update with IN clause (Access supports up to ~1000 items)
-                    const int batchSize = 500;
-                    int totalCount = 0;
-
-                    for (int i = 0; i < ids.Count; i += batchSize)
+                    cmd.Parameters.Add("@LastModified", OleDbType.Date).Value = nowUtc;
+                    cmd.Parameters.AddWithValue("@ModifiedBy", _currentUser);
+                    foreach (var id in batch)
                     {
-                        var batch = ids.Skip(i).Take(batchSize).ToList();
-                        var inClause = string.Join(",", batch.Select((_, idx) => $"?"));
-
-                        using (var cmd = new OleDbCommand(
-                            $"UPDATE [{Schema.Tables.T_Reconciliation}] SET [{Schema.Columns.Reconciliation.DeleteDate}]=NULL, [{Schema.Columns.Reconciliation.LastModified}]=?, [{Schema.Columns.Reconciliation.ModifiedBy}]=? " +
-                            $"WHERE [{Schema.Columns.Reconciliation.ID}] IN ({inClause}) AND [{Schema.Columns.Reconciliation.DeleteDate}] IS NOT NULL", conn, tx))
-                        {
-                            cmd.Parameters.Add("@LastModified", OleDbType.Date).Value = nowUtc;
-                            cmd.Parameters.AddWithValue("@ModifiedBy", _currentUser);
-                            foreach (var id in batch)
-                            {
-                                cmd.Parameters.AddWithValue("@ID", id);
-                            }
-                            totalCount += cmd.ExecuteNonQuery();
-                        }
+                        cmd.Parameters.AddWithValue("@ID", id);
                     }
-
-                    tx.Commit();
-                    LogManager.Info($"Unarchived {totalCount} reconciliation record(s)");
-                }
-                catch
-                {
-                    tx.Rollback();
-                    throw;
+                    totalCount += cmd.ExecuteNonQuery();
                 }
             }
+
+            // Transaction is owned by ApplyReconciliationChangesAsync — no commit here.
+            LogManager.Info($"Unarchived {totalCount} reconciliation record(s)");
         }
 
-        private void ArchiveRecords(OleDbConnection conn, List<DataAmbre> records)
+        private void ArchiveRecords(OleDbConnection conn, OleDbTransaction tx, List<DataAmbre> records)
         {
             var ids = records
                 .Select(d => d?.ID)
@@ -314,69 +304,55 @@ namespace RecoTool.Services.Ambre
 
             if (!ids.Any()) return;
 
-            using (var tx = conn.BeginTransaction())
+            var nowUtc = _clock.UtcNow;
+
+            // OPTIMIZATION: Batch update with IN clause
+            const int batchSize = 500;
+            int totalCount = 0;
+
+            for (int i = 0; i < ids.Count; i += batchSize)
             {
-                try
+                var batch = ids.Skip(i).Take(batchSize).ToList();
+                var inClause = string.Join(",", batch.Select((_, idx) => $"?"));
+
+                using (var cmd = new OleDbCommand(
+                    $"UPDATE [{Schema.Tables.T_Reconciliation}] SET [{Schema.Columns.Reconciliation.DeleteDate}]=?, [{Schema.Columns.Reconciliation.LastModified}]=?, [{Schema.Columns.Reconciliation.ModifiedBy}]=? " +
+                    $"WHERE [{Schema.Columns.Reconciliation.ID}] IN ({inClause}) AND [{Schema.Columns.Reconciliation.DeleteDate}] IS NULL", conn, tx))
                 {
-                    var nowUtc = _clock.UtcNow;
-
-                    // OPTIMIZATION: Batch update with IN clause
-                    const int batchSize = 500;
-                    int totalCount = 0;
-
-                    for (int i = 0; i < ids.Count; i += batchSize)
+                    cmd.Parameters.Add("@DeleteDate", OleDbType.Date).Value = nowUtc;
+                    cmd.Parameters.Add("@LastModified", OleDbType.Date).Value = nowUtc;
+                    cmd.Parameters.AddWithValue("@ModifiedBy", _currentUser);
+                    foreach (var id in batch)
                     {
-                        var batch = ids.Skip(i).Take(batchSize).ToList();
-                        var inClause = string.Join(",", batch.Select((_, idx) => $"?"));
-
-                        using (var cmd = new OleDbCommand(
-                            $"UPDATE [{Schema.Tables.T_Reconciliation}] SET [{Schema.Columns.Reconciliation.DeleteDate}]=?, [{Schema.Columns.Reconciliation.LastModified}]=?, [{Schema.Columns.Reconciliation.ModifiedBy}]=? " +
-                            $"WHERE [{Schema.Columns.Reconciliation.ID}] IN ({inClause}) AND [{Schema.Columns.Reconciliation.DeleteDate}] IS NULL", conn, tx))
-                        {
-                            cmd.Parameters.Add("@DeleteDate", OleDbType.Date).Value = nowUtc;
-                            cmd.Parameters.Add("@LastModified", OleDbType.Date).Value = nowUtc;
-                            cmd.Parameters.AddWithValue("@ModifiedBy", _currentUser);
-                            foreach (var id in batch)
-                            {
-                                cmd.Parameters.AddWithValue("@ID", id);
-                            }
-                            totalCount += cmd.ExecuteNonQuery();
-                        }
+                        cmd.Parameters.AddWithValue("@ID", id);
                     }
-
-                    tx.Commit();
-                    LogManager.Info($"Archived {totalCount} reconciliation record(s)");
-                }
-                catch
-                {
-                    tx.Rollback();
-                    throw;
+                    totalCount += cmd.ExecuteNonQuery();
                 }
             }
+
+            // Transaction is owned by ApplyReconciliationChangesAsync — no commit here.
+            LogManager.Info($"Archived {totalCount} reconciliation record(s)");
         }
 
-        private void InsertReconciliations(OleDbConnection conn, List<Reconciliation> reconciliations)
+        private void InsertReconciliations(OleDbConnection conn, OleDbTransaction tx, List<Reconciliation> reconciliations)
         {
-            // Get existing IDs to ensure insert-only
-            var existingIds = GetExistingIds(conn, reconciliations.Select(r => r.ID).ToList());
+            // Get existing IDs to ensure insert-only (must execute under the same transaction so it
+            // sees the in-progress unarchive/archive within ApplyReconciliationChangesAsync).
+            var existingIds = GetExistingIds(conn, tx, reconciliations.Select(r => r.ID).ToList());
             var toInsert = reconciliations.Where(r => !existingIds.Contains(r.ID)).ToList();
             if (toInsert.Count == 0) return;
 
-            using (var tx = conn.BeginTransaction())
-            {
-                try
-                {
-                    int insertedCount = 0;
+            int insertedCount = 0;
 
-                    // PERF: Create a single prepared command and reuse it for all inserts
-                    // (avoids 20k+ OleDbCommand allocations + parameter setup)
-                    using (var cmd = new OleDbCommand($@"INSERT INTO [{Schema.Tables.T_Reconciliation}] (
-                        [{Schema.Columns.Reconciliation.ID}],[{Schema.Columns.Reconciliation.DWINGS_GuaranteeID}],[{Schema.Columns.Reconciliation.DWINGS_InvoiceID}],[{Schema.Columns.Reconciliation.DWINGS_BGPMT}],
-                        [{Schema.Columns.Reconciliation.Action}],[{Schema.Columns.Reconciliation.ActionStatus}],[{Schema.Columns.Reconciliation.ActionDate}],[{Schema.Columns.Reconciliation.Comments}],[{Schema.Columns.Reconciliation.InternalInvoiceReference}],[{Schema.Columns.Reconciliation.FirstClaimDate}],[{Schema.Columns.Reconciliation.LastClaimDate}],
-                        [{Schema.Columns.Reconciliation.ToRemind}],[{Schema.Columns.Reconciliation.ToRemindDate}],[{Schema.Columns.Reconciliation.ACK}],[{Schema.Columns.Reconciliation.SwiftCode}],[{Schema.Columns.Reconciliation.PaymentReference}],[{Schema.Columns.Reconciliation.MbawData}],[{Schema.Columns.Reconciliation.SpiritData}],[{Schema.Columns.Reconciliation.KPI}],
-                        [{Schema.Columns.Reconciliation.IncidentType}],[{Schema.Columns.Reconciliation.RiskyItem}],[{Schema.Columns.Reconciliation.ReasonNonRisky}],[{Schema.Columns.Reconciliation.CreationDate}],[{Schema.Columns.Reconciliation.ModifiedBy}],[{Schema.Columns.Reconciliation.LastModified}]
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", conn, tx))
-                    {
+            // PERF: Create a single prepared command and reuse it for all inserts
+            // (avoids 20k+ OleDbCommand allocations + parameter setup)
+            using (var cmd = new OleDbCommand($@"INSERT INTO [{Schema.Tables.T_Reconciliation}] (
+                [{Schema.Columns.Reconciliation.ID}],[{Schema.Columns.Reconciliation.DWINGS_GuaranteeID}],[{Schema.Columns.Reconciliation.DWINGS_InvoiceID}],[{Schema.Columns.Reconciliation.DWINGS_BGPMT}],
+                [{Schema.Columns.Reconciliation.Action}],[{Schema.Columns.Reconciliation.ActionStatus}],[{Schema.Columns.Reconciliation.ActionDate}],[{Schema.Columns.Reconciliation.Comments}],[{Schema.Columns.Reconciliation.InternalInvoiceReference}],[{Schema.Columns.Reconciliation.FirstClaimDate}],[{Schema.Columns.Reconciliation.LastClaimDate}],
+                [{Schema.Columns.Reconciliation.ToRemind}],[{Schema.Columns.Reconciliation.ToRemindDate}],[{Schema.Columns.Reconciliation.ACK}],[{Schema.Columns.Reconciliation.SwiftCode}],[{Schema.Columns.Reconciliation.PaymentReference}],[{Schema.Columns.Reconciliation.MbawData}],[{Schema.Columns.Reconciliation.SpiritData}],[{Schema.Columns.Reconciliation.KPI}],
+                [{Schema.Columns.Reconciliation.IncidentType}],[{Schema.Columns.Reconciliation.RiskyItem}],[{Schema.Columns.Reconciliation.ReasonNonRisky}],[{Schema.Columns.Reconciliation.CreationDate}],[{Schema.Columns.Reconciliation.ModifiedBy}],[{Schema.Columns.Reconciliation.LastModified}]
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", conn, tx))
+            {
                         // Pre-create parameters once with explicit types
                         cmd.Parameters.Add("@ID", OleDbType.VarWChar, 255);
                         cmd.Parameters.Add("@DWINGS_GuaranteeID", OleDbType.VarWChar, 255);
@@ -459,18 +435,11 @@ namespace RecoTool.Services.Ambre
                         }
                     }
 
-                    tx.Commit();
-                    LogManager.Info($"Inserted {insertedCount} new reconciliation record(s)");
-                }
-                catch
-                {
-                    tx.Rollback();
-                    throw;
-                }
-            }
+            // Transaction is owned by ApplyReconciliationChangesAsync — no commit here.
+            LogManager.Info($"Inserted {insertedCount} new reconciliation record(s)");
         }
 
-        private HashSet<string> GetExistingIds(OleDbConnection conn, List<string> ids)
+        private HashSet<string> GetExistingIds(OleDbConnection conn, OleDbTransaction tx, List<string> ids)
         {
             var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -483,7 +452,7 @@ namespace RecoTool.Services.Ambre
                 var placeholders = string.Join(",", Enumerable.Repeat("?", chunk.Count));
 
                 using (var cmd = new OleDbCommand(
-                    $"SELECT [{Schema.Columns.Reconciliation.ID}] FROM [{Schema.Tables.T_Reconciliation}] WHERE [{Schema.Columns.Reconciliation.ID}] IN ({placeholders})", conn))
+                    $"SELECT [{Schema.Columns.Reconciliation.ID}] FROM [{Schema.Tables.T_Reconciliation}] WHERE [{Schema.Columns.Reconciliation.ID}] IN ({placeholders})", conn, tx))
                 {
                     foreach (var id in chunk)
                         cmd.Parameters.AddWithValue("@ID", id);

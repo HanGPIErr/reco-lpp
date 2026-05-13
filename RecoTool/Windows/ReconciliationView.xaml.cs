@@ -48,7 +48,14 @@ namespace RecoTool.Windows
             get => _vm;
             set
             {
+                if (ReferenceEquals(_vm, value)) return;
+                // Detach the old VM's PropertyChanged so its filter notifications don't keep
+                // triggering ApplyFilters on a no-longer-bound instance. Re-attach to the new VM
+                // so the listener (defined in SyncAndTimers.cs) stays the single source of truth
+                // for the filter-debounce trigger.
+                try { if (_vm != null) _vm.PropertyChanged -= VM_PropertyChanged; } catch { }
                 _vm = value ?? new ReconciliationViewViewModel();
+                try { _vm.PropertyChanged += VM_PropertyChanged; } catch { }
                 OnPropertyChanged(nameof(VM));
             }
         }
@@ -1545,7 +1552,7 @@ namespace RecoTool.Windows
         public string FilterAccountId { get => VM.FilterAccountId; set { VM.FilterAccountId = string.IsNullOrWhiteSpace(value) ? null : value; OnPropertyChanged(nameof(FilterAccountId)); ScheduleApplyFiltersDebounced(); } }
         public string FilterCurrency { get => VM.FilterCurrency; set { VM.FilterCurrency = string.IsNullOrWhiteSpace(value) ? null : value; OnPropertyChanged(nameof(FilterCurrency)); ScheduleApplyFiltersDebounced(); } }
 
-        public string FilterCountry { get => _filterCountry; set { _filterCountry = string.IsNullOrWhiteSpace(value) ? null : value; OnPropertyChanged(nameof(FilterCountry)); ScheduleApplyFiltersDebounced(); } }
+        public string FilterCountry { get => _filterCountry; set { _filterCountry = string.IsNullOrWhiteSpace(value) ? null : value; OnPropertyChanged(nameof(FilterCountry)); /* informational only — _filterCountry is never read by ApplyFilters; no debounce needed */ } }
         public DateTime? FilterFromDate { get => VM.FilterFromDate; set { VM.FilterFromDate = value; OnPropertyChanged(nameof(FilterFromDate)); ScheduleApplyFiltersDebounced(); } }
         public DateTime? FilterToDate { get => VM.FilterToDate; set { VM.FilterToDate = value; OnPropertyChanged(nameof(FilterToDate)); ScheduleApplyFiltersDebounced(); } }
         public DateTime? FilterOperationDate { get => VM.FilterOperationDate; set { VM.FilterOperationDate = value; OnPropertyChanged(nameof(FilterOperationDate)); ScheduleApplyFiltersDebounced(); } }

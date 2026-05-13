@@ -196,7 +196,20 @@ namespace RecoTool.UI.ViewModels
         public int? FilterTransactionTypeId
         {
             get => CurrentFilter.TransactionTypeId;
-            set { if (CurrentFilter.TransactionTypeId != value) { CurrentFilter.TransactionTypeId = value; OnPropertyChanged(); } }
+            set
+            {
+                // Coerce sentinel "-1" (= "All" option emitted by TransactionTypeOptions)
+                // to null so ApplyFilters' HasValue check correctly skips the predicate.
+                // Without this, the XAML binding (SelectedValue="{Binding VM.FilterTransactionTypeId}")
+                // bypasses the code-behind wrapper and stores -1, which then matches no Category
+                // and excludes every row.
+                var coerced = (value.HasValue && value.Value < 0) ? (int?)null : value;
+                if (CurrentFilter.TransactionTypeId != coerced)
+                {
+                    CurrentFilter.TransactionTypeId = coerced;
+                    OnPropertyChanged();
+                }
+            }
         }
 
         public string FilterGuaranteeStatus

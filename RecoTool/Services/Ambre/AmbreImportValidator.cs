@@ -6,6 +6,7 @@ using OfflineFirstAccess.Helpers;
 using OfflineFirstAccess.Models;
 using RecoTool.Helpers;
 using RecoTool.Models;
+using RecoTool.Services.Helpers;
 
 namespace RecoTool.Services.Ambre
 {
@@ -65,21 +66,55 @@ namespace RecoTool.Services.Ambre
         }
 
         /// <summary>
-        /// Valide les données transformées
+        /// Validates each row's coherence against the country configuration. Per-row issues are
+        /// reported as <b>non-blocking</b> warnings on <paramref name="result"/> when provided —
+        /// every input row is still returned in <c>validData</c> so the import behavior is unchanged
+        /// from the previous no-op contract (legacy callers / tests pass <c>result = null</c> and
+        /// observe an empty <c>errors</c> list and full <c>validData</c>).
         /// </summary>
+        /// <remarks>
+        /// Why non-blocking: the original method was an intentional NO-OP, so historical imports
+        /// have been silently passing rows that fail <see cref="ValidationHelper.ValidateDataCoherence"/>
+        /// (foreign accounts, zero amounts, etc.). Activating drop-on-error would suddenly fail
+        /// real-world imports. We surface visibility first; if you later want to enforce, switch
+        /// the conditional below to skip <c>validData.Add(row)</c> on failure.
+        /// </remarks>
         public (List<string> errors, List<DataAmbre> validData) ValidateTransformedData(
             List<DataAmbre> data,
-            Country country)
+            Country country,
+            ImportResult result = null)
         {
             var errors = new List<string>();
-            var validData = new List<DataAmbre>();
+            var validData = new List<DataAmbre>(data?.Count ?? 0);
+            if (data == null) return (errors, validData);
 
-            // Coherence validation is intentionally a no-op here — see
-            // AmbreImportValidatorTests.ValidateTransformedData_AllValid_ReturnsAllInValidList
-            // for the contract. If you need to reject malformed rows (zero amounts,
-            // wrong account for country, etc.), call ValidationHelper.ValidateDataCoherence
-            // per item and route failures into `errors` below.
-            validData.AddRange(data);
+            int warningCount = 0;
+            List<string> samples = null;
+
+            foreach (var row in data)
+            {
+                validData.Add(row);
+                // Skip the cost of per-row coherence checks when no result sink is provided
+                // (preserves the pre-existing no-op contract under the tests).
+                if (result == null) continue;
+
+                var rowErrors = ValidationHelper.ValidateDataCoherence(row, country);
+                if (rowErrors == null || rowErrors.Count == 0) continue;
+                foreach (var msg in rowErrors)
+                {
+                    warningCount++;
+                    if (samples == null) samples = new List<string>(8);
+                    if (samples.Count < 5) samples.Add($"{row.GetUniqueKey()}: {msg}");
+                }
+            }
+
+            if (warningCount > 0 && result != null)
+            {
+                var sample = (samples != null && samples.Count > 0)
+                    ? " | sample: " + string.Join(" / ", samples)
+                    : string.Empty;
+                result.Warnings.Add($"{warningCount} data coherence issue(s) detected across {validData.Count} row(s) — import proceeded.{sample}");
+            }
             return (errors, validData);
         }
 

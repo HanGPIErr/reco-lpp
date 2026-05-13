@@ -111,13 +111,18 @@ namespace RecoTool.Services.DTOs
 
         /// <summary>
         /// Drops the DWINGS caches (called on country switch so we don't serve stale data for the new scope).
+        /// <para>
+        /// Assigns null instead of calling <c>Clear()</c> so any in-flight snapshot already held by
+        /// <see cref="GetDwingsCacheSnapshots"/> callers (which iterate hors-lock via TryGetValue)
+        /// keeps reading the orphaned dictionary instance instead of crashing on a concurrent mutation.
+        /// </para>
         /// </summary>
         public static void ClearDwingsCaches()
         {
             lock (_dwingsCacheLock)
             {
-                _dwingsInvoiceCache?.Clear();
-                _dwingsGuaranteeCache?.Clear();
+                _dwingsInvoiceCache = null;
+                _dwingsGuaranteeCache = null;
             }
         }
 
