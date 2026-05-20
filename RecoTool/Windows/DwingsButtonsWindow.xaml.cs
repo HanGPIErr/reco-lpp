@@ -356,12 +356,22 @@ namespace RecoTool.Windows
                 var rowsUpdated = 0;
                 var nowUtc = BaseEntity.Clock.UtcNow;
                 var triggerActionId = (int)ActionType.Trigger;
-                var paidNotReconciledKpi = (int)KPIType.PaidButNotReconciled;
-                var commissionsCollectedReason = (int)Risky.CollectedCommissionsCredit67P;
 
                 // Track IDs we already updated to avoid loading the same Reconciliation twice
                 // when multiple grouped items resolve to the same row.
                 var processedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                // Snapshot of ALL rows for the country (pre-save state). DWINGS triggers at the
+                // BGPMT/payment level, so after a successful fire we must mark TRIGGER DONE on
+                // every still-pending row sharing that BGPMT — not only the rows that became
+                // grouped items. We capture the snapshot before the loop (still PENDING here) so
+                // the fan-out below can find those rows.
+                List<ReconciliationViewData> allCountryRows;
+                try { allCountryRows = await _reconciliationService.GetReconciliationViewAsync(_country.CNT_Id, null, false) ?? new List<ReconciliationViewData>(); }
+                catch { allCountryRows = new List<ReconciliationViewData>(); }
+
+                // BGPMTs that DWINGS actually fired (ok OR "already triggered").
+                var succeededBgpmts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
                 // ---- Phase 2: one API call per unique BGPMT, then fan out --------------
                 foreach (var group in grouped)
@@ -382,8 +392,15 @@ namespace RecoTool.Windows
                     // OK / FAIL on each receivable line, not just the head.
                     foreach (var it in group) it.Result = msg;
 
-                    if (ok)
+                    // "Already triggered" means DWINGS considers the payment fired — treat it as a
+                    // success for the purpose of marking the local rows DONE (otherwise they stay
+                    // PENDING forever while DWINGS shows them triggered).
+                    bool triggered = ok || IsAlreadyTriggered(msg);
+                    if (triggered)
                     {
+                        if (!string.IsNullOrWhiteSpace(head.DWINGS_BGPMT))
+                            succeededBgpmts.Add(head.DWINGS_BGPMT.Trim());
+
                         // Union of all IDs across every item that shared this BGPMT key —
                         // this is what guarantees ALL 80 receivables get TRIGGER DONE even
                         // when the API only fired once for their shared BGPMT.
@@ -396,27 +413,12 @@ namespace RecoTool.Windows
 
                         foreach (var id in ids)
                         {
-                            var reco = await _reconciliationService.GetReconciliationByIdAsync(_country.CNT_Id, id);
+                            // Persist PaymentReference only for ungrouped manual rows (legacy behaviour).
+                            var reco = await LoadAndMarkTriggerDoneAsync(
+                                id, nowUtc,
+                                (!head.IsGrouped && !string.IsNullOrWhiteSpace(head.PaymentReference)) ? head.PaymentReference : null);
                             if (reco != null)
                             {
-                                // Canonical TRIGGER DONE payload — keep in sync with
-                                // RowActions.ApplyTriggerDonePayload (right-click flow).
-                                reco.Action = triggerActionId;
-                                reco.ActionStatus = true;
-                                reco.ActionDate = nowUtc;
-                                reco.TriggerDate = nowUtc;
-                                reco.KPI = paidNotReconciledKpi;
-                                reco.ReasonNonRisky = commissionsCollectedReason;
-                                reco.RiskyItem = false;
-                                RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(
-                                    reco, "Action", "ActionStatus", "ActionDate", "TriggerDate",
-                                    "KPI", "ReasonNonRisky", "RiskyItem");
-
-                                // Si la ligne n’est pas groupée et que l’utilisateur a saisi un
-                                // PaymentReference, on le sauvegarde.
-                                if (!head.IsGrouped && !string.IsNullOrWhiteSpace(head.PaymentReference))
-                                    reco.PaymentReference = head.PaymentReference;
-
                                 updated.Add(reco);
                                 processedIds.Add(id);
                             }
@@ -425,6 +427,30 @@ namespace RecoTool.Windows
 
                     rowsUpdated += group.Count();
                     Progress.Value += 1;
+                }
+
+                // ---- Fan-out: cover every PENDING Trigger row that shares a fired BGPMT --------
+                // Root-cause fix: receivables in "Trigger / PENDING" that had no matching pivot were
+                // excluded from the grouped items (LoadDataAsync) and therefore never marked DONE,
+                // even though their BGPMT was fired by the single API call above. Mark them now so
+                // the DB state matches DWINGS and they don't reappear as PENDING on reopen.
+                if (succeededBgpmts.Count > 0)
+                {
+                    foreach (var row in allCountryRows)
+                    {
+                        if (row == null || row.IsDeleted) continue;
+                        if (row.Action != triggerActionId || row.ActionStatus != false) continue; // only PENDING Trigger rows
+                        var bg = row.DWINGS_BGPMT?.Trim();
+                        if (string.IsNullOrWhiteSpace(bg) || !succeededBgpmts.Contains(bg)) continue;
+                        var id = row.ID;
+                        if (string.IsNullOrWhiteSpace(id) || processedIds.Contains(id)) continue;
+                        var reco = await LoadAndMarkTriggerDoneAsync(id, nowUtc, null);
+                        if (reco != null)
+                        {
+                            updated.Add(reco);
+                            processedIds.Add(id);
+                        }
+                    }
                 }
 
                 // ---- persistance -------------------------------------------------
@@ -457,6 +483,49 @@ namespace RecoTool.Windows
             {
                 (sender as FrameworkElement)!.IsEnabled = true;
             }
+        }
+
+        /// <summary>
+        /// Returns true when a DWINGS PressBlueButton error message indicates the payment was
+        /// already triggered. From the operator's standpoint the payment IS fired, so the local
+        /// rows must still be marked TRIGGER DONE — otherwise they stay PENDING forever while
+        /// DWINGS shows them triggered.
+        /// NOTE: tune the patterns below against a real "already triggered" API response
+        /// (visible in the per-row Result column) if the wording differs.
+        /// </summary>
+        private static bool IsAlreadyTriggered(string msg)
+        {
+            if (string.IsNullOrWhiteSpace(msg)) return false;
+            var m = msg.ToLowerInvariant();
+            return m.Contains("already") || m.Contains("déjà") || m.Contains("deja");
+        }
+
+        /// <summary>
+        /// Loads a Reconciliation by id and applies the canonical TRIGGER DONE payload
+        /// (Action=Trigger, ActionStatus=true, ActionDate=TriggerDate=now, KPI=PaidButNotReconciled,
+        /// ReasonNonRisky=CollectedCommissionsCredit67P, RiskyItem=false). Keep in sync with
+        /// RowActions.ApplyTriggerDonePayload (right-click flow). Returns null if the row is not found.
+        /// </summary>
+        private async Task<Reconciliation> LoadAndMarkTriggerDoneAsync(string id, DateTime nowUtc, string paymentRefIfUngrouped)
+        {
+            var reco = await _reconciliationService.GetReconciliationByIdAsync(_country.CNT_Id, id);
+            if (reco == null) return null;
+
+            reco.Action = (int)ActionType.Trigger;
+            reco.ActionStatus = true;
+            reco.ActionDate = nowUtc;
+            reco.TriggerDate = nowUtc;
+            reco.KPI = (int)KPIType.PaidButNotReconciled;
+            reco.ReasonNonRisky = (int)Risky.CollectedCommissionsCredit67P;
+            reco.RiskyItem = false;
+            RecoTool.Services.Rules.RuleApplicationHelper.StampUserEdit(
+                reco, "Action", "ActionStatus", "ActionDate", "TriggerDate",
+                "KPI", "ReasonNonRisky", "RiskyItem");
+
+            if (!string.IsNullOrWhiteSpace(paymentRefIfUngrouped))
+                reco.PaymentReference = paymentRefIfUngrouped;
+
+            return reco;
         }
 
         private void RefreshOpenReconciliationViews()
