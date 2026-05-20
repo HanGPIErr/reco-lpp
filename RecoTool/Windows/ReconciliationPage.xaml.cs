@@ -1300,6 +1300,18 @@ namespace RecoTool.Windows
                 if (!canProceed)
                     return; // User cancelled
 
+                // Opening a todolist from Home shows a single, fresh view: close any views left
+                // open from a previous todo/selection first, then add the new one. CloseAll cancels
+                // _pageCts, so renew it (mirrors the country-change flow) to avoid handing a
+                // cancelled token to the subsequent load.
+                try
+                {
+                    CloseAllReconciliationViews();
+                    _pageCts?.Dispose();
+                    _pageCts = new CancellationTokenSource();
+                }
+                catch { }
+
                 // Switch to TodoList mode
                 IsTodoMode = true;
                 SelectedStatus = "Live";
