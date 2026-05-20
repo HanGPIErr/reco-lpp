@@ -301,9 +301,13 @@ namespace RecoTool.Windows
                 // Stocker toutes les données pour le filtrage
                 _allViewData = viewList ?? new List<ReconciliationViewData>();
 
-                // PERFORMANCE: Pré-calculer les propriétés d'affichage
+                // PERFORMANCE: Enrichir les libellés (Action/KPI/Incident/Assignee...) mais NE PAS
+                // pré-calculer les propriétés d'affichage ici. ApplyFilters() ci-dessous (déclenché
+                // par _allViewDataDirty) recalcule IsMatchedAcrossAccounts/MissingAmount/couleurs de
+                // groupe PUIS appelle PreCalculateDisplayProperties() sur chaque ligne. Faire la passe
+                // ici serait O(N) gaspillé sur le thread UI (résultat aussitôt écrasé).
                 var swEnrich = Stopwatch.StartNew();
-                ViewDataEnricher.EnrichAll(_allViewData, AllUserFields, AssigneeOptions);
+                ViewDataEnricher.EnrichAll(_allViewData, AllUserFields, AssigneeOptions, preCalculate: false);
                 swEnrich.Stop();
                 System.Diagnostics.Debug.WriteLine($"[ViewDataEnricher] Enriched {totalRows} rows in {swEnrich.ElapsedMilliseconds}ms");
 
@@ -358,11 +362,12 @@ namespace RecoTool.Windows
                                 if (reco.IncidentType.HasValue) viewRow.IncidentType = reco.IncidentType;
                                 if (reco.RiskyItem.HasValue) viewRow.RiskyItem = reco.RiskyItem.Value;
                                 if (reco.ReasonNonRisky.HasValue) viewRow.ReasonNonRisky = reco.ReasonNonRisky;
+                                // Re-enrich ONLY this changed row (caches were already primed by the
+                                // initial EnrichAll). Avoids an O(N) re-enrich of the whole grid.
+                                try { ViewDataEnricher.EnrichRow(viewRow); } catch { }
                             }
                         }
                         catch { }
-                        // Re-enrich display properties after rule application
-                        try { ViewDataEnricher.EnrichAll(_allViewData, AllUserFields, AssigneeOptions); } catch { }
                         try { ScheduleBulkPushDebounced(); } catch { }
                     }
                     catch (Exception exRules)

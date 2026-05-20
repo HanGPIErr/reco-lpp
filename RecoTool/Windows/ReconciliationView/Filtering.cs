@@ -89,12 +89,15 @@ namespace RecoTool.Windows
 
                         // Assign alternating colors to rows sharing the same InternalInvoiceReference
                         ReconciliationViewEnricher.AssignInvoiceGroupColors(_allViewData);
-
-                        // Refresh pre-calculated display caches (StatusColor, MissingAmount colors,
-                        // G visibility, etc.) so the grid reads final values without re-computing on scroll
-                        foreach (var r in _allViewData)
-                            r.PreCalculateDisplayProperties();
                     }
+
+                    // Refresh pre-calculated display caches (StatusColor, MissingAmount colors,
+                    // G visibility, etc.) so the grid reads final values without re-computing on scroll.
+                    // Runs unconditionally (even when country is null) because this is the single
+                    // PreCalculate pass for a fresh load — ViewDataEnricher.EnrichAll deliberately
+                    // skips it (preCalculate:false) to avoid doing the O(N) work twice on the UI thread.
+                    foreach (var r in _allViewData)
+                        r.PreCalculateDisplayProperties();
                 }
                 catch { }
                 finally

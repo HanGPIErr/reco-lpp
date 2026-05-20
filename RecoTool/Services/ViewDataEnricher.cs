@@ -19,17 +19,25 @@ namespace RecoTool.Services
         public static ILogger Logger { get; set; } = NullLogger.Instance;
 
         #region Public enrichment entry points
+        /// <param name="preCalculate">
+        /// When <c>true</c> (default) each row's <see cref="ReconciliationViewData.PreCalculateDisplayProperties"/>
+        /// is invoked. Callers that immediately re-run a pass which recomputes
+        /// IsMatchedAcrossAccounts/MissingAmount/group colors AND calls PreCalculate themselves
+        /// (the data-load → ApplyFilters dirty block) pass <c>false</c> to avoid a redundant O(N)
+        /// PreCalculate pass on the UI thread whose results would be overwritten anyway.
+        /// </param>
         public static void EnrichAll(
             IEnumerable<ReconciliationViewData> data,
             IReadOnlyList<UserField> userFields,
-            IEnumerable<dynamic> assignees = null)
+            IEnumerable<dynamic> assignees = null,
+            bool preCalculate = true)
         {
             if (data == null) return;
             RebuildCachesIfNeeded(userFields, assignees);
-            foreach (var row in data) EnrichRow(row);
+            foreach (var row in data) EnrichRow(row, preCalculate);
         }
 
-        public static void EnrichRow(ReconciliationViewData row)
+        public static void EnrichRow(ReconciliationViewData row, bool preCalculate = true)
         {
             if (row == null) return;
             try
@@ -46,7 +54,8 @@ namespace RecoTool.Services
 
                 // Pre-calculate ALL display properties (status colors, tooltips, visibility, etc.)
                 // This eliminates thousands of re-computations during DataGrid scroll
-                row.PreCalculateDisplayProperties();
+                if (preCalculate)
+                    row.PreCalculateDisplayProperties();
             }
             catch (Exception ex)
             {
