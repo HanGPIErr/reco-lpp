@@ -81,6 +81,14 @@ namespace RecoTool.Services.DTOs
             if (I_RECEIVER_NAME == null)
                 I_RECEIVER_NAME = guarantee?.NAME2;
 
+            // The base view query selects GUARANTEE_STATUS/GUARANTEE_TYPE/GUARANTEE_ID as NULL
+            // placeholders (DWINGS is enriched in-memory, not SQL-joined). The in-memory filter in
+            // ReconciliationViewViewModel.ApplyFilters matches on GUARANTEE_STATUS, so it must be
+            // populated here or the Guarantee Status filter silently excludes every row.
+            GUARANTEE_STATUS                         = guarantee?.GUARANTEE_STATUS;
+            GUARANTEE_TYPE                           = guarantee?.GUARANTEE_TYPE;
+            GUARANTEE_ID                             = guarantee?.GUARANTEE_ID;
+
             G_GUARANTEE_TYPE                         = guarantee?.GUARANTEE_TYPE;
             G_NATURE                                 = guarantee?.NATURE;
             G_EVENT_STATUS                           = guarantee?.EVENT_STATUS;
@@ -145,6 +153,9 @@ namespace RecoTool.Services.DTOs
             OnPropertyChanged(nameof(I_DEBTOR_PARTY_NAME));
 
             // Guarantee-derived columns
+            OnPropertyChanged(nameof(GUARANTEE_STATUS));
+            OnPropertyChanged(nameof(GUARANTEE_TYPE));
+            OnPropertyChanged(nameof(GUARANTEE_ID));
             OnPropertyChanged(nameof(G_GUARANTEE_TYPE));
             OnPropertyChanged(nameof(G_NATURE));
             OnPropertyChanged(nameof(G_EVENT_STATUS));
