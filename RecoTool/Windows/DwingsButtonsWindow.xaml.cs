@@ -462,7 +462,7 @@ namespace RecoTool.Windows
 
                     // rafraîchit la grille pour récupérer d’éventuels changements côté DB
                     await LoadDataAsync();
-                    try { RefreshOpenReconciliationViews(); } catch { }
+                    try { await RefreshOpenReconciliationViewsAsync(); } catch { }
                 }
 
                 MessageBox.Show(this,
@@ -528,17 +528,28 @@ namespace RecoTool.Windows
             return reco;
         }
 
-        private void RefreshOpenReconciliationViews()
+        private async Task RefreshOpenReconciliationViewsAsync()
         {
             try
             {
+                // Force a guaranteed cache miss so each open view re-reads the freshly persisted
+                // TRIGGER DONE state from the DB (SaveReconciliationsAsync already invalidates, but
+                // the bulk grid's own LoadDataAsync may have re-materialized a cache entry meanwhile).
+                try { ReconciliationService.InvalidateReconciliationViewCache(_country?.CNT_Id); } catch { }
+
+                // Collect open views first, then await each refresh so the success dialog only shows
+                // once the grids actually reflect the new state (the old fire-and-forget Refresh()
+                // could leave a view showing "TRIGGER PENDING" until the user reopened it).
+                var views = new List<ReconciliationView>();
                 foreach (Window w in Application.Current.Windows)
                 {
                     if (w == null) continue;
                     foreach (var view in FindVisualChildren<ReconciliationView>(w))
-                    {
-                        try { view.Refresh(); } catch { }
-                    }
+                        if (view != null) views.Add(view);
+                }
+                foreach (var view in views)
+                {
+                    try { await view.RefreshAsync(); } catch { }
                 }
             }
             catch { }
