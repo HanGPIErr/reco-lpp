@@ -44,58 +44,47 @@ namespace RecoTool.Windows
                 filteredList = filteredList.Where(row => MatchesStatusFilter(row)).ToList();
             }
 
-            // PERF (QW-2): the heavy grouping/MissingAmount/PreCalculate block only needs to run
-            // when row-level data actually changed (initial load, edit on InternalInvoiceReference,
-            // basket link). For plain filter changes the per-row values are unchanged — running
-            // this block on every filter click costs O(N) reset + 4 group-by passes + N PreCalculate
-            // calls for nothing. The _allViewDataDirty flag is set by LoadReconciliationDataAsync
-            // and by edit/linking handlers; cleared once consumed here.
+            // PERF: the only row-level work that genuinely belongs here is the cross-account
+            // "G" flag (IsMatchedAcrossAccounts) and the alternating group colors — neither is
+            // computed by the service. MissingAmount / CounterpartTotalAmount / CounterpartCount
+            // and GroupBalance are ALREADY computed upstream on a background thread by the service
+            // (BuildReconciliationViewAsyncCore on cache miss, ReapplyEnrichmentsAsync on cache hit)
+            // before LoadReconciliationDataAsync sets _allViewDataDirty. Re-running
+            // CalculateMissingAmounts + ComputeAndApplyGroupBalances here was a redundant pair of
+            // O(N) group-by passes executed on the UI thread on every open — the main cause of the
+            // freeze when opening a list whose data is already cached.
+            // Invariant: _allViewDataDirty is set ONLY by LoadReconciliationDataAsync, which always
+            // sources the list from the service, so the amounts above are always present here.
             if (_allViewDataDirty)
             {
                 try
                 {
-                    var country = CurrentCountryObject;
-                    if (country != null)
-                    {
-                        // Reset grouping + MissingAmount for ALL rows first
-                        foreach (var r in _allViewData)
-                        {
-                            r.IsMatchedAcrossAccounts = false;
-                            r.MissingAmount = null;
-                            r.CounterpartTotalAmount = null;
-                            r.CounterpartCount = null;
-                        }
+                    // Reset only the cross-account flag (recomputed just below). Do NOT null out
+                    // MissingAmount/Counterpart* — those carry the service-computed values.
+                    foreach (var r in _allViewData)
+                        r.IsMatchedAcrossAccounts = false;
 
-                        // Recompute IsMatchedAcrossAccounts on ALL rows (both account sides).
-                        // CRITICAL: must use _allViewData (not filteredList) — filteredList may
-                        // contain only one account side and ComputeMatchedAcrossAccounts needs both
-                        // P and R rows to detect cross-account matches.
-                        AccountSideCalculator.ComputeMatchedAcrossAccounts(_allViewData,
-                            r => r.AccountSide,
-                            r => r.DWINGS_InvoiceID,
-                            r => r.InternalInvoiceReference,
-                            (r, matched) => r.IsMatchedAcrossAccounts = matched,
-                            r => AccountSideCalculator.ExtractFallbackBgiKey(
-                                r.DWINGS_InvoiceID, r.Receivable_InvoiceFromAmbre,
-                                r.Reconciliation_Num, r.Comments, r.RawLabel,
-                                r.Receivable_DWRefFromAmbre, r.InternalInvoiceReference));
+                    // Recompute IsMatchedAcrossAccounts on ALL rows (both account sides).
+                    // CRITICAL: must use _allViewData (not filteredList) — filteredList may
+                    // contain only one account side and ComputeMatchedAcrossAccounts needs both
+                    // P and R rows to detect cross-account matches.
+                    AccountSideCalculator.ComputeMatchedAcrossAccounts(_allViewData,
+                        r => r.AccountSide,
+                        r => r.DWINGS_InvoiceID,
+                        r => r.InternalInvoiceReference,
+                        (r, matched) => r.IsMatchedAcrossAccounts = matched,
+                        r => AccountSideCalculator.ExtractFallbackBgiKey(
+                            r.DWINGS_InvoiceID, r.Receivable_InvoiceFromAmbre,
+                            r.Reconciliation_Num, r.Comments, r.RawLabel,
+                            r.Receivable_DWRefFromAmbre, r.InternalInvoiceReference));
 
-                        // Recompute MissingAmount on ALL rows (needs both sides)
-                        ReconciliationViewEnricher.CalculateMissingAmounts(
-                            _allViewData, country.CNT_AmbreReceivable, country.CNT_AmbrePivot);
-
-                        // Phase 2: keep GroupBalance in sync with the just-applied basket link.
-                        ReconciliationViewEnricher.ComputeAndApplyGroupBalances(_allViewData);
-
-                        // Assign alternating colors to rows sharing the same InternalInvoiceReference
-                        ReconciliationViewEnricher.AssignInvoiceGroupColors(_allViewData);
-                    }
+                    // Assign alternating colors to rows sharing the same InternalInvoiceReference
+                    ReconciliationViewEnricher.AssignInvoiceGroupColors(_allViewData);
 
                     // Refresh pre-calculated display caches (StatusColor, MissingAmount colors,
                     // G visibility, etc.) so the grid reads final values without re-computing on scroll.
-                    // Runs unconditionally (even when country is null) because this is the single
-                    // PreCalculate pass for a fresh load — ViewDataEnricher.EnrichAll deliberately
-                    // skips it (preCalculate:false) to avoid doing the O(N) work twice on the UI thread.
+                    // This is the single PreCalculate pass for a fresh load — ViewDataEnricher.EnrichAll
+                    // deliberately skips it (preCalculate:false) to avoid doing the O(N) work twice.
                     foreach (var r in _allViewData)
                         r.PreCalculateDisplayProperties();
                 }
