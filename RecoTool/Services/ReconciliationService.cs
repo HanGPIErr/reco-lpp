@@ -491,9 +491,18 @@ namespace RecoTool.Services
                 var cached = await existing.Value.ConfigureAwait(false);
                 ct.ThrowIfCancellationRequested();
 
-                // CRITICAL: Re-apply enrichments for cached data (linking may have been lost)
-                // This ensures DWINGS_InvoiceID, MissingAmount, etc. are always calculated
-                await ReapplyEnrichmentsAsync(cached, countryId, ct).ConfigureAwait(false);
+                // PERF: a cache hit means this list was materialized by BuildReconciliationViewAsyncCore
+                // (which already runs the full enrichment pipeline) and has NOT been edited since —
+                // every edit path funnels through SaveReconciliationsAsync, which evicts this cache.
+                // DWINGS caches are loaded once per service instance (_dwingsCachesInitialized is never
+                // reset) and GetDwingsInvoicesAsync/GetDwingsGuaranteesAsync return the same cached data,
+                // so re-running ReapplyEnrichmentsAsync here recomputes byte-identical values via three
+                // redundant O(N) passes (RetryUnlinkedReceivableBgi + CalculateMissingAmounts +
+                // ComputeAndApplyGroupBalances) on every view open. Skip it when the list already carries
+                // enrichment; only re-apply defensively for the unexpected case of an un-enriched list.
+                bool alreadyEnriched = cached != null && cached.Count > 0 && !string.IsNullOrWhiteSpace(cached[0].I_RECEIVER_NAME);
+                if (!alreadyEnriched)
+                    await ReapplyEnrichmentsAsync(cached, countryId, ct).ConfigureAwait(false);
 
                 return cached;
             }
