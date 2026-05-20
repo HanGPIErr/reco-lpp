@@ -64,7 +64,12 @@ namespace RecoTool.Windows
         private Dictionary<ReconciliationView, int> _viewTodoIds = new Dictionary<ReconciliationView, int>(); // Map views to their TodoList IDs
         private readonly LinkingBasket _linkingBasket = new LinkingBasket(); // Cross-view linking basket
 
-        private readonly FreeApiService _freeApi;          
+        private readonly FreeApiService _freeApi;
+
+        // PERF: a pre-built (but not-yet-attached) ReconciliationView kept ready so the next
+        // "Add View" click doesn't pay the InitializeComponent (XAML inflation) cost inline.
+        // Consumed by AddReconciliationView; a fresh one is warmed on Dispatcher idle afterwards.
+        private ReconciliationView _warmView;
 
         /// <summary>
         /// Effectue une réconciliation après une publication d'import (fin de verrou global):
@@ -1398,6 +1403,8 @@ namespace RecoTool.Windows
                 catch { }
 
                 // Ne pas ouvrir de vue par défaut. Laisser l'utilisateur en sélectionner/ajouter une.
+                // PERF: warm a spare ReconciliationView so the first "Add View" click is instant.
+                try { EnsureWarmView(); } catch { }
             }
             catch (Exception ex)
             {
@@ -1411,6 +1418,9 @@ namespace RecoTool.Windows
         private async void ReconciliationPage_Unloaded(object sender, RoutedEventArgs e)
         {
             try { StopLockPolling(); } catch { }
+            // Release any pre-warmed (never-attached) view. It never subscribed to sync events
+            // (subscription is deferred to Loaded), so dropping the reference is enough.
+            _warmView = null;
             // Cleanup TodoList session tracker
             CleanupTodoSessionTracker();
             // Do not sync on page unload: navigation to Reconciliation replaces the page and fires Unloaded,
@@ -1427,10 +1437,14 @@ namespace RecoTool.Windows
             _pageCts?.Dispose();
             _pageCts = new CancellationTokenSource();
             var token = _pageCts.Token;
+            // Drop any warm view built for the previous country (it pre-loaded country-specific
+            // options in its ctor); warm a fresh one for the new country instead.
+            _warmView = null;
             // Reset current page-level filter context on country change
             _currentFilter = null;
             _currentFilterName = null;
             OnPropertyChanged(nameof(AddViewModeIndicator));
+            try { EnsureWarmView(); } catch { }
 
             // Re-initialize session tracker for new country
             try { CleanupTodoSessionTracker(); } catch { }
@@ -1946,6 +1960,32 @@ namespace RecoTool.Windows
             await AddReconciliationView(asPopup);
         }
 
+        /// <summary>
+        /// Pre-builds a <see cref="ReconciliationView"/> on Dispatcher idle so the next "Add View"
+        /// click can attach it instantly instead of paying the XAML inflation cost inline.
+        /// No-op if one is already warmed or the service isn't ready. The instance is created on
+        /// the UI thread (required for WPF visuals) at Background priority so it doesn't compete
+        /// with the current interaction. Country/filters are applied later in ConfigureAndPreloadView.
+        /// </summary>
+        private void EnsureWarmView()
+        {
+            try
+            {
+                if (_warmView != null) return;
+                if (_reconciliationService == null) return;
+                Dispatcher?.BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        if (_warmView == null && _reconciliationService != null)
+                            _warmView = new ReconciliationView(_reconciliationService, _offlineFirstService, _freeApi);
+                    }
+                    catch { /* best effort — fall back to inline creation on click */ }
+                }), System.Windows.Threading.DispatcherPriority.Background);
+            }
+            catch { }
+        }
+
         private async Task AddReconciliationView(bool asPopup = false)
         {
             // Service locator removal: _reconciliationService is hydrated ONCE in the
@@ -1958,11 +1998,17 @@ namespace RecoTool.Windows
                 return;
             }
 
-            // Créer la vue et l'attacher aux services existants
-            var view = new ReconciliationView(recoSvc, _offlineFirstService, _freeApi)
-            {
-                Margin = new Thickness(0)
-            };
+            // Créer la vue et l'attacher aux services existants.
+            // PERF: reuse the pre-warmed instance if one is ready (saves the InitializeComponent
+            // XAML inflation cost on the click), then warm the next one on idle. The view's
+            // country/filters are (re)synced in ConfigureAndPreloadView, so a slightly stale warm
+            // instance is fine.
+            var view = _warmView;
+            _warmView = null;
+            if (view == null)
+                view = new ReconciliationView(recoSvc, _offlineFirstService, _freeApi);
+            view.Margin = new Thickness(0);
+            EnsureWarmView();
 
             // Wire linking basket: when user right-clicks "Add to Linking Basket" in any view
             view.AddToLinkingBasketRequested += (rows) => OnAddToLinkingBasket(view, rows);

@@ -1076,7 +1076,11 @@ namespace RecoTool.Windows
             InitializeFilterDebounce();
             InitializeQuickSearchCommand();
             InitializeShortcutCommands();
-            SubscribeToSyncEvents();
+            // NOTE: sync-event subscription is intentionally deferred to ReconciliationView_Loaded
+            // (which also calls SubscribeToSyncEvents). Subscribing in the ctor would make a not-yet-
+            // attached instance — e.g. a pre-warmed view held by ReconciliationPage — react to sync
+            // pulls and load data while off the visual tree. Loaded/Unloaded own the subscription
+            // lifecycle so the view only listens while actually displayed.
             RefreshCompleted += (s, e) => _hasLoadedOnce = true;
             try { VM.PropertyChanged += VM_PropertyChanged; } catch { }
             // Intercept Ctrl+C at UserControl level (tunnels before Syncfusion's OnPreviewKeyDown).
